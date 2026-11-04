@@ -129,7 +129,7 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
 ## 3. Las reglas del repo que hay que respetar
 
 - El claim se hace con un PR en draft; el bot asigna y etiqueta `in progress`. `/claim` solo para
- Stake un claim antes de tener rama.
+Hacé stake del claim antes de tener rama.
 - Un PR por tema. Push diario. Nunca force-push a `main`.
 - El titulo y la primera frase tienen que entenderse sin ver el chat ni el issue.
 - Una regresion va en el archivo de test del area.
