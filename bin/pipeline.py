@@ -20,6 +20,7 @@ Se corre desde un cron cada 5 minutos. Es idempotente: correrlo dos veces no rom
 """
 import json
 import os
+import shutil
 import re
 import subprocess
 import sys
@@ -49,8 +50,14 @@ def log(msg):
         pass
 
 
+# El gh que se usa: GH_BIN si esta definido, si no el del PATH. Un stub de gh en un scratch
+# que alguien dejo en el PATH hace no-op en 'pr create' y deja PRs que no existen (o no publica
+# los que existen): por eso es configurable y hay que verificar el binario.
+GH_BIN = os.environ.get("GH_BIN") or shutil.which("gh") or "gh"
+
+
 def gh(*args, timeout=120):
-    r = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run([GH_BIN, *args], capture_output=True, text=True, timeout=timeout)
     return r.stdout if r.returncode == 0 else ""
 
 

@@ -1,0 +1,10 @@
+{
+  "fecha": "2026-11-04T11:12:15+01:00",
+  "crate": "-p solidcraft-sketch -p solidcraft-doc",
+  "perfil": "ci",
+  "reps": 2,
+  "caso_A_uno_16jobs": {"segundos": 277 27, "promedio": 152, "builds_por_hora": 23.68, "cache_hits_promedio": 0},
+  "caso_B_paralelo_8mas8": {"segundos": 354 46, "promedio": 200, "builds_por_hora": 36.00, "cache_hits_promedio": 0},
+  "caso_C_serie_8mas8_cache_compartido": {"segundos": 455 46, "promedio": 250, "builds_por_hora": 28.80, "cache_hits_promedio": 0},
+  "nota": "El caso C es el caso real de dos gates del mismo workspace: el 2do build pega en el sccache del 1ro. El caso B simula dos gates que compilan lo mismo a la vez: los dos compiten por el cache."
+}
