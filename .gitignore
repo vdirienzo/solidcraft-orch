@@ -1,0 +1,18 @@
+# estado de la maquina: NO va al repo (se regenera en cada PC)
+targets/
+logs/
+locks/
+gates/
+state/
+state.json
+history.jsonl
+slots/
+plan-features.json
+# backups de parches
+*.bak
+*.bak-*
+__pycache__/
+*.pyc
+# secretos
+.env
+*.env

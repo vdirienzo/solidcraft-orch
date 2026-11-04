@@ -1,0 +1,133 @@
+deleg,goal,w,r,dur_min,estado,commit,pr,chars
+deleg_8ab13997,"goal: Arreglar el issue #7114 (SolidCraft, upstream tangency-labs/solidcraft) y publicarlo como PR draft desde",7,1031,-1097,max_iterations,1,0,305692
+deleg_ccae529f,goal: UNA SOLA TAREA: implementar el fix de #10159 (que el host detecte la indisponibilidad del portal y avise,51,942,368,max_iterations,1,0,304020
+deleg_9d98645b,"goal: Implementar la feature #3599 de SolidCraft: el constraint de sketch 'Pierce', que pone un punto de un sk",4,955,374,max_iterations,0,0,292451
+deleg_cddfe059,goal: Retomar el issue #10159 de SolidCraft: el File > Open en Wayland cae en silencio al fallback de zenity d,0,947,-1197,max_iterations,1,0,285178
+deleg_a6fcaabc,goal: Fix SolidCraft issue #7114: 'Sketch snapping is not apparent at visible grid intersections despite Snap ,5,944,257,max_iterations,0,1,277437
+deleg_904a99ba,"goal: Confirmar y arreglar el issue #10656 de SolidCraft (rotar un body durante un move altera su origen), con",0,878,-1179,max_iterations,0,0,275189
+deleg_1dacab98,"goal: Arreglar el issue #6449 de SolidCraft: con la herramienta Sketch -> Reference -> Project activa, un clic",10,898,-1262,max_iterations,0,0,271944
+deleg_b95fcbbe,goal: Implementar la feature #10067 de SolidCraft: un color de theme por plano de origen (tokens origin_plane_,20,888,388,max_iterations,0,0,269356
+deleg_e747db20,"goal: Implementar la feature upstream #4760 ""Weld tool to create intersect point"": un comando nuevo sketch.wel",1,944,-1013,max_iterations,0,0,268910
+deleg_c6a3e080,goal: Terminar la feature #3599 de SolidCraft: implementar el constraint de sketch 'Pierce' partiendo del test,21,887,356,interrupted,0,0,261203
+deleg_cb1f9157,goal: Implementar la feature #4760 de SolidCraft: el comando nuevo sketch.weld que une en un unico punto compa,1,868,454,interrupted,0,0,258874
+deleg_cddfe059,goal: Retomar el issue #10181 de SolidCraft: determinar si el panel que no se puede cerrar al proyectar una ca,17,892,-1197,max_iterations,1,0,258620
+deleg_1c27af77,"goal: Terminar la feature #10067 de SolidCraft (un color de theme por plano de origen: origin_plane_xy, origin",0,1005,460,interrupted,0,0,252259
+deleg_c6a3e080,goal: Terminar la feature #8434 de SolidCraft (una 'carbon copy' de un body que sigue al original pero admite ,26,817,356,interrupted,0,0,250449
+deleg_cb1f9157,goal: Implementar la feature #9866 de SolidCraft: el comando nuevo solid.distribute que reparte los objetos se,19,896,454,failed,0,0,246423
+deleg_d4f43dd2,"goal: Terminar el fix del issue #7114 (SolidCraft) conectando los helpers ya escritos al snapping del sketch, ",32,801,226,max_iterations,0,0,244649
+deleg_65f3e9ea,goal: UNA SOLA TAREA: escribir un test RED del issue #10339 para el caso de una pieza importada o insertada (s,48,716,170,max_iterations,0,0,240793
+deleg_754bcbeb,goal: Completar el arreglo del gc-disk.sh: que la limpieza de disco conozca tambien los target dirs del orques,86,636,209,max_iterations,0,0,238903
+deleg_b08d012a,goal: UNA SOLA TAREA: escribir un test RED que demuestre que al reabrir un diseño guardado el historial de fea,12,800,185,max_iterations,0,0,238046
+deleg_abcad5ff,goal: Retomar el issue #10138 de SolidCraft (idioma del sistema por defecto) sabiendo que el PR #10183 de otro,31,749,230,max_iterations,1,1,231802
+deleg_904a99ba,goal: Confirmar y arreglar el issue #10750 de SolidCraft (las dimensiones de la caja se permutan: el ancho se ,14,805,-1179,max_iterations,0,0,231381
+deleg_dc4f85e4,goal: Confirmar y arreglar el issue #10747 de SolidCraft (el valor de un parametro se reporta en unidades dist,73,622,-1204,failed,0,0,216896
+deleg_e747db20,"goal: Implementar la feature upstream #9866 ""Distribute selected objects within a specified boundary"": un coma",7,817,-1013,max_iterations,0,0,215355
+deleg_f2f71df1,"goal: Resolver el issue #10134 de SolidCraft: el comando sketch.move falla con ""unknown sketch entity 'w3'"" al",32,703,162,completed,0,0,214724
+deleg_d86067fe,"goal: Fix issue #7114 in the tangency-labs/solidcraft repo (Rust CAD app), verify it with a RED->GREEN regress",0,841,256,interrupted,0,0,209787
+deleg_a6fcaabc,goal: Fix SolidCraft issue #5858: 'A sketch curve id with a pipe character breaks face names'. Produce a draft,30,853,257,max_iterations,0,0,209728
+deleg_c6a3e080,goal: Arreglar el issue #4712 de SolidCraft: el item 4 (los errores que nombran comandos internos que el usuar,0,672,356,interrupted,0,0,209460
+deleg_9d98645b,"goal: Encontrar UN bug real y reproducible del upstream SolidCraft (fuera del kernel, sin claim, con un mensaj",0,636,374,max_iterations,0,0,208489
+deleg_e6daa4ac,"goal: Resolver el issue #10159 de SolidCraft: en Wayland el File > Open no usa el file chooser del escritorio,",29,800,176,max_iterations,0,0,207675
+deleg_83ff5751,"goal: Encontrar UN issue de SolidCraft con replay adjunto o error en la operacion (bug real y reproducible), i",8,651,211,max_iterations,0,0,204642
+deleg_83ff5751,"goal: Encontrar UN issue de SolidCraft con replay adjunto o error en la operacion (bug real y reproducible), i",1,652,211,max_iterations,1,0,202923
+deleg_9a28dceb,"goal: Integrar la feature #9866: con la matematica ya escrita y probada en crates/doc/src/distribute.rs, agreg",12,971,204,interrupted,0,0,202379
+deleg_ad989aac,"goal: Encontrar UN bug real del upstream SolidCraft (fuera del kernel, sin claim, con la causa raiz identifica",30,656,94,completed,0,0,200979
+deleg_2d65dba0,goal: Resolver el issue #10291 de SolidCraft: proyectar geometria desde un sketch en un plano paralelo al del ,43,612,-1272,completed,1,1,200971
+deleg_ca46cbe0,goal: Fix issue #3892 in the tangency-labs/solidcraft repo (Rust CAD app): hovering the browser tree of a larg,30,658,173,max_iterations,0,0,198350
+deleg_ca46cbe0,goal: Fix issue #9062 in the tangency-labs/solidcraft repo (Rust CAD app): a construction line in a Sketch is ,67,610,173,max_iterations,0,0,196106
+deleg_f61c6f03,goal: Implementar la feature #5237 de SolidCraft (el command reference generado legible para un humano no-codi,18,618,-1120,max_iterations,0,0,195584
+deleg_abcad5ff,goal: Retomar el issue #10079 de SolidCraft: al renombrar una segunda extrusión desde el browser se abre el sk,21,640,230,interrupted,1,1,195033
+deleg_225bd5f5,"goal: Endurecer el loop de claims de SolidCraft: que un PR nuestro NUNCA se publique si ya perdio el claim, y ",32,836,306,max_iterations,0,0,192170
+deleg_b4e36260,goal: Conectar el guard de claims al publisher de SolidCraft (agent-issue.sh): re-verificar el reclamo al eleg,96,534,255,max_iterations,0,0,190898
+deleg_8bda54fd,goal: Implementar la feature #5237 de SolidCraft: que el command reference generado (xtask/src/book.rs) muestr,86,555,343,max_iterations,0,0,189552
+deleg_e6daa4ac,goal: Resolver el issue #10181 de SolidCraft: al proyectar una cara a un sketch la operación funciona pero ade,20,717,176,max_iterations,0,0,189411
+deleg_a6fcaabc,goal: Fix SolidCraft issue #9062: 'Sketch: construction line deletes itself'. Produce a draft PR on the fork t,32,575,257,max_iterations,0,0,185751
+deleg_7049cde9,"goal: Resolver el issue #10079 de SolidCraft: al renombrar una segunda extrusión desde el browser, se abre el ",14,634,164,interrupted,0,0,183357
+deleg_2d65dba0,goal: Resolver el issue #10331 de SolidCraft: la app solo acepta un joint planar y no deja crear un segundo. R,22,636,-1272,max_iterations,0,1,183161
+deleg_5c0fd3bc,"goal: Implementar la feature #10067 de SolidCraft (un color de theme por plano de origen: XY, XZ y YZ, con fal",0,580,-1314,completed,0,0,173501
+deleg_610c98d5,goal: Terminar el fix de performance del issue #3892 (SolidCraft) y publicarlo como PR draft desde el fork vdi,55,435,-1119,completed,0,1,161274
+deleg_50c60574,goal: Cerrar el gap del PR #11074: extender el parser de params para que no saltee los 48 comandos con coma de,35,514,245,max_iterations,0,0,160247
+deleg_5a2f9716,goal: Capturar la evidencia visual del issue #7114 (SolidCraft): dos PNG del viewport que muestren (A) un punt,51,418,85,completed,0,0,152745
+deleg_8e04b29b,"goal: Contribuir al PR upstream #6457 (issue #6449, SolidCraft): verificar si su fix rebasa sobre el main actu",6,432,197,interrupted,0,0,152572
+deleg_9d98645b,"goal: Implementar la feature #8434 de SolidCraft: una 'carbon copy' de un body, que sigue al original (compart",36,470,374,completed,1,0,147030
+deleg_f2476af0,goal: Capturar la evidencia visual del PR #10390 (el dialogo Project que aceptaba la recta de otro sketch: ant,5,533,61,completed,0,1,143338
+deleg_8ab13997,"goal: Publicar el fix del issue #5858 (SolidCraft, upstream tangency-labs/solidcraft) como un PR draft desde e",9,462,-1097,completed,1,1,140665
+deleg_87f006e6,"goal: Capturar la evidencia visual del PR #10594 (el panel Project que muestra la fila roja con ""Create Issue.",17,480,53,completed,0,1,136685
+deleg_7049cde9,"goal: Resolver el issue #10138 de SolidCraft: la app debe seguir el idioma del sistema por defecto (opción ""Sy",4,427,164,interrupted,1,0,135199
+deleg_87f006e6,goal: Capturar la evidencia visual del PR #10618 (el mensaje del session log que dice que el file chooser no e,10,439,53,completed,0,1,133271
+deleg_538f0296,goal: Corregir la regresión que el gate detectó en el PR #9843 (issue #7114): el criterio con el que un punto ,11,397,303,completed,0,1,132624
+deleg_ee684044,goal: Salvar y publicar el trabajo sin pushear de las ramas fix/issue-10138-system-language y las del issue 55,20,400,129,completed,0,1,131560
+deleg_94ee5ea7,goal: Arreglar el bug del mensaje vacio en LinkSource::describe() de SolidCraft (el mensaje 'face of ' termina,31,383,-1273,completed,0,1,130983
+deleg_60f5417b,"goal: Terminar el issue #10181 de SolidCraft: convertir la sonda de diagnóstico en un test RED real, corregir ",0,426,180,interrupted,0,0,127983
+deleg_60f5417b,goal: Terminar el issue #10159 de SolidCraft: que el host detecte la indisponibilidad del portal del escritori,4,416,180,interrupted,1,0,126745
+deleg_3c717bc5,"goal: Encontrar UN bug real y reciente del upstream SolidCraft (fuera del kernel, sin claim, con la causa raiz",21,421,123,?,0,0,123879
+deleg_f2f71df1,"goal: Resolver el issue #10116 de SolidCraft (parte B): al guardar las preferencias, el modo de ventana (windo",2,398,162,completed,1,1,122952
+deleg_4c198635,goal: Actualizar el test 53 de test-rules.py al contrato nuevo del freno de claims (claim-brake.sh con codigos,16,345,98,interrupted,0,0,118121
+deleg_8ab13997,"goal: Terminar el fix de performance del issue #3892 (SolidCraft, upstream tangency-labs/solidcraft) y publica",0,364,-1097,completed,0,0,114809
+deleg_ad989aac,goal: Arreglar el issue #5857 de SolidCraft: que el nombre de una cara con un nombre anidado deje de ser ambig,3,350,125,?,0,0,108540
+deleg_0b5f1db2,"goal: Corregir el criterio con el que un punto del sketch cae en el cruce de la grilla visible (PR #9843, issu",31,264,87,completed,0,0,103448
+deleg_498d22bc,goal: Agregar un verificador del config.env del loop que detecte valores con espacios sin comillas (que rompen,29,312,38,completed,0,0,102246
+deleg_f2dcf821,goal: Responder los dos cambios que pidio el mantenedor en el PR #10618: reescribir como mensajes planos las s,10,310,143,interrupted,0,0,100737
+deleg_ccae529f,"goal: UNA SOLA TAREA: implementar el fix de #10181 para que un error de contexto no ofrezca el boton ""Create I",16,291,368,completed,1,0,98773
+deleg_a06a6af5,goal: Publicar el aporte complementario del issue #10747: que el comando inspect reporte el 'value' de los par,18,317,164,?,0,0,96356
+deleg_bd30096a,goal: UNA SOLA TAREA: correr el gate scoped del fix de #10181 (ya commiteado y verde) y abrir el PR draft desd,9,307,147,completed,0,1,94526
+deleg_3bc23a05,goal: Arreglar el issue #4712: que los errores de sketch.modify nombren el comando PUBLICO ('sketch.modify') y,8,315,119,interrupted,1,0,93699
+deleg_fd304640,"goal: Produce a ranked, actionable triage list of open SolidCraft issues for an agent to claim. Read-only, no ",1,301,45,completed,1,0,87919
+deleg_f87382ef,goal: Capturar la evidencia visual del PR #10859 (el mensaje de rechazo de sketch.project): el BEFORE con el ',8,381,60,completed,1,1,87358
+deleg_57ff0d50,"goal: Pick the 2 best unclaimed, implementable issues in the SolidCraft repo for a multi-agent PR pipeline, an",2,384,70,completed,0,0,85127
+deleg_ee684044,"goal: Salvar y publicar el trabajo sin pushear de la rama pr-10183 (i18n/localizacion, 19 archivos): verificar",16,280,129,completed,0,1,84458
+deleg_bdfde19c,goal: Arreglar el bug de matching de idioma con subtag de script: macOS reporta el chino tradicional como zh-H,15,252,-1359,completed,1,0,83203
+deleg_be329a7b,goal: Agregar al GC de disco (bin/gc-disk.sh) un cap de tamano para el arbol de targets del orquestador (DISK_,63,196,86,completed,0,0,83143
+deleg_3c60dd73,"goal: Find the single best clean, single-topic, unclaimed SolidCraft issue to work in parallel (issue #9087 is",3,271,45,completed,0,1,81674
+deleg_2a7459ae,"goal: Deep-verify two candidate SolidCraft issues (#9080 and #9087) for pickability, so one can be claimed and",1,280,22,completed,1,0,81091
+deleg_1b236ffe,"goal: Rebasear la rama fix/issue-7114-snap-grid-visible sobre origin/main, resolver los conflictos a mano, cor",5,279,80,completed,0,1,80465
+deleg_ba3ac879,goal: Terminar la feature #5237 de SolidCraft: la implementacion YA esta escrita y en GREEN; falta commitearla,10,235,44,completed,1,1,79377
+deleg_e94e1396,goal: UNA SOLA TAREA: correr el gate scoped del fix de #10159 (ya commiteado y verde) y abrir el PR draft desd,12,215,48,completed,0,1,73522
+deleg_083c00cb,"goal: Agregar al crate solidcraft-sketch el constraint ConstraintKind::Pierce (la variante con sus metodos, y ",12,238,90,?,0,0,73353
+deleg_0da28c8a,goal: Escribir una suite de tests para /home/user/.local/share/solidcraft-orch/bin/verify-pr.sh que cubra la e,33,161,78,completed,0,0,67859
+deleg_08543365,goal: Encontrar features del upstream SolidCraft que el mantenedor haya aprobado o invitado explicitamente a i,0,176,13,completed,0,1,57277
+deleg_c7001e70,goal: Aplicar el cambio de cinco lineas que hace que los errores de sketch.modify nombren el comando PUBLICO (,17,177,113,interrupted,0,0,56428
+deleg_20fdfbf4,goal: Arreglar el issue #4712 de SolidCraft: que los errores nombren el comando PUBLICO y no un nombre interno,0,188,29,interrupted,0,0,54488
+deleg_956dce5f,"goal: Evaluar el issue #10626 de SolidCraft (sketch.project falla con 'already projected into this sketch') y,",0,160,22,completed,1,0,49348
+deleg_3ddb905e,"goal: Inventory every local git worktree, branch and build directory for the SolidCraft work, map each to its ",29,170,18,interrupted,1,1,49262
+deleg_41f47dc5,"goal: Escribir, en crates/doc/src/distribute.rs, la matematica de repartir N objetos dentro de un span en los ",20,129,45,completed,1,0,48970
+deleg_97a18525,"goal: Rebasear la rama fix/issue-7114-snap-grid-visible sobre origin/main en un worktree recreado, resolver lo",28,153,55,completed,1,1,48442
+deleg_3bc23a05,"goal: Completar, con siete ediciones puntuales localizadas por grep, la plumbing de los tres tokens de color d",0,166,119,interrupted,1,0,48181
+deleg_64e6f922,"goal: Completar la plumbing de los tres tokens de color de plano (origin_plane_xy, origin_plane_xz, origin_pla",0,166,24,interrupted,0,0,47410
+deleg_b888e674,goal: Cerrar el trabajo del guard de claims: conectar claim-brake.sh al publisher (agent-issue.sh) para que un,27,139,27,interrupted,0,0,46113
+deleg_e45e2e8d,"goal: Auditar el loop de SolidCraft en busca de bugs reales y arreglarlos con tests, dejando las dos suites co",2,147,23,interrupted,0,0,45447
+deleg_64e6f922,goal: Implementar en el crate solidcraft-doc el override por instancia (una copia de un body que sigue al orig,0,149,24,interrupted,0,0,44114
+deleg_c7001e70,"goal: Crear UN archivo nuevo, crates/sketch/src/weld.rs, con la funcion publica que weld las curvas que se cru",16,124,113,interrupted,0,0,43793
+deleg_6019ae49,goal: Fix issue #3892 in the tangency-labs/solidcraft repo (Rust CAD app): hovering the browser tree of a larg,10,138,59,interrupted,0,0,43457
+deleg_3536a9fc,"goal: Crear UN archivo nuevo, crates/sketch/src/pierce.rs, con la geometria del punto donde la curva de otro s",8,125,46,completed,0,0,41701
+deleg_1b236ffe,"goal: Abrir el PR draft del trabajo ya commiteado de #10159 (file chooser portal fallback), con el body valida",2,140,80,completed,0,1,39966
+deleg_4e5c2fa3,"goal: Pick the single best next SolidCraft issue to implement: a clean, single-topic, unclaimed bug with a det",3,117,11,completed,0,0,38703
+deleg_3ddb905e,goal: Audit the 4 open PRs owned by vdirienzo on tangency-labs/solidcraft and report their exact health plus t,8,135,18,interrupted,0,0,36706
+deleg_52e15b89,"goal: Arreglar el issue #9062 (""Sketch: construction line deletes itself"") en SolidCraft y abrir el PR. Estado",0,120,7,interrupted,0,0,35541
+deleg_e24e92cc,"goal: Escribir el constraint de sketch 'Pierce' en el crate solidcraft-sketch (la variante, sus metodos, la re",0,133,70,interrupted,0,0,35476
+deleg_b87aa87a,"goal: Termina el PR draft #8059 de SolidCraft: rebasa sobre main actual, pushea y pasalo a READY FOR REVIEW. E",1,100,9,interrupted,1,0,35427
+deleg_b87aa87a,goal: Implementa el fix del issue #7114 (snapping de sketch no aparente en intersecciones visibles de la rejil,0,124,9,interrupted,0,0,34831
+deleg_52e15b89,"goal: Arreglar el issue #7114 (""Sketch snapping is not apparent at visible grid intersections despite ..."") en",2,104,7,interrupted,0,0,31329
+deleg_13439f46,goal: UNA SOLA TAREA: escribir la función de decisión del file picker y su test RED en los archivos de test ex,4,93,21,completed,0,0,30028
+deleg_3536a9fc,"goal: Crear UN archivo nuevo, crates/doc/src/occurrence_override.rs, con la logica del override por instancia ",0,94,46,interrupted,0,0,28478
+deleg_52e15b89,"goal: Arreglar el issue #5858 (""A sketch curve id with \""|\"" breaks face names"") en SolidCraft y abrir el PR. ",3,92,7,interrupted,0,0,28192
+deleg_3ddb905e,goal: Read the SolidCraft agent-facing policy docs on disk and return a COMPACT rule sheet (max 45 lines) that,0,84,18,completed,0,0,25887
+deleg_20fdfbf4,goal: Escribir en el crate solidcraft-sketch la operacion de weld (unir en un punto compartido las curvas que ,4,84,29,interrupted,0,0,25689
+deleg_13439f46,"goal: UNA SOLA TAREA: convertir la sonda de diagnóstico del issue #10181 en un test RED real que falle, y trae",4,78,21,completed,0,0,23803
+deleg_b96b4dea,goal: Agregar al crate solidcraft-doc el FeatureKind::Distribute y su evaluacion (con la matematica ya escrita,0,86,6,interrupted,0,0,23793
+deleg_d76f2e01,goal: Arreglar el bug del gc-disk.sh que barre un arbol de targets muerto (28 GB) y nunca toca el arbol real d,0,80,18,interrupted,0,1,23490
+deleg_55c98f84,goal: Arreglar dos bugs de resultado falso en verify-pr.sh: un PR sin veredicto de gate sale como 'todo en ord,3,79,22,interrupted,1,0,23418
+deleg_b2d8beb7,"goal: Termina el fix del issue #5858 (""A sketch curve id with | breaks face names"") y abre el PR draft. El tra",0,72,7,interrupted,0,0,22711
+deleg_cae06280,goal: Arreglar el bug del slot-lock.sh: un lock de slot huerfano (sin 'since') queda tomado para siempre porqu,9,61,16,interrupted,0,0,20806
+deleg_bc82aff0,goal: Reconciliar el PR draft #8059 con el main actual y dejarlo listo para review en https://github.com/tange,0,56,5,interrupted,1,0,18556
+deleg_52e15b89,goal: Terminar el fix de performance para el issue #3892 (browser tree lento con un assembly STEP anidado gran,0,54,7,interrupted,0,0,17722
+deleg_efcc0ddb,"goal: Limpieza de disco y de worktrees muertos del proyecto SolidCraft, sin tocar nada que este en uso. CONTEX",0,48,8,interrupted,0,0,17717
+deleg_b87aa87a,goal: Triaje de issues abiertos de SolidCraft: produce una lista de candidatos accionables para un PR. SOLO LE,0,56,9,interrupted,0,0,17599
+deleg_b87aa87a,goal: Implementa el fix de performance del issue #3892 y abre el PR draft. El trabajo previo ya esta hecho; tu,0,52,9,interrupted,0,0,17344
+deleg_3ddb905e,"goal: Produce a ranked, actionable triage list of open SolidCraft issues for an agent to claim. Up to 12 candi",0,47,18,interrupted,0,0,13935
+deleg_3536a9fc,"goal: Crear UN archivo nuevo, crates/sketch/src/weld.rs, con la funcion publica que weld las curvas que se cru",0,34,46,interrupted,0,0,12625
+deleg_1a43a5b2,goal: Cerrar el gap del PR #11074: arreglar el parser de params para los comandos cuyos params son dos nombres,0,40,5,interrupted,1,0,12025
+deleg_c7001e70,"goal: Crear UN archivo nuevo, crates/sketch/src/pierce.rs, con la geometria del punto donde la curva de otro s",0,32,113,interrupted,0,0,10100
+deleg_9dd059f4,"goal: Analizar el costo y la eficiencia del gate local y del proceso de publicacion de PRs de SolidCraft, y es",0,5,0,?,0,0,4862
+deleg_9dd059f4,goal: Analizar los transcripts de los subagentes del orquestador de SolidCraft (en /home/user/.hermes/cache/de,0,6,0,?,1,0,4814
+deleg_9dd059f4,goal: Auditar el codigo del loop de orquestacion de SolidCraft (los scripts en /home/user/.local/share/solidcr,0,1,0,?,0,0,2591

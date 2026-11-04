@@ -1,0 +1,450 @@
+# workflow.yaml - EL GRAFO DEL ORQUESTADOR, DECLARADO.
+#
+# POR QUE EXISTE (2026-11-04): el proceso de un issue vivia en la cabeza de quien
+# manejaba el orquestador. 49 scripts y ningun mapa: nadie puede responder "que sigue"
+# ni "donde se trabo" sin reconstruir el estado a mano.
+#
+# QUE ES: la DECLARACION del proceso de un issue (12 nodos) con sus aristas, sus
+# precondiciones y que hacer en cada fallo.
+# QUE NO ES: un framework. Este archivo no ejecuta nada. Quien ejecuta es
+# bin/workflow-runner.sh (UN nodo elegible; NUNCA lo que compila Rust) y los crons
+# que ya existen (solidcraft-pipeline */5, solidcraft-gate-queue */3).
+#
+# COMO SE LEE:
+#   nodos     que hace cada paso: id, script, lee, escribe, precondiciones,
+#             si_falla, cron, compilacion_pesada.
+#   flujo     el orden y las condiciones de salto: que arista se toma, y que pasa
+#             si no se cumple (si_no).
+#   senales   el vocabulario de condiciones que bin/workflow-runner.sh evalua
+#             contra el estado REAL en disco.
+#
+# ESTADO: el runner lee el estado del orquestador en DISCO (state.json, la cola de
+# gates y los veredictos del gate). GitHub es la verdad final, pero el runner no
+# llama a la red: si el state.json esta viejo, las propuestas estan viejas.
+#
+version: 1
+nombre: solidcraft-orquestador
+descripcion: >-
+  El proceso de un issue en el orquestador de SolidCraft: del barrido del pool al
+  CI del upstream, con lo que hay que hacer en cada fallo.
+raiz: /home/user/.local/share/solidcraft-orch
+
+estado:
+  state_json: state.json
+  cola_gates: gates/queue.txt
+  veredictos: /home/user/.local/share/solidcraft-loop/gates   # <slot>/scope.verdict
+
+# Vocabulario de condiciones que el runner evalua contra el disco.
+# bin/workflow-validate.py --signals y bin/workflow-runner.sh --signals imprimen
+# esta misma lista: si se separan, el validador falla.
+senales:
+  - siempre                          # la senal es cierta (no se usa sola)
+  - nunca                           # la senal es falsa (no se usa sola)
+  - pr_draft_sin_veredicto           # hay un PR en DRAFT cuyo head no tiene veredicto de gate
+  - pr_draft_con_veredicto_verde     # hay un PR en DRAFT con veredicto VERDE para su head
+  - pr_listo_para_verificar          # hay un PR no-draft con veredicto verde en su head
+  - cola_no_vacia                    # gates/queue.txt tiene al menos una entrada
+  - slot_sin_veredicto_efectivo      # hay un slot con scope.verdict y sin scope.effective.verdict
+
+# ---------------------------------------------------------------------------
+# LOS NODOS
+#
+# compilacion_pesada: si  =>  el runner NUNCA lo ejecuta (compila Rust: la caja esta
+#                           ocupada con los gates). Lo propone y lo lleva el cron.
+# cron: <expr>           =>  hay un cron que ya lo corre; el runner no lo duplica.
+# agente: true           =>  lo hace un agente (script: null): no hay comando que correr.
+# ---------------------------------------------------------------------------
+nodos:
+  - id: buscar-issue
+    titulo: "Barrido del pool de issues"
+    agente: true                      # lo hace un agente, no un script
+    script: null
+    lee:
+      - "state.json: pool de issues y candidatos"
+      - "GitHub: issues abiertas del upstream (paginado: el limite de gh TRUNCA)"
+    escribe:
+      - "state.json: candidatos"
+      - "briefs/<issue>-<tema>.md"
+    precondiciones:
+      - "el pool tiene issues abiertas que no son kernel y que nadie reclama"
+    si_falla: reintentar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      El buscador descarta: kernel (crates/kernel esta pausado), labels in progress /
+      needs-info / needs-triage, cuerpo vacio ("Not provided"), y duplicados (un PR
+      abierto que ya lo reclama). La causa raiz en solidcore/SMLib se descarta mas
+      abajo, en causa-raiz.
+
+  - id: claim-verify
+    titulo: "Re-verificar el claim del issue"
+    agente: false
+    script: "bin/claim-verify.sh"
+    interprete: bash
+    lee:
+      - "GitHub: PRs abiertas del upstream (title + body)"
+    escribe: []
+    precondiciones:
+      - "hay un PR nuestro en draft que reclama el issue"
+    si_falla: descartar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      rc=0 el claim es nuestro; rc=1 lo PERDIMOS (cerrar nuestro PR y liberar el
+      slot: bash bin/slot-lock.sh --slot N --release); rc=2 no se pudo verificar
+      (GitHub no se pudo leer) y ESO NO SE PUBLICA. Es el unico script que decide
+      quien tiene el claim en el orquestador.
+    acciones:
+      - id: revalidar
+        script: "bin/claim-verify.sh"
+        interprete: bash
+        args: ["{issue}", "{pr}"]
+        cuando: [pr_draft_sin_veredicto]
+        compilacion_pesada: "no"
+        nota: "RULES.md paso 5: re-verificar el claim DESPUES de abrir el draft."
+
+  - id: causa-raiz
+    titulo: "Causa raiz en el codigo"
+    agente: true
+    script: null
+    lee:
+      - "el issue y sus comentarios"
+      - "el codigo del repo (crates/)"
+    escribe:
+      - "briefs/<issue>-<tema>.md: archivo, funcion y linea"
+      - "state.json: causa"
+    precondiciones:
+      - "el claim es nuestro (claim-verify rc=0)"
+      - "el issue no es del kernel"
+    si_falla: descartar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      Si la causa esta en solidcore/SMLib, el issue se DESCARTA: no es atacable desde
+      este repo. Si la causa no se puede determinar, el nodo escala (no se despacha un
+      agente con un problema abierto: se le da el codigo a aplicar).
+
+  - id: test-red
+    titulo: "Test RED (falla antes del fix)"
+    agente: true
+    script: null
+    lee:
+      - "la causa raiz del brief"
+      - "el archivo de tests EXISTENTE del area"
+    escribe:
+      - "el test RED en el archivo de tests del area (nunca un archivo por bug)"
+      - "logs/<issue>-RED.log"
+      - "un commit en el fork"
+    precondiciones:
+      - "la causa raiz esta localizada (archivo, funcion, linea)"
+    si_falla: reintentar
+    reintentos_max: 1
+    si_falla_tras_reintentos: escalar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      El RED es el entregable minimo: sin test que falla, el fix despues es
+      exploracion y no rinde. Si el nodo no deja un commit, reintenta UNA vez y
+      despues escala.
+
+  - id: fix
+    titulo: "El fix"
+    agente: true
+    script: null
+    lee:
+      - "el commit RED"
+      - "el codigo a cambiar"
+    escribe:
+      - "el commit del fix en el fork"
+      - "logs/<issue>-GREEN.log"
+    precondiciones:
+      - "el RED esta commiteado y falla con el error real del issue"
+    si_falla: reintentar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      El brief al que implementa lleva el codigo a aplicar con su numero de linea;
+      el agente no investiga: aplica. El test dirigido tiene que pasar.
+
+  - id: draft-pr
+    titulo: "PR en DRAFT (el draft ES el claim)"
+    agente: true
+    script: null
+    lee:
+      - "los commits del fix"
+      - "el body del PR"
+    escribe:
+      - "el PR en draft en el fork (gh pr create --draft)"
+      - "state.json: open_prs"
+    precondiciones:
+      - "el fix esta commiteado y pusheado al fork"
+      - "el body tiene 'Fixes #N' y una sola linea 'Changes a default:'"
+    si_falla: escalar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      El draft se abre DESPUES del commit y ANTES del gate: el draft es lo que mantiene
+      vivo el claim de 72 h. Un draft sin pushes 72 h puede ser tomado por otro.
+
+  - id: pipeline
+    titulo: "Pipeline del orquestador (body, cola y ready)"
+    agente: false
+    script: "bin/pipeline.py"
+    interprete: python3
+    lee:
+      - "GitHub: PRs nuestras en draft"
+      - "los veredictos del gate"
+      - "gates/queue.txt"
+    escribe:
+      - "el body de los PRs (gh pr edit)"
+      - "gates/queue.txt"
+      - "el PR pasado a ready (gh pr ready) y su comentario de veredicto"
+      - "logs/pipeline.log"
+    precondiciones:
+      - "el PR en draft referencia el issue (Fixes #N)"
+    si_falla: reintentar
+    cron: "*/5 * * * *"
+    cron_job: solidcraft-pipeline
+    compilacion_pesada: "no"
+    notas: >-
+      Corre cada 5 min, sin LLM, y es idempotente. Por cada PR en draft: (1) le
+      completa el body; (2) si no tiene veredicto, lo ENCOLA (gate-queue.sh --enqueue);
+      (3) si el gate dio verde, lo pasa a READY y deja el comentario del veredicto.
+      No encola mas de MAX_INFLIGHT (6) gates: un backlog grande es lo que vence los claims.
+      Tiene cron: el runner no lo duplica.
+
+  - id: gate-queue
+    titulo: "La cola de gates"
+    agente: false
+    script: "bin/gate-queue.sh"
+    interprete: bash
+    lee:
+      - "gates/queue.txt"
+      - "el estado de los slots de build (bin/build-slot.sh --status)"
+    escribe:
+      - "gates/queue.txt"
+      - "logs/gate-queue-<issue>.log"
+    precondiciones:
+      - "el gate necesita un slot de build libre"
+    si_falla: esperar
+    cron: "*/3 * * * *"
+    cron_job: solidcraft-gate-queue
+    compilacion_pesada: "si"
+    notas: >-
+      Dos acciones distintas. ENCOLAR (la hace pipeline.py) mete "<issue> <sha>" en la
+      cola: NO compila. DRENAR (el cron solidcraft-gate-queue) lanza gate.sh por cada
+      entrada: eso SI compila Rust. El nodo esta marcado compilacion_pesada: si, asi que
+      el runner lo PROPONE y nunca lo ejecuta: el turno de compilacion es del cron.
+    acciones:
+      - id: encolar
+        script: "bin/gate-queue.sh"
+        interprete: bash
+        args: ["--enqueue", "{issue}", "{sha}"]
+        cuando: [pr_draft_sin_veredicto]
+        compilacion_pesada: "no"
+        nota: "No compila: solo escribe una linea en la cola."
+      - id: drenar
+        script: "bin/gate-queue.sh"
+        interprete: bash
+        args: ["--run"]
+        cuando: [cola_no_vacia]
+        compilacion_pesada: "si"
+        nota: "Compila Rust (lanza gate.sh). Lo lleva el cron; el runner solo lo propone."
+
+  - id: gate
+    titulo: "El gate scoped (compila Rust)"
+    agente: false
+    script: "bin/gate.sh"
+    interprete: bash
+    lee:
+      - "el worktree del slot"
+      - "el claim del issue (bin/claim-verify.sh)"
+      - "el CARGO_TARGET_DIR del slot"
+    escribe:
+      - "/home/user/.local/share/solidcraft-loop/gates/<slot>/scope.verdict"
+      - "logs/gate-<slot>.log"
+    precondiciones:
+      - "el claim sigue siendo nuestro (si no, exit 4 y no compila)"
+      - "hay slot de build libre (el lock pesado)"
+    si_falla: reintentar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "si"
+    notas: >-
+      Compila 7 paquetes y satura la maquina: UN gate a la vez (slot-lock.sh --heavy).
+      El veredicto es POR SLOT y por SHA: un verdict viejo de otro SHA no es verde.
+      Una fase SKIPPED es UNKNOWN, no verde. El runner NO ejecuta este nodo.
+
+  - id: gate-baseline
+    titulo: "El veredicto EFECTIVO (lo que ya fallaba en origin/main)"
+    agente: false
+    script: "bin/gate-baseline.sh"
+    interprete: bash
+    lee:
+      - "/home/user/.local/share/solidcraft-loop/gates/<slot>/scope.verdict"
+      - "baseline/failures-origin-main.txt"
+      - "el catalogo de fallos conocidos del upstream (tests/KNOWN_FAILING_TESTS)"
+    escribe:
+      - "/home/user/.local/share/solidcraft-loop/gates/<slot>/scope.effective.verdict"
+    precondiciones:
+      - "existe el veredicto crudo del slot"
+    si_falla: reintentar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      El gate cuenta TODO fallo de su scope como nuevo, asi que mientras upstream este
+      roto todos los PRs salen rojos por cosas que no son del cambio. Este nodo resta
+      lo preexistente y escribe el veredicto efectivo. NO toca el veredicto crudo.
+    acciones:
+      - id: calcular
+        script: "bin/gate-baseline.sh"
+        interprete: bash
+        args: ["{slot}"]
+        cuando: [slot_sin_veredicto_efectivo]
+        compilacion_pesada: "no"
+        nota: "Lee el verdict crudo y escribe el efectivo. No compila."
+
+  - id: verify-pr
+    titulo: "Verificar el PR en UNA llamada"
+    agente: false
+    script: "bin/verify-pr.sh"
+    interprete: bash
+    lee:
+      - "GitHub: el PR (head, body, labels, checks, mergeable)"
+      - "el veredicto del gate del slot"
+    escribe: []
+    precondiciones:
+      - "el PR tiene codigo y hay un slot con veredicto"
+    si_falla: escalar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      Reemplaza seis llamadas por una: head contra el fork, verbos de cierre, linea de
+      defaults, rutas locales del body, draft y por que, checks y veredicto del gate.
+      Un PR solo de docs no tiene slot ni gate: eso es una NOTA, no un FAIL.
+    acciones:
+      - id: verificar
+        script: "bin/verify-pr.sh"
+        interprete: bash
+        args: ["{pr}"]
+        cuando: [pr_listo_para_verificar]
+        compilacion_pesada: "no"
+        nota: "Una llamada: todo el PR verificado de una vez."
+
+  - id: ci-upstream
+    titulo: "El CI del upstream"
+    agente: true
+    script: null
+    lee:
+      - "GitHub: los checks del PR (gh pr checks)"
+    escribe:
+      - "state.json: el estado del CI"
+    precondiciones:
+      - "el PR esta ready (no draft)"
+      - "el maintainer sumo 'approved-for-ci' (el agente NUNCA lo agrega)"
+    si_falla: esperar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      Los checks PESADOS esperan el label del maintainer: saltarse a proposito. Los
+      checks LIVIANOS (la linea de defaults, el bot del claim, el de kernel-paused) si
+      corren en un PR no-draft, y si fallan es un defecto real. La merge queue es del
+      maintainer.
+
+# ---------------------------------------------------------------------------
+# EL FLUJO: orden y condiciones de salto
+# ---------------------------------------------------------------------------
+flujo:
+  orden:
+    - buscar-issue
+    - claim-verify
+    - causa-raiz
+    - test-red
+    - fix
+    - draft-pr
+    - pipeline
+    - gate-queue
+    - gate
+    - gate-baseline
+    - verify-pr
+    - ci-upstream
+
+  aristas:
+    - de: buscar-issue
+      a: claim-verify
+      si: "el barrido devolvio un issue libre (nadie lo reclama)"
+      si_no: "descartar: el pool se agota, se vuelve a barrer"
+
+    - de: claim-verify
+      a: causa-raiz
+      si: "rc=0: el claim es nuestro"
+      si_no: "rc=1 descartar (cerrar nuestro PR, liberar el slot); rc=2 escalar (no se pudo verificar: no se publica)"
+
+    - de: causa-raiz
+      a: test-red
+      si: "la causa esta en un crate de este repo"
+      si_no: "descartar: la causa esta en solidcore/SMLib y no es atacable desde este repo"
+
+    - de: test-red
+      a: fix
+      si: "el test RED esta commiteado y falla con el error real del issue"
+      si_no: "reintentar una vez; si no deja un commit, escalar"
+
+    - de: fix
+      a: draft-pr
+      si: "el fix esta commiteado, pusheado al fork y el test dirigido pasa"
+      si_no: "reintentar"
+
+    - de: draft-pr
+      a: pipeline
+      si: "el PR en draft esta abierto con 'Fixes #N' en el titulo y en el body"
+      si_no: "escalar: el draft es el claim y sin el se pierde el issue"
+
+    - de: pipeline
+      a: gate-queue
+      si: "el PR en draft no tiene veredicto y la cola tiene hueco (MAX_INFLIGHT)"
+      si_no: "esperar: la cola ya esta llena (un backlog grande vence los claims)"
+
+    - de: gate-queue
+      a: gate
+      si: "hay un slot de build libre y el runner de la cola lanzo el gate del issue"
+      si_no: "esperar: no hay slot libre todavia (la espera vive en la cola, no en el gate)"
+
+    - de: gate
+      a: gate-baseline
+      si: "el gate escribio scope.verdict para ese SHA"
+      si_no: "reintentar: un gate cortado no deja veredicto y el archivo viejo miente"
+
+    - de: gate-baseline
+      a: verify-pr
+      si: "el veredicto efectivo es VERDE-SCOPE (NEW_FAILURES=0)"
+      si_no: "fix: el PR tiene fallos NUEVOs, volver al nodo fix con el nombre del fallo"
+
+    - de: verify-pr
+      a: pipeline
+      si: "el PR verifica y sigue en draft por falta de evidencia"
+      si_no: "escalar: el body, el head o los checks no estan en orden"
+
+    - de: pipeline
+      a: verify-pr
+      si: "el gate dio verde y el PR ya paso a ready (gh pr ready)"
+      si_no: "esperar: el PR sigue en draft"
+
+    - de: verify-pr
+      a: ci-upstream
+      si: "el PR esta ready, con el body valido y el gate verde en el head publicado"
+      si_no: "escalar"
+
+    - de: ci-upstream
+      a: buscar-issue
+      si: "el maintainer mergeo y el pool tiene issues nuevos"
+      si_no: "esperar: la merge queue y el CI son del maintainer"

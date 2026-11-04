@@ -1,0 +1,36 @@
+# Fallos PREEXISTENTES de origin/main, medidos el 2026-11-03.
+# Contexto: la migracion de upstream al kernel SMLib v1.1.0-alpha (#11351,
+# mergeada como ea772a043 / 147b4049c) dejo estos tests rotos en main.
+# Verificado en un worktree limpio de origin/main: 26 de 26 fallan con el
+# MISMO mensaje (byte a byte) que en el gate del fix.
+# El gate los cuenta como NEW_FAILURES: hay que descontarlos antes de
+# declarar un PR ROJO, o ningun PR puede pasar mientras upstream este roto.
+# Formato: un test por linea, con el prefijo del crate (nextest lo usa asi).
+# Refrescar cuando upstream cambie: el reporte completo esta en
+# /home/user/.hermes/cache/scratch/verify-5857-origin-main-report.txt
+solidcraft-cli::corpus_designs_name_alike_every_build_and_fail_where_a_reference_is_gone
+engine::cmd::file::tests::each_format_has_an_export_command_of_its_own
+engine::cmd::sketch_project::tests::intersection_curve_of_picked_faces_spans_the_whole_surface
+engine::extent_tests::cut_to_the_far_side_of_a_curved_wall
+engine::face_name_tests::a_join_that_makes_the_body_bigger_leaves_round_walls_it_never_touched_alone
+engine::hole_face_tests::a_hole_wider_than_the_part_says_it_removes_all_of_it
+engine::licences::tests::the_licences_are_built_in
+engine::measure_centre_tests::a_fillet_round_a_boss_reports_its_radius
+engine::tests::fillet_fit_taper_closes_to_a_point
+engine::tests::mirror_placed::dragging_a_mirrored_part_meshes_its_copies_once
+kernel::blend::corner_tests::a_round_ending_in_an_earlier_round_matches_both_together
+kernel::blend::corner_tests::corner_blends_hold_at_any_scale
+kernel::blend_corner::tests::a_round_next_to_a_round_of_another_radius
+kernel::blend_corner::tests::issue2422_vertical_after_separate_bottom_rounds
+kernel::blend_smlib::tests::smooth_edges_and_unfinished_tangent_chains_are_refused_saying_why
+kernel::blend_wrong_way_tests::a_chamfer_that_would_grow_the_part_on_a_convex_edge_is_refused
+kernel::corner_g2::tests::curvature_rounds_meet_at_a_g2_corner
+kernel::corner_g2::tests::a_concave_corner_takes_the_g2_patch_too
+kernel::corner_g2::tests::set_back_8_the_g2_corner_lies_between_the_hull_and_the_prisms
+kernel::corner_g2::tests::the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbours
+kernel::issue_851_tests::blend_the_arc_top_edge_and_the_top_front_edge
+kernel::issue_851_tests::fillet_the_arc_top_edge_and_the_front_upright_at_the_arc
+kernel::issue_851_tests::fillet_the_top_front_edge_and_the_front_upright_at_the_arc
+kernel::issue_851_tests::fillet_the_top_front_edge_and_the_front_left_upright
+kernel::corner_g2::tests::a_long_setback_keeps_the_g2_patch_inside_the_box
+kernel::smooth_edges::tests::a_seam_split_in_two_edges_is_drawn_whole
