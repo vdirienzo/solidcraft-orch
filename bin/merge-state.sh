@@ -18,13 +18,20 @@
 # COMANDOS:
 #   bash bin/merge-state.sh              reconstruye state.json desde state/
 #   bash bin/merge-state.sh --check      reconstruye en memoria y COMPARA con
-#                                        state.json: sale 0 si son identicos
+#                                        state.json: sale 0 SOLO si son
+#                                        identicos; si difieren sale distinto
+#                                        de 0 y dice que se use --split
 #   bash bin/merge-state.sh --check --vs FILE
 #                                        compara contra FILE (por ejemplo
 #                                        logs/state.json.pre-split.bak)
-#   bash bin/merge-state.sh --split      reparte state.json de vuelta en
+#   bash bin/merge-state.sh --split [--assign CLAVE=GRUPO]
+#                                        reparte state.json de vuelta en
 #                                        state/<concepto>.json (adopta cambios
-#                                        hechos a mano) y actualiza el manifiesto
+#                                        hechos a mano) y actualiza el manifiesto.
+#                                        --assign CLAVE=GRUPO dice en que
+#                                        archivo de concepto queda una clave
+#                                        NUEVA de primer nivel (si no se dice,
+#                                        va a notes.json).
 #   bash bin/merge-state.sh --list       los grupos y cuantas claves tiene cada uno
 #
 # REGLAS:
@@ -191,6 +198,18 @@ def rebuild():
     return {k: data[k] for k in order + extra}, avisos
 
 
+def canon(v):
+    """La forma canonica de un valor JSON.
+
+    Se usa para COMPARAR VALORES, no para guardarlos: en python `True == 1` y
+    `1 == 1.0`, pero en JSON son valores distintos. Un --check que compara con
+    `!=` de python puede declarar IDENTICO un estado que en realidad cambio.
+    sort_keys no importa para el contenido de un objeto JSON (el orden de sus
+    claves no es parte del valor); el orden de primer nivel se mira aparte.
+    """
+    return json.dumps(v, sort_keys=True, ensure_ascii=False)
+
+
 def diff(rebuilt, ref):
     out = []
     rk, fk = set(rebuilt), set(ref)
@@ -199,7 +218,7 @@ def diff(rebuilt, ref):
     for k in sorted(rk - fk):
         out.append(f"  SOLO en lo reconstruido: {k}")
     for k in sorted(rk & fk):
-        if rebuilt[k] != ref[k]:
+        if canon(rebuilt[k]) != canon(ref[k]):
             out.append(f"  VALOR DISTINTO: {k}")
     return out
 
@@ -227,6 +246,15 @@ def check(args):
         print(f"merge-state: NO es identico a {ref_path}:")
         for line in d:
             print(line)
+        # Que hay que hacer: el detalle de las diferencias y el comando que
+        # las resuelve. Sin esto el que lee la salida no sabe si puede
+        # arreglarlo con un --split o si hay que tocar un archivo de state/.
+        print(f"merge-state: el state.json NO se puede reconstruir desde state/ "
+              f"({len(d)} diferencia(s)).")
+        print("merge-state: para adoptar la edicion a mano: "
+              "`bash bin/merge-state.sh --split`")
+        print("merge-state: si la edicion a mano es lo que se quiere perder, "
+              "`bash bin/merge-state.sh --force` lo pisa con state/.")
         return 1
     with open(ref_path, "rb") as fh:
         raw = fh.read()
@@ -237,7 +265,7 @@ def check(args):
     return 0
 
 
-def split():
+def split(args):
     """state.json -> state/<concepto>.json (adopta lo editado a mano).
 
     DIRECCION: el state.json manda para las claves que estan en los dos lados
@@ -245,20 +273,57 @@ def split():
     Las claves que solo estan en state/ NO se borran: se conservan y se
     avisa. Perder una clave escrita a mano en un archivo de concepto seria
     peor que el problema que este comando viene a resolver.
+
+    Una clave NUEVA de primer nivel (una que no estaba en el manifiesto) se
+    adopta con --assign CLAVE=GRUPO: asi el que edito sabe en que archivo de
+    concepto queda, en vez de que caiga en notes por defecto.
     """
     state = load_json(STATE_JSON)
     m, groups, key2group = load_manifest()
+    # --assign CLAVE=GRUPO: donde va una clave nueva de primer nivel.
+    asigna = {}
+    i = 0
+    while i < len(args):
+        if args[i] == "--assign":
+            i += 1
+            if i >= len(args):
+                die("--assign necesita CLAVE=GRUPO")
+            spec = args[i]
+        elif args[i].startswith("--assign="):
+            spec = args[i].split("=", 1)[1]
+        else:
+            die(f"opcion desconocida para --split: {args[i]}")
+        if "=" not in spec:
+            die(f"--assign necesita CLAVE=GRUPO, no '{spec}'")
+        k, g = spec.split("=", 1)
+        k, g = k.strip(), g.strip()
+        if not k or not g:
+            die(f"--assign necesita CLAVE=GRUPO, no '{spec}'")
+        if k not in state:
+            die(f"--assign: la clave '{k}' no esta en state.json")
+        asigna[k] = g
+        i += 1
+    grupos = dict(groups)
+    archivos_en_disco = {f[:-5] for f in concept_files()}
     huerfanas = [k for k in state if k not in key2group]
     if huerfanas:
         # no tienen grupo: van a notes y el manifiesto queda al dia. El aviso
         # dice que conviene moverlas al grupo que les corresponde.
-        groups = dict(groups)
-        groups.setdefault(DEFAULT_GROUP, [])
+        grupos.setdefault(DEFAULT_GROUP, [])
         for k in huerfanas:
-            groups[DEFAULT_GROUP].append(k)
-            key2group[k] = DEFAULT_GROUP
-        print("merge-state: aviso: claves sin grupo, van a "
-              f"{DEFAULT_GROUP}.json: " + ", ".join(sorted(huerfanas)))
+            destino = asigna.get(k)
+            if destino is None:
+                destino = DEFAULT_GROUP
+                print(f"merge-state: aviso: la clave '{k}' no tiene grupo: va a "
+                      f"{DEFAULT_GROUP}.json. Para ponerla en otro grupo: "
+                      f"--assign {k}=<grupo>")
+            else:
+                print(f"merge-state: la clave '{k}' va al grupo {destino} "
+                      f"(--assign)")
+            grupos.setdefault(destino, [])
+            grupos[destino].append(k)
+            key2group[k] = destino
+    groups = grupos
     # lo que ya esta escrito en state/ y NO esta en el state.json: se conserva
     conservadas = {}
     for fname in concept_files():
@@ -270,13 +335,17 @@ def split():
             print("merge-state: aviso: estas claves de state/%s no estan en "
                   "state.json y SE CONSERVAN: %s" % (fname, ", ".join(extra)))
     nuevos = {}
-    for grupo in groups:
+    for grupo in sorted(set(groups) | archivos_en_disco):
         claves = [k for k in state if key2group.get(k) == grupo]
         # las que solo estan en state/ se quedan en su grupo
         for k in conservadas.get(grupo, []):
             if k not in claves:
                 claves.append(k)
-        if claves:
+        # Un grupo con claves se escribe siempre. Un grupo sin claves se
+        # escribe SOLO si ya hay un archivo con ese nombre: si no, el archivo
+        # queda huerfano en state/ y el manifiesto no lo declara, y el
+        # rebuild se muere con "archivo de concepto sin grupo".
+        if claves or grupo in archivos_en_disco:
             nuevos[grupo] = claves
     for grupo, claves in sorted(nuevos.items()):
         ruta = os.path.join(STATE_DIR, f"{grupo}.json")
@@ -306,10 +375,23 @@ def split():
         "groups": {g: ks for g, ks in nuevos.items()},
     }
     write_atomic(MANIFEST, dump(manifest))
-    # lo que se acaba de adoptar es ahora el estado publicado
-    publish_hash(sha256_file(STATE_JSON) or "")
+    # lo que se acaba de adoptar es ahora el estado publicado: se REGENERA
+    # el state.json desde state/ (reemplazo atomico) y se publica su hash.
+    # Asi, despues de un --split, el --check da IDENTICO y el merge no se
+    # niega a escribir (state/published.sha256 coincide con el archivo).
+    # Lo que se regenera es lo que quedo en state/, que ya contiene TODOS los
+    # valores del state.json adoptado (el state.json mandaba al escribir los
+    # archivos de concepto): no se pierde nada de la edicion a mano.
+    rebuilt, avisos = rebuild()
+    for a in avisos:
+        print(f"merge-state: aviso: {a}")
+    texto = dump(rebuilt)
+    write_atomic(STATE_JSON, texto)
+    publish_hash(sha256_bytes(texto.encode("utf-8")))
     print(f"merge-state: manifest actualizado ({len(nuevos)} grupos, "
           f"{len(state)} claves)")
+    print(f"merge-state: state.json regenerado desde state/: {len(rebuilt)} "
+          f"claves, {len(texto.encode('utf-8')):,} bytes (reemplazo atomico)")
     return 0
 
 
@@ -361,8 +443,12 @@ def list_groups():
     return 0
 
 
-USAGE = ("merge-state.sh [--check [--vs FILE]] [--split] [--list] [--force]\n"
-         "  (sin opcion) reconstruye state.json desde state/ (reemplazo atomico)")
+USAGE = ("merge-state.sh [--check [--vs FILE]] [--split [--assign CLAVE=GRUPO]] "
+         "[--list] [--force]\n"
+         "  (sin opcion) reconstruye state.json desde state/ (reemplazo atomico)\n"
+         "  --check sale 0 SOLO si el state.json se reconstruye identico desde "
+         "state/;\n"
+         "         si difiere sale distinto de 0 y dice que --split lo adopte")
 
 args = sys.argv[1:]
 comando = "write"
@@ -376,7 +462,7 @@ if comando in ("--help", "-h"):
 if comando == "--check":
     raise SystemExit(check(args))
 if comando == "--split":
-    raise SystemExit(split())
+    raise SystemExit(split(args))
 if comando == "--list":
     raise SystemExit(list_groups())
 force = "--force" in args

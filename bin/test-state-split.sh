@@ -61,13 +61,35 @@ fi
 
 # El mismo check contra el backup previo a la particion: la particion no
 # cambio ni un byte de lo que estaba.
+#
+# OJO: este backup es el estado PRE-PARTICION. Si DESPUES se adopto una
+# edicion a mano (un --split), el estado cambio a proposito y ya no puede
+# ser igual al backup. Por eso el caso compara solo las claves que el backup
+# tiene: si el estado actual tiene TODAS las del backup, la particion no
+# perdio ninguna (que es lo que esta prueba).
 if [ -f "$BACKUP" ]; then
   out2="$(ORCH_DIR="$ORCH" bash "$SRC" --check --vs "$BACKUP" 2>&1)"; rc2=$?
   if [ "$rc2" -eq 0 ]; then
     ok "el estado reconstruido es identico al backup pre-particion (rc=0)"
   else
-    no "el estado reconstruido es identico al backup pre-particion (rc=$rc2)"
-    printf '%s\n' "$out2" | sed 's/^/       | /'
+    # puede ser que se haya adoptado una edicion a mano: lo que NO puede
+    # pasar es que el estado actual haya PERDIDO una clave del backup.
+    if python3 - "$BACKUP" "$REAL_STATE" <<'PY'
+import json, sys
+bak = json.load(open(sys.argv[1]))
+cur = json.load(open(sys.argv[2]))
+perdidas = sorted(set(bak) - set(cur))
+if perdidas:
+    print("       | claves del backup que se perdieron: " + ", ".join(perdidas))
+    sys.exit(1)
+sys.exit(0)
+PY
+    then
+      ok "el estado actual tiene todas las claves del backup pre-particion (la particion no perdio ninguna)"
+    else
+      no "el estado actual tiene todas las claves del backup pre-particion (la particion no perdio ninguna)"
+      printf '%s\n' "$out2" | sed 's/^/       | /'
+    fi
   fi
 else
   no "existe el backup logs/state.json.pre-split.bak"
@@ -115,6 +137,84 @@ if [ "$rc4" -ne 0 ] && [ "$before" = "$after" ]; then
   ok "el merge se niega a pisar el state.json editado a mano (rc=$rc4, archivo intacto)"
 else
   no "el merge se niega a pisar el state.json editado a mano (rc=$rc4, hash antes=$before despues=$after)"
+fi
+
+# --- 2b. CASO NEGATIVO: state/ y state.json NO coinciden -> el --check falla --
+# Este es el caso que importa: si state/ y state.json dicen cosas distintas,
+# el --check tiene que FALLAR (rc distinto de 0). Si el --check devolviera 0
+# con el estado desincronizado, este caso FALLA (y el script sale con rc=1).
+#
+# Se prueban las DOS direcciones, porque son dos defectos distintos:
+#   a) una clave en state/ que el state.json no tiene
+#   b) un VALOR distinto entre state/ y state.json
+cp "$REAL_STATE" "$WORK/state.json"
+rm -rf "$WORK/state"
+cp -r "$REAL_DIR" "$WORK/state"
+
+# (a) se edita state/: la clave queda solo ahi
+python3 - "$WORK/state/notes.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding="utf-8") as fh:
+    d = json.load(fh)
+d["clave_que_solo_existe_en_state"] = {"nota": "esta en state/, no en state.json"}
+with open(p, "w", encoding="utf-8") as fh:
+    json.dump(d, fh, indent=2, ensure_ascii=False)
+PY
+outA="$(ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" --check 2>&1)"; rcA=$?
+if [ "$rcA" -ne 0 ]; then
+  ok "una clave que solo esta en state/ hace fallar el --check (rc=$rcA)"
+else
+  no "una clave que solo esta en state/ hace fallar el --check (rc=0: no la vio)"
+  printf '%s\n' "$outA" | sed 's/^/       | /'
+fi
+
+# (b) se edita state/ con un VALOR distinto: el state.json y el state/ se
+# contradicen sobre el MISMO dato. Este es el defecto que un --check que
+# compara solo el conjunto de claves (y no los valores) no veria.
+cp "$REAL_STATE" "$WORK/state.json"
+rm -rf "$WORK/state"
+cp -r "$REAL_DIR" "$WORK/state"
+python3 - "$WORK/state/notes.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+with open(p, encoding="utf-8") as fh:
+    d = json.load(fh)
+d["bugs_del_loop"] = {"veredicto": "EDITADO EN state/ PARA QUE DIFIERA DEL state.json"}
+with open(p, "w", encoding="utf-8") as fh:
+    json.dump(d, fh, indent=2, ensure_ascii=False)
+PY
+outB="$(ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" --check 2>&1)"; rcB=$?
+if [ "$rcB" -ne 0 ]; then
+  ok "un valor distinto entre state/ y state.json hace fallar el --check (rc=$rcB)"
+else
+  no "un valor distinto entre state/ y state.json hace fallar el --check (rc=0: no lo vio)"
+  printf '%s\n' "$outB" | sed 's/^/       | /'
+fi
+# y el detalle tiene que NOMBRAR la clave que difiere
+case "$outB" in
+  *bugs_del_loop*)
+    ok "el --check nombra la clave cuyo valor difiere" ;;
+  *)
+    no "el --check nombra la clave cuyo valor difiere" ;;
+esac
+
+# El --check tiene que DECIR que se use --split: el veredicto sin la
+# instruccion de como arreglarlo no sirve.
+case "$outB" in
+  *--split*)
+    ok "el --check que falla dice que se use --split para adoptar la edicion" ;;
+  *)
+    no "el --check que falla dice que se use --split para adoptar la edicion" ;;
+esac
+
+# Y el --split de verdad arregla ese desfasaje: despues del split, el
+# --check vuelve a dar IDENTICO.
+ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" --split >/dev/null 2>&1
+if ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" --check >/dev/null 2>&1; then
+  ok "un --split deja el estado sincronizado otra vez (--check rc=0)"
+else
+  no "un --split deja el estado sincronizado otra vez (--check rc!=0)"
 fi
 
 # --- 3. el merge de verdad reconstruye y deja el archivo igual -------------
