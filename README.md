@@ -1,29 +1,142 @@
 # solidcraft-orch
 
-El orquestador que convierte issues de SolidCraft en PRs mergeados. Es codigo de Bash, Python y
-un par de crons: no es una app, es un proceso.
+El orquestador que convierte issues de SolidCraft en PRs mergeados. Bash, Python y un par de
+crons: no es una app, es un proceso. Todo el estado vive en disco, asi que sobrevive a un crash,
+a un `/new` de sesion y a un SIGKILL.
 
-## Que hace
+Este README es tambien la guia de onboarding: **la seccion "Lo que NO hay que hacer" es la parte
+mas importante del archivo** y esta escrita con las lecciones que costaron horas de trabajo.
 
-1. Barre el pool de issues del repo por la API (paginado, sin truncar) y filtra: sin kernel, sin
-   triage, con cuerpo con contenido real.
-2. Verifica que el issue este libre (sin claim, sin PR que lo reclame).
-3. Localiza la causa raiz en el codigo. Si la causa esta en solidcore/SMLib, el issue se descarta.
-4. Escribe el TEST RED y lo commitea y pushea. Este es el entregable minimo del que busca.
-5. Le da al que implementa un brief literal con el codigo a aplicar.
-6. El agente commitea, pushea al fork y abre el PR EN DRAFT: el draft es el claim (la regla del
-   repo: un draft sin pushes por 72 h puede ser tomado).
-7. La cola de gates compila a 2 por vez, con su CARGO_TARGET_DIR propio por slot.
-8. gate-baseline.sh separa lo preexistente (KNOWN_FAILING_TESTS + origin/main) de lo nuevo: cuenta
-   el veredicto efectivo, no el crudo.
-9. pipeline.py pasa el PR a ready y comenta el veredicto.
+---
 
-## Que NO se incluye en el repo (se regenera en cada PC)
+## 1. El flujo, en una linea
 
-`targets/ logs/ locks/ gates/ state/ state.json history.jsonl` — son el estado de una maquina
-concreta, no codigo.
+Del issue al PR: buscar -> libre -> causa raiz -> test RED -> fix -> PR en draft -> gate -> ready.
+Cada paso es un proceso que puede morir y ser retomado; las aristas son condiciones sobre archivos.
 
-## Instalarlo en otra PC
+El grafo esta DECLARADO en `workflow.yaml` (12 nodos, 14 aristas, 7 senales), se valida con
+`bin/workflow-validate.py` y se ejecuta con `bin/workflow-runner.sh --list` (que dice que nodos
+serian elegibles ahora). El runner NUNCA ejecuta los nodos que compilan: esos los llevan los crons.
+
+| nodo | que hace | quien lo hace |
+|---|---|---|
+| buscar-issue | barre el pool por API y filtra (sin kernel, sin triage, con contenido) | un agente |
+| claim-verify | el issue esta libre? | `bin/claim-race.sh` |
+| causa-raiz | donde esta el defecto | un agente, con brief literal |
+| test-red | el test que falla antes del fix | un agente |
+| fix | la implementacion | un agente, con brief literal |
+| draft-pr | abre el PR en DRAFT | el agente, en el commit |
+| pipeline | corrige bodies, encola gates, pasa a ready | `bin/pipeline.py` (cron 5 min) |
+| gate-queue | drena la cola de gates | `bin/gate-queue.sh` (cron 3 min) |
+| gate | compila y da el veredicto | `bin/gate.sh` |
+| gate-baseline | separa lo preexistente de lo nuevo | `bin/gate-baseline.sh` |
+| verify-pr | valida el PR listo | `bin/verify-pr.sh` |
+| ci-upstream | espera al CI y al maintainer | el maintainer (la merge queue es suya) |
+
+---
+
+## 2. Lo que NO hay que hacer
+
+Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer antes de tocar nada.
+
+### Sobre la maquina compartida
+
+1. **No compiles Rust desde un agente.** La cola de gates compila, a 2 por vez. Un agente que
+   compila toma un slot y compite por los locks de Cargo: se ha visto a 3-9 procesos concurrentes y
+   a dos agentes gastar 2h29m cada uno sin dejar un solo commit.
+2. **No uses `pkill`, `killall` ni `kill -9`.** Uno lo uso un subagente y mato una medicion de 3,5 h;
+   en una maquina compartida un pkill puede matar gates, compilaciones y cronjobs ajenos. Para
+   cortar TU build: guardá el PID cuando lo lanzas y hacele `kill -TERM` solo a ese. Para esperar a
+   que se libere la caja: un loop con `pgrep -x cargo` / `pgrep -x rustc`, o `bin/build-slot.sh --status`.
+3. **No edites in-place un script que se este ejecutando.** Los crons corren `pipeline.py` cada 5
+   minutos y `gate-queue.sh` cada 3. Editar un script mientras Bash lo lee produce errores de
+   sintaxis a mitad de ejecucion. Siempre reemplazo atomico: `os.replace` o `mv`.
+4. **No pongas un stub de una herramienta en un directorio que pueda estar en el PATH.** Un `gh`
+   falso en un scratch hacia no-op en `pr create`: PRs que no existen y un pipeline que no publica
+   nada sin avisar. Si testeas con stubs, que vivan fuera del PATH, y usá `GH_BIN` para fijar cual
+   `gh` se usa.
+5. **Dos compilaciones pesadas como maximo, y cada una con su `CARGO_TARGET_DIR` propio** (por
+   slot). Un target compartido hace que una compilacion borre los artefactos de otra en caliente
+   (`failed to exec .../deps/...`): 2423 falsos fallos de una vez.
+6. **`CARGO_INCREMENTAL=0`, siempre.** Con incremental los `rustc` no son cacheables y cada slot
+   recompila las mismas dependencias: el sccache pasa de 0 hits a 19 con incremental apagado.
+
+### Sobre los veredictos
+
+7. **Un veredicto que no llega al exit code es peor que no tener veredicto.** El gate escribia
+   ROJO (crudo) y el pipeline leia el efectivo; `merge-state.sh --check` reportaba diferencias y
+   salia con rc=0; un test decia "3 casos fallan" y salia con rc=0. Regla: **todo script que falla
+   devuelve rc distinto de 0**, y el que informa propaga el rc.
+8. **Un fallo preexistente en `origin/main` NO es una regresion.** El veredicto crudo sale ROJO por
+   fallos que ya estan en la base. El que cuenta es el **efectivo** (`scope.effective.verdict`),
+   que `gate-baseline.sh` calcula separando lo preexistente de lo nuevo. Si un test falla en
+   `origin/main` con el mismo mensaje, no lo persigas: contalo como preexistente.
+9. **El baseline se UNE, nunca se reemplaza.** Una union no puede reducir preexistentes. Y hay que
+   unir todas las fuentes (el catalogo oficial `tests/KNOWN_FAILING_TESTS` + `origin/main` + el
+   checkout principal + el worktree del slot): una fuente atrasada solo puede OMITIR fallos, y eso
+   produce un rojo falso.
+10. **Gatea el mismo set de features que upstream.** El scope tiene que incluir `solidcraft-cli`:
+    sin el, la feature `smlib` no esta activada y salen 1321 fallos falsos ("this build has no
+    SMLib").
+11. **Verifica los hechos contra el codigo, no de memoria.** Por ejemplo, la regla de los 72 h del
+    repo no es "el claim vence a las 72 h": es "un draft SIN PUSHES por 72 h puede ser tomado".
+
+### Sobre el trabajo
+
+12. **El PR en DRAFT es el claim.** La regla del repo: *"A draft with no pushes for 72 hours may be
+    taken over"*. Por eso el draft se abre en el COMMIT, no despues del gate: el gate puede tardar
+    40 minutos o colgarse, y el issue no se pierde igual. Tope de trabajo en vuelo: **6**.
+13. **El test RED va antes del fix.** El entregable minimo de quien investiga es el test RED
+    commiteado y pusheado. Con RED, el fix es un brief literal de una hora; sin RED, el agente se
+    come las iteraciones explorando y no entrega nada.
+14. **Los briefs tienen que ser literales**: el codigo a aplicar, la ruta, el mensaje del commit,
+    el comando del test. Un brief con "busca el bug" produce exploracion, no codigo.
+15. **`max_iterations: 120`.** Un agente de 250 iteraciones puede costar ~$1,17 y no dejar un commit.
+    Ponete un tope propio y mas bajo: si en 60 iteraciones no lo tenes, devolvé lo que tengas.
+16. **Solo issues, no features.** Medido en esta maquina: un issue cuesta $0,25 y 16 h de agente por
+    entrega; una feature, $1,90 y 138 h, con un 86% de probabilidad de cancelarse. El motivo no es el
+    precio: es que un issue llega con el RED test y la causa raiz (hay que IMPLEMENTAR) y una feature
+    exige inventar la API, el command spec, la UI y los locales (el modelo se queda leyendo).
+17. **El test de regresion va en el archivo de test del AREA**, nunca en un archivo por bug
+    (`AGENTS.md:24`, issue #3226). No hay un check automatico que lo detecte: lo detecta el
+    maintainer en la revision.
+18. **`Changes a default: no` es la forma EXACTA** que exige el parser del upstream
+    (`scripts/pr-checks/pr-checks.js`). "Changes to default: no" no sirve. Y la POSICION importa:
+    leé el parser, no supongas.
+
+### Sobre git y el repo
+
+19. **Push SOLO al fork.** Nunca a `origin`, nunca force-push a `main`, nunca cambies de rama en el
+    checkout principal.
+20. **No toques el checkout principal ni el worktree de otro slot.** Cada agente tiene su worktree.
+21. **La liveness de un lock es su EDAD y su dueno, nunca su PID.** Y liberá los slots: un token de
+    build tomado sin proceso vivo bloquea la cola entera.
+22. **Antes de abrir un PR, mira comments, assignees, timeline y PRs abiertos.** En duplicados gana
+    el PR con numero menor. Un claim perdido no se descarta: se preserva el diff y los commits.
+
+### Sobre la medicion
+
+23. **Un solo build con 16 jobs es la peor opcion** (13,0 builds/h): el paralelismo interno de Rust
+    tiene fases seriales (codegen de los crates grandes y el linkeo). Con 2 en paralelo: 20,3.
+    Y el caso real de la cola es mejor: el primer gate compila frio y el segundo pega en el sccache
+    -> 24,0 builds/h. Por eso la cola escalona los gates **90 s** (`GATE_STAGGER`): con 20 s los dos
+    compilan frio.
+24. **No midas sobre una caja ocupada.** El experimento tiene que esperar a que la caja este libre
+    en tres chequeos seguidos, y si no, el numero es una mezcla del reparto y de la competicion.
+
+---
+
+## 3. Las reglas del repo que hay que respetar
+
+- El claim se hace con un PR en draft; el bot asigna y etiqueta `in progress`. `/claim` solo para
+ Stake un claim antes de tener rama.
+- Un PR por tema. Push diario. Nunca force-push a `main`.
+- El titulo y la primera frase tienen que entenderse sin ver el chat ni el issue.
+- Una regresion va en el archivo de test del area.
+- `cargo xtask ci` antes de cada commit; no cambies de rama mientras corre.
+- Si mostras cambios observables, van con capturas reales, hechas por vos.
+
+## 4. Instalarlo en otra PC
 
 ```bash
 git clone <este-repo> ~/.local/share/solidcraft-orch
@@ -32,47 +145,21 @@ mkdir -p targets logs locks gates state reports briefs baseline
 cp bin/slot-target-dir.sh bin/ 2>/dev/null
 ```
 
-Variables de entorno (NO van al repo, van en el entorno o en un .env ignorado por git):
+Variables de entorno (el valor va en el entorno o en un .env que git ignora; **nunca en un archivo
+versionado**):
 
 ```
-GH_TOKEN=<un token de GitHub con permiso de push y de abrir PRs>
-SOLIDCRAFT_CONTROL_TOKEN=<el token del control del daemon de SolidCraft>
+GH_TOKEN=<token de GitHub con push y apertura de PRs>
+SOLIDCRAFT_CONTROL_TOKEN=<token del control del daemon de SolidCraft>
 ```
 
-### Las rutas salen del entorno, con default de esta maquina
+Los scripts toman las rutas de variables con default, asi que en otra PC alcanza con:
 
-Ningun script lleva una ruta absoluta hardcodeada: cada una sale de una variable, con el default
-de ESTA maquina. Asi esta maquina sigue funcionando sin cambiar nada, y la otra PC exporta las
-suyas y corre el mismo codigo.
-
-```bash
-ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"   # el orquestador: estado, locks, targets
-LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"     # el loop: los veredictos de los gates
-SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"        # el checkout del producto
-WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"         # los worktrees de los slots
-HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"      # los scripts que corren los crons
+```
+ORCH_DIR=...  LOOP_DIR=...  SOLIDCRAFT_REPO=...  WORKTREES_DIR=...  HERMES_SCRIPTS=...
 ```
 
-En la otra PC se exportan las suyas antes de registrar los crons:
-
-```bash
-export ORCH_DIR="$HOME/.local/share/solidcraft-orch"
-export LOOP_DIR="$HOME/.local/share/solidcraft-loop"
-export SOLIDCRAFT_REPO="$HOME/solidcraft"
-export WORKTREES_DIR="$HOME/solidcraft-wt"
-export HERMES_SCRIPTS="$HOME/.hermes/scripts"
-```
-
-Los crons corren las COPIAS de los scripts que estan en `HERMES_SCRIPTS` (en esta maquina,
-`~/.hermes/scripts/`): hay que copiar ahi los scripts del repo para que el cron los encuentre.
-
-El criterio de portabilidad es un grep, y es un test del repo (`bin/test-portability.sh`):
-
-```bash
-grep -rn '/home/user' bin/ | grep -v ':-/home/user'    # tiene que salir VACIO
-```
-
-Los crons que hay que registrar (todos con --no-agent: no gastan tokens de LLM):
+Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 
 | cron | cada | script | para que |
 |---|---|---|---|
@@ -88,52 +175,35 @@ hermes cron create --name solidcraft-pipeline --schedule '*/5 * * * *' \
   --script pipeline.py --no-agent --deliver local
 ```
 
-## Las reglas, los traps y las lecciones (docs/)
+## 5. Que NO se versiona (se regenera en cada PC)
 
-La skill del orquestador vive en el directorio de skills de Hermes, que en la otra PC NO esta.
-Sus `references/` (las reglas, los traps conocidos y las lecciones) estan COPIADOS en `docs/`
-del repo, y el repo es lo que la otra PC clona:
+`targets/ logs/ locks/ gates/ state/ state.json history.jsonl` son el estado de una maquina
+concreta, no codigo. El `state.json` se REGENERA desde `state/` con `bin/merge-state.sh`; el
+`--check` tiene que dar IDENTICO o hay que correr `--split` para adoptar la edicion manual.
 
-| doc | que hay |
-|---|---|
-| `docs/portable-orchestrator.md` | como se publica el orquestador y como corre en la segunda maquina |
-| `docs/slot-rules.md` | las reglas de los slots, los worktrees y el lock de la fase pesada |
-| `docs/known-traps.md` | los traps conocidos: lo que ya rompio una vez y como se evita |
-| `docs/feature-agent-briefs.md` | como se escribe un brief para un agente |
-| `docs/issue-selection.md` | como se elige el issue que se ataca |
-| `docs/duplicate-claims-and-contributing-instead.md` | que hacer cuando el issue ya esta tomado |
-| `docs/agent-handover.md` | como se entrega el contexto a otro agente |
-| `docs/agent-death-and-duplicate-work.md` | que hacer cuando un agente muere |
-| `docs/before-dispatching-a-wave-check-for-a-pr.md` | la comprobacion antes de despachar una ola |
-| `docs/checking-a-rule-against-real-numbers.md` | como se verifica una regla con numeros reales |
-| `docs/costo-de-tokens.md` | el costo de los tokens y como se recorta |
-| `docs/disk-hygiene.md` | la higiene del disco |
-| `docs/loop-vs-graph.md` | la diferencia entre el loop y el grafo |
-| `docs/status-report-pushes-and-load.md` | el reporte de estado, los pushes y la carga |
-| `docs/verifying-a-delegated-pr.md` | como se verifica un PR delegado |
-| `docs/visual-evidence-capture.md` | como se captura la evidencia visual |
+## 6. Pruebas
 
-La copia es de una sola direccion: `docs/` es una copia, y el directorio de skills sigue siendo
-la fuente.
+Las suites de `bin/test-*.sh` y `bin/test-rules.py` tienen que dar rc=0 antes de commitear cualquier
+cambio del orquestador. Las dos que viven en el loop:
+`/home/user/.local/share/solidcraft-loop/bin/test-gate-quick.sh` y `.../test-rules.py`.
 
-## Las reglas que importan (y que estan en RULES.md)
+## 7. Estructura
 
-- Un fallo preexistente en origin/main NO es una regresion: el gate separa lo preexistente de lo
-  nuevo y lo que cuenta es el veredicto efectivo.
-- El gate usa el mismo set de features que upstream (por eso el scope incluye solidcraft-cli:
-  sin el, la feature smlib no esta activada y salen miles de fallos falsos).
-- `Changes a default: no` es la forma EXACTA que exige el CI upstream.
-- Un test de regresion va en el archivo de test del AREA, nunca en un archivo por bug (#3226).
-- Dos compilaciones pesadas como maximo, y cada una con su CARGO_TARGET_DIR.
-- CARGO_INCREMENTAL=0, o el sccache no sirve de nada.
-- Nada de force-push a origin, nunca cambiar de rama en el checkout principal, y nunca editar un
-  script que se este ejecutando.
+```
+bin/        los scripts (el grafo, la cola, el pipeline, los gates, los tests)
+briefs/     los briefs literales que se le dan a los agentes
+docs/       las reglas, los traps y las lecciones (copia de los references de la skill)
+reports/    las mediciones (paralelismo, tokens, imagenes, metricas de agentes)
+baseline/   el catalogo de fallos preexistentes medidos
+state/      el estado partido por concepto (una clave de primer nivel -> un archivo)
+workflow.yaml   el grafo declarado del proceso
+RULES.md    las reglas del orquestador
+```
 
-## Pruebas
+## 8. Donde esta la fuente de verdad de cada cosa
 
-Las suites de `bin/test-*.sh` y `bin/test-rules.py` tienen que dar rc=0. Correlos antes de
-commitear cualquier cambio del orquestador.
-
-`bin/test-portability.sh` es la suite de la portabilidad: verifica que ningun script de `bin/`
-tenga una ruta absoluta de esta maquina fuera de los defaults, que los scripts que usan las
-variables de rutas las definan, y que las reglas y los traps esten en `docs/`.
+- El grafo del proceso: `workflow.yaml`.
+- El estado: `state/` (y `state.json` se reconstruye desde ahi).
+- La cola de gates: `gates/queue.txt`.
+- Los veredictos: `$LOOP_DIR/gates/<slot>/scope.verdict` (crudo) y `scope.effective.verdict` (el que cuenta).
+- Las reglas y los traps: `docs/` y `RULES.md`.

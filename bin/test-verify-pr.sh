@@ -117,7 +117,7 @@ case "$cmd $sub" in
     prev=""
     for a in "$@"; do
       case "$prev" in
-        --jq) issue="$(printf '%s' "$a" | grep -oE '#[0-9]+' | head -1 | tr -d '#')" ;;
+        --jq) issue="$(printf '%s\n' "$a" | grep -oE '#[0-9]+' | sed -n '1p' | tr -d '#')" ;;
       esac
       prev="$a"
     done
