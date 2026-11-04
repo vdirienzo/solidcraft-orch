@@ -218,6 +218,14 @@ nodos:
       (3) si el gate dio verde, lo pasa a READY y deja el comentario del veredicto.
       No encola mas de MAX_INFLIGHT (6) gates: un backlog grande es lo que vence los claims.
       Tiene cron: el runner no lo duplica.
+    acciones:
+      - id: correr
+        script: "bin/pipeline.py"
+        interprete: python3
+        args: []
+        cuando_alguna: [pr_draft_sin_veredicto, pr_draft_con_veredicto_verde]
+        compilacion_pesada: "no"
+        nota: "Recorre TODOS los PRs en draft: por eso no lleva argumentos."
 
   - id: gate-queue
     titulo: "La cola de gates"
@@ -280,6 +288,14 @@ nodos:
       Compila 7 paquetes y satura la maquina: UN gate a la vez (slot-lock.sh --heavy).
       El veredicto es POR SLOT y por SHA: un verdict viejo de otro SHA no es verde.
       Una fase SKIPPED es UNKNOWN, no verde. El runner NO ejecuta este nodo.
+    acciones:
+      - id: correr
+        script: "bin/gate.sh"
+        interprete: bash
+        args: ["{issue}", "{sha}"]
+        cuando: [pr_draft_sin_veredicto]
+        compilacion_pesada: "si"
+        nota: "Se PROPONE, no se ejecuta: compila Rust y el turno es del cron."
 
   - id: gate-baseline
     titulo: "El veredicto EFECTIVO (lo que ya fallaba en origin/main)"

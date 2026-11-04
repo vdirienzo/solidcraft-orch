@@ -3,17 +3,22 @@
 # workflow-runner.sh - el runner del grafo declarado en workflow.yaml.
 #
 # QUE HACE (2026-11-04): lee workflow.yaml, mira el estado REAL en disco y
-# determina que nodos son ELEGIBLES ahora. Con --list los nombra; con
-# --dry-run imprime el comando exacto sin hacerlo; sin nada ejecuta UN
-# nodo elegible.
+# determina que nodos son ELEGIBLES ahora. Con --list los nombra (y dice quien
+# los ejecuta); con --dry-run imprime el comando exacto sin hacerlo; sin nada
+# ejecuta UN nodo elegible.
 #
-# LOS NODOS QUE COMPILEAN RUST NUNCA SE EJECUTAN AQUI: 'gate' y 'gate-queue'
-# los lleva el cron que ya existe (solidcraft-gate-queue, */3). El runner es
-# para lo que NO tiene cron.
+# LOS NODOS QUE COMPILAN RUST NUNCA SE EJECUTAN AQUI: 'gate' y 'gate-queue' los
+# lleva el cron que ya existe (solidcraft-gate-queue, */3). El runner es para lo
+# que NO tiene cron. Los nodos con cron tambien se PROPONEN (para que se vea que
+# existen y quien los tiene), pero el runner no los duplica.
+#
+# ANTES DE HACER NADA VALIDA EL GRAFO: un workflow.yaml roto (una arista a un
+# nodo que no existe, un script que no esta en bin/) NO se ejecuta: sale con
+# error. Un runner que ejecuta un grafo sin validar no es un runner.
 #
 # EL ESTADO (todo en disco, sin red):
-#   $ORCH_DIR/state.json          los PRs (los que estan en draft, el issue, el head)
-#   $ORCH_DIR/gates/queue.txt     la cola de gates pendiente
+#   $STATE_DIR/state.json                    los PRs (los que estan en draft, el issue, el head)
+#   $STATE_DIR/gates/queue.txt               la cola de gates pendiente
 #   $LOOP_DIR/gates/<slot>/scope.verdict    el veredicto de cada slot (por SHA)
 #
 # USO:
@@ -23,21 +28,25 @@
 #   bash bin/workflow-runner.sh --json        # lo mismo, en JSON
 #
 # VARIABLES (para las pruebas y para no depender del HOME):
-#   ORCH_DIR    raiz del orquestador (por defecto, el directorio del workflow.yaml)
-#   LOOP_DIR    raiz del loop, donde estan los veredictos (por defecto, el estandar)
-#   WORKFLOW    ruta del workflow.yaml (por defecto, $ORCH_DIR/workflow.yaml)
-#   STATE_JSON  ruta del state.json (por defecto, $ORCH_DIR/state.json)
+#   ROOT        donde esta bin/ (por defecto, el dir del workflow.yaml)
+#   STATE_DIR   donde estan state.json y gates/queue.txt (por defecto, ROOT)
+#   STATE_JSON  ruta del state.json (por defecto, $STATE_DIR/state.json)
+#   LOOP_DIR    donde estan los veredictos (por defecto, el estandar)
+#   WORKFLOW    ruta del workflow.yaml (por defecto, $ROOT/workflow.yaml)
+#   SKIP_VALIDATE=1  no valida el grafo antes de actuar (solo para diagnostico)
 #
 # Lo que ejecuta sale SIEMPRE del YAML: ningun comando se inventa aqui.
 # ------------------------------------------------------------------
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCH_DIR="${ORCH_DIR:-$(dirname "$HERE")}"
+DEFAULT_ROOT="$(dirname "$HERE")"
+ROOT="${WORKFLOW_ROOT:-$DEFAULT_ROOT}"
+STATE_DIR="${STATE_DIR:-$ROOT}"
+STATE_JSON="${STATE_JSON:-$STATE_DIR/state.json}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
-WORKFLOW="${WORKFLOW:-$ORCH_DIR/workflow.yaml}"
-STATE_JSON="${STATE_JSON:-$ORCH_DIR/state.json}"
-LOG="$ORCH_DIR/logs/workflow-runner.log"
+WORKFLOW="${WORKFLOW:-$ROOT/workflow.yaml}"
+LOG="${WORKFLOW_LOG:-$STATE_DIR/logs/workflow-runner.log}"
 
 MODO="ejecutar"
 FORMATO="texto"
@@ -46,12 +55,11 @@ case "${1:-}" in
   --dry-run) MODO="dry-run" ;;
   --json)    MODO="listar"; FORMATO="json" ;;
   --help|-h)
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
 esac
 
 [ -f "$WORKFLOW" ] || { echo "workflow-runner: no existe el workflow '$WORKFLOW'" >&2; exit 2; }
-
 mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
 
 # El python que lee el YAML tiene que tener PyYAML. El PATH del que llama no es
@@ -67,12 +75,22 @@ if [ -z "$PY" ]; then
   exit 2
 fi
 
+# --- el grafo se valida antes de ejecutar nada ------------------------------
+VALIDADOR="$ROOT/bin/workflow-validate.py"
+if [ "${SKIP_VALIDATE:-0}" != "1" ] && [ -f "$VALIDADOR" ]; then
+  if ! "$PY" "$VALIDADOR" --workflow "$WORKFLOW" --root "$ROOT" --quiet >/dev/null 2>&1; then
+    echo "workflow-runner: el grafo de $WORKFLOW esta roto; no se ejecuta nada" >&2
+    "$PY" "$VALIDADOR" --workflow "$WORKFLOW" --root "$ROOT" >&2 || true
+    exit 1
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # El plan: python3 lee el YAML y el estado, y dice que nodos son elegibles.
-# Cada linea del plan es:  nodo \t accion \t ejecutable \t razon \t comando
+# Cada linea del plan es:  nodo \t accion \t ejecutable \t razon \t comando \t senal
 # ---------------------------------------------------------------------------
-PLAN="$("$PY" - "$WORKFLOW" "$ORCH_DIR" "$LOOP_DIR" "$STATE_JSON" <<'PY'
-import json, os, sys
+PLAN="$("$PY" - "$WORKFLOW" "$ROOT" "$STATE_DIR" "$LOOP_DIR" "$STATE_JSON" <<'PY'
+import json, os, shlex, sys
 
 try:
     import yaml
@@ -80,14 +98,11 @@ except ImportError:
     print("#ERROR:falta PyYAML", file=sys.stderr)
     sys.exit(2)
 
-wf_path, orch, loop, state_path = sys.argv[1:5]
-
-def cargar_yaml(p):
-    with open(p, encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
+wf_path, root, state_dir, loop, ruta_estado = sys.argv[1:6]
 
 try:
-    grafo = cargar_yaml(wf_path)
+    with open(wf_path, encoding="utf-8") as fh:
+        grafo = yaml.safe_load(fh)
 except Exception as e:
     print("#ERROR:no se pudo leer el workflow: %s" % e, file=sys.stderr)
     sys.exit(2)
@@ -96,8 +111,9 @@ if not isinstance(grafo, dict):
     sys.exit(2)
 
 # --- el estado ------------------------------------------------------------
+estado = {}
 try:
-    with open(state_path, encoding="utf-8") as fh:
+    with open(ruta_estado, encoding="utf-8") as fh:
         estado = json.load(fh)
 except Exception:
     estado = {}
@@ -115,14 +131,14 @@ def texto_de(entry, claves):
 def prs_del_estado():
     """Los PRs que el orquestador tiene registrados, con su estado y su head.
 
-    EL ESTADO SE RECONCILIA: `open_prs` es la lista canonica (el PR esta abierto y
-    en que estado) y manda sobre las otras dos, que son notas. Sin esa regla el
+    EL ESTADO SE RECONCILIA: `open_prs` es la lista canonica (que PR esta abierto
+    y en que estado) y manda sobre las otras dos, que son notas. Sin esa regla el
     PR #10859 figuraba DRAFT en `prs_esperando_el_gate` y MERGED en `open_prs` al
     mismo tiempo, y el runner proponia un gate para un PR ya mergeado.
     """
     vistos = {}
 
-    def agrega(entry, claves_estado, autoritativo=False):
+    def agrega(entry, claves_estado):
         if not isinstance(entry, dict):
             return
         pr = entry.get("number") or entry.get("pr")
@@ -135,10 +151,9 @@ def prs_del_estado():
         if issue is not None:
             issue = str(issue).lstrip("#")
         rec = vistos.get(pr)
-        nuevo = rec is None
-        if nuevo:
+        if rec is None:
             rec = {"pr": pr, "issue": issue, "sha": sha, "draft": False,
-                   "ready": False, "merged": False, "fuente": ""}
+                   "ready": False, "merged": False}
             vistos[pr] = rec
         if sha and not rec["sha"]:
             rec["sha"] = sha
@@ -157,21 +172,22 @@ def prs_del_estado():
             if "ready" in bajo and "not ready" not in bajo:
                 rec["ready"] = True
                 rec["draft"] = False
-        if autoritativo:
-            rec["fuente"] = "open_prs"
 
-    for entry in (estado.get("open_prs") or []):
-        agrega(entry, ("state", "estado", "status"), autoritativo=True)
+    # Las NOTAS van primero (prs_esperando_el_gate, prs_por_slot) y open_prs
+    # DESPUES: open_prs es la lista canonica y su estado es el que vale. Al
+    # revés, un PR mergeado figuraba DRAFT en una nota y el runner proponia un
+    # gate para un PR que ya no existe.
     for entry in (estado.get("prs_esperando_el_gate") or []):
         agrega(entry, ("estado", "state", "status"))
     for pr, texto in (estado.get("prs_por_slot") or {}).items():
-        if not isinstance(texto, str):
-            continue
-        agrega({"pr": pr, "state": texto}, ("state",))
+        if isinstance(texto, str):
+            agrega({"pr": pr, "state": texto}, ("state",))
+    for entry in (estado.get("open_prs") or []):
+        agrega(entry, ("state", "estado", "status"))
     return vistos
 
 def veredictos():
-    """(sha -> (slot, veredicto, status)) y los slots sin veredicto efectivo."""
+    """Los veredictos del gate (por SHA) y los slots sin veredicto efectivo."""
     base = os.path.join(loop, "gates")
     por_sha = []
     slots = []
@@ -189,16 +205,20 @@ def veredictos():
                             kv[k] = v
             except OSError:
                 continue
-            sha = (kv.get("SHA") or "").strip()
-            veredicto = (kv.get("VERDICT") or "").strip()
-            status = (kv.get("GATE_STATUS") or "").strip()
-            nuevos = (kv.get("NEW_FAILURES") or "").strip()
-            por_sha.append({"sha": sha, "slot": slot, "veredicto": veredicto,
-                            "status": status, "nuevos": nuevos})
-            efectivo = os.path.join(base, slot, "scope.effective.verdict")
-            slots.append({"slot": slot, "sha": sha, "veredicto": veredicto,
-                          "status": status, "nuevos": nuevos,
-                          "tiene_efectivo": os.path.isfile(efectivo)})
+            try:
+                mtime = os.path.getmtime(ruta)
+            except OSError:
+                mtime = 0
+            registro = {
+                "slot": slot, "sha": (kv.get("SHA") or "").strip(),
+                "veredicto": (kv.get("VERDICT") or "").strip(),
+                "status": (kv.get("GATE_STATUS") or "").strip(),
+                "nuevos": (kv.get("NEW_FAILURES") or "").strip(),
+                "mtime": mtime,
+                "tiene_efectivo": os.path.isfile(os.path.join(base, slot, "scope.effective.verdict")),
+            }
+            por_sha.append(registro)
+            slots.append(registro)
     return por_sha, slots
 
 def mismo_sha(a, b):
@@ -225,14 +245,14 @@ def verdict_de(sha):
     return None
 
 drafts = [p for p in prs.values() if p["draft"]]
-sin_veredicto = [p for p in drafts if p["sha"] and verdict_de(p["sha"]) is None]
+sin_verdicto = [p for p in drafts if p["sha"] and verdict_de(p["sha"]) is None]
 con_verde = [p for p in drafts if p["sha"] and (lambda v: v and es_verde(v))(verdict_de(p["sha"]))]
-listos = [p for p in prs.values() if not p["draft"] and p["sha"]
+listos = [p for p in prs.values() if not p["draft"] and not p["merged"] and p["sha"]
           and (lambda v: v and es_verde(v))(verdict_de(p["sha"]))]
 
 # la cola de gates
 cola = []
-cola_ruta = os.path.join(orch, "gates", "queue.txt")
+cola_ruta = os.path.join(state_dir, "gates", "queue.txt")
 if os.path.isfile(cola_ruta):
     try:
         with open(cola_ruta, encoding="utf-8", errors="replace") as fh:
@@ -243,15 +263,17 @@ if os.path.isfile(cola_ruta):
     except OSError:
         cola = []
 
-slots_sin_efectivo = [s for s in slots if not s["tiene_efectivo"]]
+# los slots con veredicto crudo y sin efectivo: el mas reciente primero
+slots_sin_efectivo = sorted([s for s in slots if not s["tiene_efectivo"]],
+                             key=lambda s: -s["mtime"])
 
 # --- las senales ----------------------------------------------------------
 def objetivo_de(senal):
     """El sujeto de la senal: de donde salen {issue}, {pr}, {sha} y {slot}."""
     if senal == "pr_draft_sin_veredicto":
-        if not sin_veredicto:
+        if not sin_verdicto:
             return None
-        p = sorted(sin_veredicto, key=lambda x: x["pr"])[0]
+        p = sorted(sin_verdicto, key=lambda x: x["pr"])[0]
         return {"issue": p["issue"], "pr": p["pr"], "sha": p["sha"], "slot": ""}
     if senal == "pr_draft_con_veredicto_verde":
         if not con_verde:
@@ -270,17 +292,19 @@ def objetivo_de(senal):
     if senal == "slot_sin_veredicto_efectivo":
         if not slots_sin_efectivo:
             return None
-        return {"issue": "", "pr": "", "sha": slots_sin_efectivo[0]["sha"],
-                "slot": slots_sin_efectivo[0]["slot"]}
+        s = slots_sin_efectivo[0]
+        return {"issue": "", "pr": "", "sha": s["sha"], "slot": s["slot"]}
     if senal == "siempre":
         return {"issue": "", "pr": "", "sha": "", "slot": ""}
+    if senal == "nunca":
+        return None
     return None
 
 # --- los nodos ------------------------------------------------------------
 nodos = grafo.get("nodos") or []
 orden = ((grafo.get("flujo") or {}).get("orden")) or [n.get("id") for n in nodos]
 pos = {nid: i for i, nid in enumerate(orden)}
-nodos = sorted(nodos, key=lambda n: pos.get(n.get("id"), 10**6))
+nodos = sorted(nodos, key=lambda n: pos.get(n.get("id"), 10 ** 6))
 
 def render(args, obj):
     out = []
@@ -300,47 +324,63 @@ for nodo in nodos:
         continue
     cron = nodo.get("cron")
     pesado = str(nodo.get("compilacion_pesada", "no")).lower() == "si"
-    acciones = nodo.get("acciones") or []
-    if not acciones:
-        # Un nodo SIN acciones no es una propuesta: el runner solo propone lo que
-        # puede ejecutar con datos del estado. Un nodo sin acciones y con cron
-        # (pipeline) lo lleva su cron; uno sin cron y sin acciones (gate) lo lanza
-        # otro nodo (el drain de la cola). Ninguno de los dos es del runner.
-        continue
-    for acc in acciones:
-        cuando = acc.get("cuando") or []
+    for acc in (nodo.get("acciones") or []):
+        if not isinstance(acc, dict):
+            continue
+        etiqueta = acc.get("id", "")
+        # `cuando` = todas tienen que ser ciertas; `cuando_alguna` = al menos una.
+        todas = acc.get("cuando") or []
+        alguna = acc.get("cuando_alguna") or []
+        if not todas and not alguna:
+            continue
         obj = None
-        faltan = []
-        for senal in cuando:
-            o = objetivo_de(senal)
+        senal = ""
+        ok = True
+        for s in todas:
+            o = objetivo_de(s)
             if o is None:
-                faltan.append(senal)
-            elif obj is None:
+                ok = False
+                break
+            senal = s
+            if obj is None:
                 obj = o
-        if faltan:
+        if ok and alguna:
+            hallada = None
+            for s in alguna:
+                o = objetivo_de(s)
+                if o is not None:
+                    hallada = o
+                    senal = s
+                    break
+            if hallada is None:
+                ok = False
+            elif obj is None:
+                obj = hallada
+        if not ok:
             continue                      # este nodo todavia no es elegible
         args = render(acc.get("args"), obj)
         if args is None:
-            plan.append((nid, acc.get("id", ""), "no",
-                         "faltan datos para completarlo", ""))
+            plan.append((nid, etiqueta, "no", senal, "faltan datos para completarlo", ""))
             continue
         script = acc.get("script")
         if not script:
             continue
-        ruta = os.path.join(orch, script)
+        ruta = os.path.join(root, script)
         if not os.path.isfile(ruta):
-            plan.append((nid, acc.get("id", ""), "no",
-                         "el script %s no esta en bin/" % script, ""))
+            plan.append((nid, etiqueta, "no", senal, "el script %s no esta en bin/" % script, ""))
             continue
         interp = acc.get("interprete") or ("python3" if script.endswith(".py") else "bash")
-        comando = " ".join([interp, ruta] + args)
+        comando = " ".join([interp, shlex.quote(ruta)] + [shlex.quote(a) for a in args])
         if pesado:
-            ejecutable, razon = "no", "compila Rust: lo lleva el cron (%s)" % (nodo.get("cron_job") or "solidcraft-gate-queue")
+            ejecutable = "no"
+            razon = "compila Rust: el runner no lo ejecuta (la compilacion es del cron)"
         elif cron:
-            ejecutable, razon = "no", "ya tiene cron (%s): el runner no lo duplica" % nodo.get("cron_job")
+            ejecutable = "no"
+            razon = "ya tiene cron (%s): el runner no lo duplica" % nodo.get("cron_job")
         else:
-            ejecutable, razon = "si", "elegible"
-        plan.append((nid, acc.get("id", ""), ejecutable, razon, comando))
+            ejecutable = "si"
+            razon = "elegible"
+        plan.append((nid, etiqueta, ejecutable, senal, razon, comando))
 
 for fila in plan:
     print("\t".join(str(x) for x in fila))
@@ -355,8 +395,6 @@ fi
 # ---------------------------------------------------------------------------
 # Que se hace con el plan
 # ---------------------------------------------------------------------------
-[ -z "$PLAN" ] && PLAN=""
-
 if [ "$FORMATO" = "json" ]; then
   "$PY" - "$PLAN" <<'PY'
 import json, sys
@@ -364,9 +402,12 @@ salida = []
 for linea in sys.argv[1].splitlines():
     if not linea.strip():
         continue
-    nid, acc, ejec, razon, cmd = linea.split("\t")
+    partes = linea.split("\t")
+    while len(partes) < 6:
+        partes.append("")
+    nid, acc, ejec, senal, razon, cmd = partes[:6]
     salida.append({"nodo": nid, "accion": acc, "ejecutable": ejec == "si",
-                   "razon": razon, "comando": cmd})
+                   "razon": razon, "senal": senal, "comando": cmd})
 print(json.dumps({"elegibles": salida}, ensure_ascii=False, indent=1))
 PY
   exit 0
@@ -378,17 +419,17 @@ if [ "$MODO" = "listar" ]; then
     exit 0
   fi
   echo "workflow-runner: nodos elegibles segun $WORKFLOW"
-  printf '%-16s %-12s %-10s %s\n' "NODO" "ACCION" "LO EJECUTO" "POR QUE"
-  while IFS=$'\t' read -r nid acc ejec razon cmd; do
+  printf '%-16s %-12s %-10s %-32s %s\n' "NODO" "ACCION" "LO EJECUTO" "SENAL" "POR QUE"
+  while IFS=$'\t' read -r nid acc ejec senal razon cmd; do
     [ -z "${nid:-}" ] && continue
-    printf '%-16s %-12s %-10s %s\n' "$nid" "$acc" "$ejec" "$razon"
+    printf '%-16s %-12s %-10s %-32s %s\n' "$nid" "$acc" "$ejec" "$senal" "$razon"
   done <<< "$PLAN"
   exit 0
 fi
 
 # el primero que el runner puede ejecutar (orden del flujo)
 ELEGIDO=""
-while IFS=$'\t' read -r nid acc ejec razon cmd; do
+while IFS=$'\t' read -r nid acc ejec senal razon cmd; do
   [ -z "${nid:-}" ] && continue
   if [ "$ejec" = "si" ]; then
     ELEGIDO="$nid	$acc	$razon	$cmd"
@@ -398,8 +439,8 @@ done <<< "$PLAN"
 
 if [ -z "$ELEGIDO" ]; then
   if [ -n "$PLAN" ]; then
-    echo "workflow-runner: hay nodos elegibles pero ninguno lo ejecuta el runner:"
-    while IFS=$'\t' read -r nid acc ejec razon cmd; do
+    echo "workflow-runner: hay nodos elegibles pero ninguno los ejecuta el runner:"
+    while IFS=$'\t' read -r nid acc ejec senal razon cmd; do
       [ -z "${nid:-}" ] && continue
       echo "  - $nid/$acc: $razon"
     done <<< "$PLAN"

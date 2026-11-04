@@ -197,12 +197,16 @@ def validar(grafo, root, res):
                 res.error(f"{etiqueta}: falta el 'id' de la accion")
             chequear_script(res, etiqueta, acc.get("script"), root, acc.get("interprete"))
             when = acc.get("cuando")
-            if when is None:
-                res.error(f"{etiqueta}: falta 'cuando' (la senal que la habilita)")
-            elif not isinstance(when, list):
-                res.error(f"{etiqueta}: 'cuando' tiene que ser una lista de senales")
-            else:
-                for s in when:
+            when_algo = acc.get("cuando_alguna")
+            if not when and not when_algo:
+                res.error(f"{etiqueta}: falta 'cuando' o 'cuando_alguna' (la senal que la habilita)")
+            for nombre, valor in (("cuando", when), ("cuando_alguna", when_algo)):
+                if valor is None:
+                    continue
+                if not isinstance(valor, list):
+                    res.error(f"{etiqueta}: '{nombre}' tiene que ser una lista de senales")
+                    continue
+                for s in valor:
                     if s not in senales_set:
                         res.error(f"{etiqueta}: la senal '{s}' no esta declarada en 'senales'")
             if acc.get("compilacion_pesada") not in COMPILACION_PESADA_VALIDOS:

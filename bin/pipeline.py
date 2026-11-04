@@ -67,18 +67,37 @@ def verdict_for(sha):
         f = f"{GATES}/{slot}/scope.verdict"
         if not os.path.isfile(f):
             continue
+        crudo = f
         try:
             txt = open(f, errors="replace").read()
         except OSError:
             continue
         if f"SHA={sha}" not in txt:
             continue
+        # el veredicto EFECTIVO es el que cuenta: el crudo sale ROJO por los fallos
+        # preexistentes de origin/main. gate-baseline.sh lo deja al lado.
+        ef = f.replace("scope.verdict", "scope.effective.verdict")
+        if os.path.isfile(ef):
+            try:
+                etxt = open(ef, errors="replace").read()
+            except OSError:
+                etxt = ""
+            if f"SHA={sha}" in etxt:
+                txt = etxt
+                crudo = ef
         def grab(key, default=""):
             m = re.search(rf"^{key}=(.*)$", txt, re.M)
             return m.group(1).strip() if m else default
+        status = grab("GATE_STATUS")
+        if not status:
+            # el efectivo puede no traer GATE_STATUS: se hereda del crudo
+            try:
+                status = re.search(r"^GATE_STATUS=(.*)$", open(crudo, errors="replace").read(), re.M).group(1).strip()
+            except AttributeError:
+                status = ""
         return {
             "slot": slot,
-            "status": grab("GATE_STATUS"),
+            "status": status,
             "verdict": grab("VERDICT"),
             "new_failures": grab("NEW_FAILURES"),
             "preexisting": grab("PREEXISTING_FAILURES"),
