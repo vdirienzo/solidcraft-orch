@@ -23,9 +23,9 @@
 set -u
 CRATE_ARGS="-p solidcraft-sketch -p solidcraft-doc"
 PROFILE=ci
-REPO=/home/user/solidcraft
-T=/home/user/.hermes/cache/scratch/exp-paralelismo
-OUT=/home/user/.local/share/solidcraft-orch/reports/experimento-paralelismo.json
+REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+T="$HOME/.hermes/cache/scratch/exp-paralelismo"
+OUT="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}/reports/experimento-paralelismo.json"
 mkdir -p "$T" "$(dirname "$OUT")"
 
 log(){ echo "[$(date +%H:%M:%S)] $*"; }

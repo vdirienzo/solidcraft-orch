@@ -9,7 +9,8 @@
 #
 # WHAT IS TESTED:
 #   1. slot-lock.sh: a slot can only be taken once; the status tells the
-#      truth; the release frees it; the heavy lock is exclusive.
+#      truth; the release frees it; the heavy lock is a SET of tokens and
+#      the number of tokens is the ceiling.
 #   2. slot-target-dir.sh: every slot gets a DIFFERENT directory (the
 #      property that stops two cargo builds from fighting over the lock of
 #      the build directory), and a name that can not be normalized is
@@ -132,18 +133,47 @@ esac
 rm -rf "$TESTDIR/locks/slot-t6" 2>/dev/null
 
 # --- 2. the lock of the heavy phase ------------------------------------------
-bash "$LOCK" --heavy --take >/dev/null 2>&1
+# WHY THE TEST ASKS FOR THE NUMBER OF TOKENS: the heavy lock is NOT a single
+# lock any more, it is a SET of tokens (MAX_HEAVY_TOKENS, default 2). The
+# gate does not take it (the gate takes the slot lock and the calibrator
+# decides if a gate may start); the tokens are for the heavy work that is
+# NOT a gate: a release link, an app build for the evidence, a sweep. The
+# tokens are SHARED and COUNTED, so the number of them is the CEILING.
+# A test that measured the old single lock would be measuring a contract
+# that the script no longer has, so the test asks for the ceiling.
+#
+# With ONE token the lock is exclusive: the second caller is refused.
+MAX_HEAVY_TOKENS=1 bash "$LOCK" --heavy --take >/dev/null 2>&1
 [ $? -eq 0 ] && ok "heavy: it can be taken" || bad "heavy: it can be taken"
 
-bash "$LOCK" --heavy --take >/dev/null 2>&1
-[ $? -eq 1 ] && ok "heavy: it is exclusive (only one at a time)" || bad "heavy: it is exclusive (only one at a time)"
+MAX_HEAVY_TOKENS=1 bash "$LOCK" --heavy --take >/dev/null 2>&1
+[ $? -eq 1 ] && ok "heavy: with one token it is exclusive (only one at a time)" \
+              || bad "heavy: with one token it is exclusive (only one at a time)"
 
-bash "$LOCK" --heavy --status >/dev/null 2>&1
+MAX_HEAVY_TOKENS=1 bash "$LOCK" --heavy --status >/dev/null 2>&1
 [ $? -eq 1 ] && ok "heavy: the status is 'taken'" || bad "heavy: the status is 'taken'"
 
-bash "$LOCK" --heavy --release >/dev/null 2>&1
-bash "$LOCK" --heavy --status >/dev/null 2>&1
+MAX_HEAVY_TOKENS=1 bash "$LOCK" --heavy --release >/dev/null 2>&1
+MAX_HEAVY_TOKENS=1 bash "$LOCK" --heavy --status >/dev/null 2>&1
 [ $? -eq 0 ] && ok "heavy: the release frees it" || bad "heavy: the release frees it"
+
+# With the DEFAULT number of tokens the ceiling is a ceiling: two heavy
+# works fit at the same time and the third one is refused.
+MAX_HEAVY_TOKENS=2 bash "$LOCK" --heavy --take >/dev/null 2>&1
+[ $? -eq 0 ] && ok "heavy: the first of the two tokens can be taken" \
+              || bad "heavy: the first of the two tokens can be taken"
+
+MAX_HEAVY_TOKENS=2 bash "$LOCK" --heavy --take >/dev/null 2>&1
+[ $? -eq 0 ] && ok "heavy: the second token can be taken at the same time" \
+              || bad "heavy: the second token can be taken at the same time"
+
+MAX_HEAVY_TOKENS=2 bash "$LOCK" --heavy --take >/dev/null 2>&1
+[ $? -eq 1 ] && ok "heavy: the third one is refused (the ceiling is a ceiling)" \
+              || bad "heavy: the third one is refused (the ceiling is a ceiling)"
+
+MAX_HEAVY_TOKENS=2 bash "$LOCK" --heavy --status >/dev/null 2>&1
+[ $? -eq 1 ] && ok "heavy: the status is 'taken' when every token is taken" \
+              || bad "heavy: the status is 'taken' when every token is taken"
 
 # --- 3. the target dir of a slot ---------------------------------------------
 TDIR="$REAL_BIN/slot-target-dir.sh"

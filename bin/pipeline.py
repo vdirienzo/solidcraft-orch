@@ -25,8 +25,12 @@ import subprocess
 import sys
 import time
 
-ORCH = "/home/user/.local/share/solidcraft-orch"
-GATES = "/home/user/.local/share/solidcraft-loop/gates"
+# The paths come from the environment, with the default of THIS machine: the
+# other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/.local/share/solidcraft-orch"))
+LOOP_DIR = os.environ.get("LOOP_DIR", os.path.expanduser("~/.local/share/solidcraft-loop"))
+ORCH = ORCH_DIR
+GATES = f"{LOOP_DIR}/gates"
 QUEUE = f"{ORCH}/gates/queue.txt"
 REPO = "tangency-labs/solidcraft"
 FORK = "vdirienzo/solidcraft"

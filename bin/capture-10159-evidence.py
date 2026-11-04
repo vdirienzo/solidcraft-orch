@@ -33,7 +33,10 @@ import time
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 7717
 TOKEN = sys.argv[2] if len(sys.argv) > 2 else ""
-OUTDIR = sys.argv[3] if len(sys.argv) > 3 else "/home/user/.local/share/solidcraft-orch/logs/evidence-10159"
+# The path comes from the environment, with the default of THIS machine: the
+# other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/.local/share/solidcraft-orch"))
+OUTDIR = sys.argv[3] if len(sys.argv) > 3 else f"{ORCH_DIR}/logs/evidence-10159"
 
 
 class Conn:

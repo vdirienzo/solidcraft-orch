@@ -23,7 +23,11 @@
 # ------------------------------------------------------------------
 set -uo pipefail
 
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 BIN="$ORCH_DIR/bin"
 QUEUE="$ORCH_DIR/gates/queue.txt"
 LOCK="$ORCH_DIR/gates/queue.lock"
@@ -98,7 +102,7 @@ run(){
     # the gate takes the token itself: there is a free slot right now
     echo "gate-queue: lanzando el gate del slot $issue ($sha) (hay $free de $total slots libres)"
     sed -i '1d' "$QUEUE"
-    ( cd "$HOME/solidcraft-wt/issue-$issue" 2>/dev/null || cd "$HOME/solidcraft"
+    ( cd "$WORKTREES_DIR/issue-$issue" 2>/dev/null || cd "$SOLIDCRAFT_REPO"
       bash "$BIN/gate.sh" "$issue" "$sha" > "$LOGDIR/gate-queue-$issue.log" 2>&1
     ) &
     sleep 20   # let the gate take the token before the next one looks

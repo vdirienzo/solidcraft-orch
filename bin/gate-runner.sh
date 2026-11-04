@@ -12,9 +12,14 @@
 # Uso: gate-runner.sh <slot> <sha> [<worktree>] ...
 #   sin argumentos: corre los gates pendientes que ya conoce.
 set -u
-B=/home/user/.local/share/solidcraft-orch/bin
-L=/home/user/.local/share/solidcraft-loop/gates
-LOGD=/home/user/.local/share/solidcraft-orch/logs
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
+B="$ORCH_DIR/bin"
+L="$LOOP_DIR/gates"
+LOGD="$ORCH_DIR/logs"
 mkdir -p "$LOGD"
 
 # el veredicto de este sha ya sirve? El vocabulario real de GATE_STATUS es
@@ -45,11 +50,11 @@ run_one() {
 
 if [ $# -ge 2 ]; then
   # pares slot sha [worktree]
-  run_one "$1" "$2" "${3:-/home/user/solidcraft-wt/issue-$1}"
+  run_one "$1" "$2" "${3:-$WORKTREES_DIR/issue-$1}"
   exit $?
 fi
 
 # sin argumentos: los gates que el orquestador tiene pendientes, en orden de
 # prioridad (el que tiene el PR esperando al mantenedor va primero).
-run_one 10159 aee25f106 /home/user/solidcraft-wt/issue-10159
-run_one 4712 0d74d8cae /home/user/solidcraft-wt/issue-4712
+run_one 10159 aee25f106 "$WORKTREES_DIR/issue-10159"
+run_one 4712 0d74d8cae "$WORKTREES_DIR/issue-4712"

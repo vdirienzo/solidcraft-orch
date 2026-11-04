@@ -24,11 +24,11 @@
 # METRICA: builds por hora de cada reparto.
 # ------------------------------------------------------------------
 set -u
-REPO=/home/user/solidcraft
+REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 CRATE_ARGS="-p solidcraft-sketch -p solidcraft-doc"
 PROFILE=ci
-T=/home/user/.hermes/cache/scratch/exp2
-OUT=/home/user/.local/share/solidcraft-orch/reports/experimento-paralelismo.json
+T="$HOME/.hermes/cache/scratch/exp2"
+OUT="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}/reports/experimento-paralelismo.json"
 export SCCACHE_DIR="$T/sccache"
 export CARGO_INCREMENTAL=0
 export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"

@@ -37,8 +37,12 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
-LOOP_DIR="${LOOP_DIR:-$HOME/.local/share/solidcraft-loop}"
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 GATE_SCRIPT="$LOOP_DIR/bin/gate-quick.sh"
 
 ISSUE="${1:-}"
@@ -92,11 +96,11 @@ BUILD_TOKEN="$(bash "$ORCH_DIR/bin/build-slot.sh" --take --wait "${GATE_BUILD_SL
 trap 'bash "$ORCH_DIR/bin/build-slot.sh" --release "$BUILD_TOKEN" >/dev/null 2>&1 || true' EXIT
 
 # The worktree of the slot: the change lives there.
-WORKTREE="$HOME/solidcraft-wt/issue-$ISSUE"
+WORKTREE="$WORKTREES_DIR/issue-$ISSUE"
 if [ -d "$WORKTREE/.git" ] || [ -f "$WORKTREE/.git" ]; then
   export REPO="$WORKTREE"
 else
-  export REPO="$HOME/solidcraft"
+  export REPO="$SOLIDCRAFT_REPO"
   echo "gate.sh: no hay worktree para el slot $ISSUE: el gate corre en el checkout principal" >&2
 fi
 

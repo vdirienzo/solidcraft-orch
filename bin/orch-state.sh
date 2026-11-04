@@ -13,7 +13,10 @@
 #   bash orch-state.sh history [n]     -> the last n history entries (default 5)
 #   bash orch-state.sh raw <key>       -> one top-level key, verbatim
 set -uo pipefail
-ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+export ORCH_DIR
 STATE="$ORCH_DIR/state.json"
 HISTORY="$ORCH_DIR/history.jsonl"
 
@@ -22,8 +25,8 @@ have_jq() { command -v jq >/dev/null 2>&1; }
 # Read a key with python3 (always present here) and print a compact form.
 pick() {
   python3 - "$@" <<'PY'
-import json, sys
-path = "/home/user/.local/share/solidcraft-orch/state.json"
+import json, os, sys
+path = os.environ["ORCH_DIR"] + "/state.json"
 key = sys.argv[1] if len(sys.argv) > 1 else None
 try:
     s = json.load(open(path))
@@ -59,9 +62,9 @@ case "${1:-summary}" in
     # and they are the ones a session that only reads the summary would
     # otherwise miss.
     pending="$(python3 - <<'PY'
-import json
+import json, os
 try:
-    s = json.load(open("/home/user/.local/share/solidcraft-orch/state.json"))
+    s = json.load(open(os.environ["ORCH_DIR"] + "/state.json"))
 except Exception:
     raise SystemExit(0)
 pend = s.get("pending") or []
@@ -105,9 +108,9 @@ PY
   prs)     pick open_prs ;;
   gates)   pick gates ;;
   issue)   shift; python3 - "$@" <<'PY'
-import json, sys
+import json, os, sys
 n = sys.argv[1]
-s = json.load(open("/home/user/.local/share/solidcraft-orch/state.json"))
+s = json.load(open(os.environ["ORCH_DIR"] + "/state.json"))
 hits = []
 for pr, v in (s.get("open_prs") or {}).items():
     if str(v.get("issue")) == n: hits.append(f"PR #{pr}: {json.dumps(v, ensure_ascii=False)}")
@@ -122,7 +125,7 @@ PY
   keys)
     python3 - <<'PY'
 import json, os
-p = "/home/user/.local/share/solidcraft-orch/state.json"
+p = os.environ["ORCH_DIR"] + "/state.json"
 s = json.load(open(p)); tot = os.path.getsize(p)
 print(f"state.json = {tot:,} bytes")
 for k, v in sorted(s.items(), key=lambda kv: -len(json.dumps(kv[1]))):

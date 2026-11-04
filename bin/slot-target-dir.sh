@@ -4,7 +4,7 @@
 #
 # WHY THIS EXISTS (30-10-2026): three agents were working in parallel on
 # three issues and two of them compiled with the SAME CARGO_TARGET_DIR
-# (/home/user/solidcraft/target). Cargo takes an exclusive lock on the
+# (the target dir of the checkout). Cargo takes an exclusive lock on the
 # build directory of a target: the second cargo does not run in parallel,
 # it WAITS for the first one with the message "Blocking waiting for file
 # lock on build directory". The agents were not competing for the CPU,
@@ -12,7 +12,7 @@
 # the SUM of the compiles and not the maximum.
 #
 # The original loop had already solved this (bin/gate-target-dir.sh of
-# /home/user/.local/share/solidcraft-loop): every slot compiles in a
+# the loop): every slot compiles in a
 # directory of its own. This script is the same idea for the orchestrator
 # of the delegated agents: the slot of the agent is the name of the issue,
 # and every agent gets its own target dir.
@@ -40,7 +40,7 @@ set -uo pipefail
 # The base of the target directories.
 #
 # WHY IT IS NOT A CONSTANT (30-10-2026): the script had the base hardcoded
-# as /home/user/solidcraft-orch/targets, while the orchestrator's own state
+# as $ORCH_DIR/targets, while the orchestrator's own state
 # lives in $ORCH_DIR (default ~/.local/share/solidcraft-orch) and the warm
 # build caches of the slots are in $ORCH_DIR/targets. An agent that asked
 # this script for its target directory therefore got an EMPTY directory

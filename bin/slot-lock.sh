@@ -39,8 +39,10 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-LOOP_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
-LOCK_DIR="$LOOP_DIR/locks"
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOCK_DIR="$ORCH_DIR/locks"
 mkdir -p "$LOCK_DIR" 2>/dev/null || true
 
 normalize_slot() {

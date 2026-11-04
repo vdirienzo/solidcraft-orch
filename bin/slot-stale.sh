@@ -17,8 +17,12 @@
 
 set -u
 
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
-REPO="${REPO:-$HOME/solidcraft}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
+REPO="${REPO:-$SOLIDCRAFT_REPO}"
 LOCKS="$ORCH_DIR/locks"
 HOURS=2
 
@@ -76,7 +80,7 @@ for slot_dir in "$LOCKS"/*; do
   lock_age_h=$(( (now - since_epoch) / 3600 ))
 
   # the branch of the worktree of the slot, and when it last moved
-  worktree="$HOME/solidcraft-wt/issue-$slot"
+  worktree="$WORKTREES_DIR/issue-$slot"
   branch=""
   changed_ago_h="0"
   commits="?"
@@ -133,7 +137,7 @@ done
 # to the loop: the slot looks free and the worktree just sits there. Half of
 # the agents that burned hours were in this state.
 # ---------------------------------------------------------------------------
-for worktree in "$HOME"/solidcraft-wt/*; do
+for worktree in "$WORKTREES_DIR"/*; do
   [ -d "$worktree" ] || continue
   name=$(basename "$worktree")
   # only the worktrees of a slot: a directory named otherwise (evidence-*, and

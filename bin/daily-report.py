@@ -11,7 +11,12 @@ Salida: reports/latest.md y reports/daily-<fecha>-<hora>.md
 """
 import json, os, re, subprocess, sqlite3, datetime, sys
 
-ORCH = "/home/user/.local/share/solidcraft-orch"
+# The paths come from the environment, with the default of THIS machine: the
+# other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/.local/share/solidcraft-orch"))
+# The home of Hermes: its state.db says how many agents are alive.
+HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+ORCH = ORCH_DIR
 BIN = f"{ORCH}/bin"
 REPORTS = f"{ORCH}/reports"
 REPO = "tangency-labs/solidcraft"
@@ -64,7 +69,7 @@ except Exception as e:
 
 vivos = 0
 try:
-    c = sqlite3.connect("file:/home/user/.hermes/state.db?mode=ro", uri=True)
+    c = sqlite3.connect(f"file:{HERMES_HOME}/state.db?mode=ro", uri=True)
     vivos = c.execute(
         "select count(*) from sessions where parent_session_id is not null "
         "and source='subagent' and ended_at is null").fetchone()[0]

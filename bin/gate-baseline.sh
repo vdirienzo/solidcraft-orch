@@ -29,6 +29,8 @@ set -uo pipefail
 SLOT="${1:-}"
 [ -z "$SLOT" ] && { echo "usage: gate-baseline.sh <slot> [--show]" >&2; exit 2; }
 
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 RAW="$LOOP_DIR/gates/$SLOT/scope.verdict"
@@ -74,7 +76,7 @@ TMP_KNOWN="$(mktemp 2>/dev/null || echo "/tmp/kft.$$")"
 for known in "${KNOWN_FAILING_TESTS:-}"; do
   [ -n "$known" ] && [ -f "$known" ] && grep -vE '^[[:space:]]*(#|$)' "$known" 2>/dev/null >> "$TMP_KNOWN"
 done
-for repo in "${GATE_REPO:-}" "$HOME/solidcraft"; do
+for repo in "${GATE_REPO:-}" "${SOLIDCRAFT_REPO:-$HOME/solidcraft}"; do
   [ -n "$repo" ] && [ -d "$repo" ] || continue
   git -C "$repo" show origin/main:tests/KNOWN_FAILING_TESTS 2>/dev/null >> "$TMP_KNOWN"
   [ -f "$repo/tests/KNOWN_FAILING_TESTS" ] && grep -vE '^[[:space:]]*(#|$)' "$repo/tests/KNOWN_FAILING_TESTS" 2>/dev/null >> "$TMP_KNOWN"

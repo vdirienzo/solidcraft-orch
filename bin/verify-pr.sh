@@ -22,9 +22,11 @@ set -uo pipefail
 PR="${1:?usage: verify-pr.sh <pr-number> [repo] [slot]}"
 REPO="${2:-tangency-labs/solidcraft}"
 SLOT_ARG="${3:-}"
-ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
+# The paths come from the environment, with the default of THIS
+# machine: the other PC exports its own (see docs/portable-orchestrator.md).
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 # The loop's directory: the gate verdicts live under it (gates/<slot>/).
-LOOP_DIR="${LOOP_DIR:-$HOME/.local/share/solidcraft-loop}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 # The checkout of the product: the fork's head is read from it.
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 FAIL=0
@@ -124,7 +126,7 @@ fi
 rm -f "$BODYFILE"
 
 # 5. a body must not cite paths that only exist on the local disk
-LOCAL="$(printf '%s' "$BODY" | grep -cE '/home/user|~/\.local|logs/[a-z0-9-]*\.log' || true)"
+LOCAL="$(printf '%s' "$BODY" | grep -cE "${HOME:-/home/user}|~/\.local|logs/[a-z0-9-]*\.log" || true)"
 [ "$LOCAL" = "0" ] && ok "el body no cita rutas locales" \
                     || bad "el body cita $LOCAL ruta(s) locales (el reviewer no puede abrirlas)"
 
