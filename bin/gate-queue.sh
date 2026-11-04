@@ -105,7 +105,7 @@ run(){
     ( cd "$WORKTREES_DIR/issue-$issue" 2>/dev/null || cd "$SOLIDCRAFT_REPO"
       bash "$BIN/gate.sh" "$issue" "$sha" > "$LOGDIR/gate-queue-$issue.log" 2>&1
     ) &
-    sleep 20   # let the gate take the token before the next one looks
+    sleep "${GATE_STAGGER:-90}"   # delay medido: con 90 s el 2do gate encuentra el sccache caliente
     waited=0
   done
   echo "gate-queue: $(date +%H:%M:%S) runner terminado; cola: $( [ -s "$QUEUE" ] && wc -l < "$QUEUE" | tr -d ' ' || echo 0) pendiente(s)"
