@@ -160,7 +160,7 @@ def js(path, default=None):
         return default
 
 
-pr_path, runs_path, comments_path, compare_path, commit_path, parent_path = sys.argv[1:7]
+pr_path, runs_path, comments_path, compare_path, commit_path = sys.argv[1:6]
 pr = js(pr_path, {}) or {}
 runs = jsonl(runs_path)
 comments = jsonl(comments_path)
@@ -222,12 +222,6 @@ if os.environ.get("HEAVY_ONLY"):
     print("HEAVY=%s" % ("ran-on-head" if heavy_ran(jsonl(sys.argv[1])) else "not-ran"))
     sys.exit(0)
 
-parents = commit.get("parents") or []
-parent_sha = (parents[0].get("sha") if parents else "") or ""
-mensaje = ((commit.get("commit") or {}).get("message") or "").split("\n")[0]
-merge_main = "si" if ("Merge branch 'main'" in mensaje
-                      or "Merge remote-tracking branch 'upstream/main'" in mensaje) else "no"
-
 heavy_head = heavy_ran(runs)
 if heavy_head:
     heavy = "ran-on-head"
@@ -276,8 +270,6 @@ p("CI", ci)
 p("BEHIND", behind if isinstance(behind, int) else "?")
 p("AHEAD", ahead if isinstance(ahead, int) else "?")
 p("HEAVY", heavy)
-p("PARENT_SHA", parent_sha)
-p("MERGE_MAIN", merge_main)
 p("ALREADY", already)
 p("SUPERSEDE", " ".join(supersede))
 PY
@@ -395,7 +387,7 @@ print((p[0].get("sha") if p else "") or "")' "$d/chain.json")"
     cur="$parent"
     # el heavy de ese commit?
     fetch_check_runs "$cur" "$d/chain-runs.jsonl" 2>/dev/null || return 0
-    if HEAVY_ONLY=1 python3 "$TMP/analyze.py" "$d/chain-runs.jsonl" "" "" "" "" "" 2>/dev/null \
+    if HEAVY_ONLY=1 python3 "$TMP/analyze.py" "$d/chain-runs.jsonl" "" "" "" "" 2>/dev/null \
          | grep -q '^HEAVY=ran-on-head'; then
       CHAIN_HEAVY="ran-on-chain"
       CHAIN_CARRIER="$cur"
@@ -475,7 +467,6 @@ fi
 
 for pr in "${PRS[@]}"; do
   d="$TMP/pr-$pr"; mkdir -p "$d"
-  : > "$d/parent.jsonl"
 
   # --- the pull request itself --------------------------------------------
   if ! "$GH_BIN" pr view "$pr" --repo "$REPO" \
@@ -520,7 +511,7 @@ print(d.get("headRefOid") or "")' "$d/pr.json")"
 
   analyze(){
     python3 "$TMP/analyze.py" "$d/pr.json" "$d/runs.jsonl" "$d/comments.jsonl" \
-      "$d/compare.json" "$d/commit.json" "$d/parent.jsonl"
+      "$d/compare.json" "$d/commit.json"
   }
 
   # --- the first analysis -------------------------------------------------
