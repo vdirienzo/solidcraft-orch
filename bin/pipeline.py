@@ -5,16 +5,31 @@ pipeline.py - el eslabon que faltaba entre "el agente commitea" y "el PR queda p
 POR QUE EXISTE (2026-11-04): el claim de un issue vence a las 72 h si no hay un PR que lo
 referencie. Antes, el agente commiteaba, pusheaba y corria el gate: si el gate se colgaba o
 el agente se moria, el issue se perdia sin PR y el claim se iba. Ademas los gates se pedian
-uno por uno, sin cola, y cada agente compilaba por su cuenta (contencion de locks).
+uno por uno, sin cola, y cada agente compilaba por su cuenta (convencion de locks).
 
 QUE HACE ESTE SCRIPT, en cada corrida:
-  1. Para cada PR nuestro que este en DRAFT: le corrige el body si no cumple el formato que
-     exige el CI upstream ("Changes a default: no") y le agrega la referencia al issue.
+  1. Para cada PR nuestro que este en DRAFT: le agrega la referencia al issue si falta.
+     La linea "Changes a default:" NO se inventa nunca: si falta, el PR se queda en draft y
+     queda logueado que hay que escribirla a mano (un "no" automatico puede ser falso).
   2. Para cada PR en draft cuyo gate NO tenga veredicto todavia: lo ENCOLA (gate-queue.sh).
-  3. Para cada PR en draft cuyo gate ya dio verde: lo pasa a READY y deja el comentario con
-     el veredicto, el SHA y el conteo de fallos preexistentes.
+  3. Para cada PR en draft cuyo gate local ya dio verde Y cuyo CI de GitHub esta VERDE en
+     su HEAD SHA: lo pasa a READY y deja el comentario con el veredicto, el SHA y el conteo
+     de fallos preexistentes.
   4. NO encola mas trabajo del que la caja aguanta (MAX_INFLIGHT): la cola de gates va a 2
      compilaciones por vez, y un backlog grande es exactamente lo que hace vencer los claims.
+  5. Al final, un resumen con cuantos PRs tienen el CI de GitHub verde, pendiente y en rojo.
+
+POR QUE EL CI DE GITHUB SE MIRA ADEMAS DEL GATE LOCAL (2026-11-07):
+  El gate local (el nuestro) y el CI de GitHub (el de upstream) son dos cosas distintas. El
+  CI de upstream incluye el "Defaults line check", el "Duplicate PR check" y el "Picture
+  check": un PR con el gate local en verde pero el CI de upstream en rojo NO se puede
+  mergear. Antes este script miraba solo el gate local y dejaba "Gate local en verde" un PR
+  con un check rojo en pantalla (PR #12891, #12574).
+  Y el estado del CI hay que leerlo de los CHECK-RUNS del HEAD SHA, no del rollup: el
+  workflow pr-checks corre con `concurrency: {cancel-in-progress: true}`, asi que una
+  edicion del body cancela el run anterior y crea otro con el MISMO nombre. Por eso en el
+  rollup conviven un check "cancelled" y su gemelo en "success": no son dos checks, es el
+  mismo check de dos runs. El que vale es el MAS RECIENTE de cada nombre.
 
 Se corre desde un cron cada 5 minutos. Es idempotente: correrlo dos veces no rompe nada.
 """
@@ -52,13 +67,20 @@ def log(msg):
 
 # El gh que se usa: GH_BIN si esta definido, si no el del PATH. Un stub de gh en un scratch
 # que alguien dejo en el PATH hace no-op en 'pr create' y deja PRs que no existen (o no publica
-# los que existen): por eso es configurable y hay que verificar el binario.
+# los que existentes): por eso es configurable y hay que verificar el binario.
 GH_BIN = os.environ.get("GH_BIN") or shutil.which("gh") or "gh"
 
 
 def gh(*args, timeout=120):
     r = subprocess.run([GH_BIN, *args], capture_output=True, text=True, timeout=timeout)
     return r.stdout if r.returncode == 0 else ""
+
+
+def gh_ok(*args, timeout=120):
+    """Como gh(), pero devuelve si el comando salio bien (no si el stdout tiene texto:
+    'gh pr ready' no imprime nada cuando funciona, asi que truthiness no sirve)."""
+    r = subprocess.run([GH_BIN, *args], capture_output=True, text=True, timeout=timeout)
+    return r.returncode == 0
 
 
 def issue_of(body, pr_num):
@@ -68,6 +90,274 @@ def issue_of(body, pr_num):
         if m:
             return m.group(1)
     return None
+
+
+# --------------------------------------------------------------------------
+# EL CI DE GITHUB (2026-11-07)
+#
+# El estado de un PR se lee de los check-runs de su HEAD SHA. Cada check-run trae un
+# 'conclusion' (success/skipped/neutral/failure/cancelled/timed_out/...) y un
+# 'completed_at'. Con `cancel-in-progress: true` un run viejo queda 'cancelled' cuando uno
+# nuevo del MISMO nombre arranca: por eso, para cada NOMBRE de check, gana el run MAS
+# RECIENTE. El 'cancelled' del run viejo NO cuenta como rojo.
+#
+# Todo esto es puro: no toca la red, y por eso se puede testear offline con check-runs
+# inventados. La funcion que trae los check-runs de GitHub esta aparte (fetch_check_runs).
+# --------------------------------------------------------------------------
+
+# Las conclusiones que NO impiden promover.
+CHECK_OK = ("success", "skipped", "neutral")
+# Las conclusiones que son un rojo de verdad.
+CHECK_ROJOS = ("failure", "timed_out", "action_required", "startup_failure")
+# 'cancelled' y 'stale' no son fallos del PR: son runs superseded por uno nuevo.
+
+VERDE = "verde"
+PENDIENTE = "pendiente"
+ROJO = "rojo"
+
+
+def _id(run):
+    try:
+        return int(run.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _conclusion(run):
+    return (run.get("conclusion") or "").lower()
+
+
+def _status(run):
+    return (run.get("status") or "").lower()
+
+
+def _completed_at(run):
+    return run.get("completed_at") or run.get("started_at") or ""
+
+
+def _vigente(runs):
+    """El run que cuenta de un grupo de check-runs del MISMO nombre.
+
+    Gana el MAS RECIENTE por completed_at (y a igualdad, el id mas alto). El 'cancelled' del
+    run viejo (el que cancelo el nuevo) no se confunde con un rojo: si hay un gemelo en
+    verde creado despues, ese gemelo es el que manda.
+    """
+    completados = [r for r in runs if _status(r) == "completed"]
+    if not completados:
+        return None
+    return max(completados, key=lambda r: (_completed_at(r), _id(r)))
+
+
+def evaluar_check_runs(check_runs):
+    """El estado del CI de un SHA a partir de SUS check-runs. (estado, detalle)
+
+    estado es VERDE, PENDIENTE o ROJO. Es pura: no toca la red, se testea offline.
+
+    - Por cada NOMBRE de check se gana el run MAS RECIENTE (completed_at, y a igualdad el id).
+      Asi el 'cancelled' del run viejo no se confunde con un rojo.
+    - Un conclusion duro (failure/timed_out/action_required/startup_failure) en el run
+      vigente -> ROJO.
+    - Un run en vuelo (queued/in_progress) MAS NUEVO que el ultimo completado -> PENDIENTE:
+      el CI todavia no dio veredicto (se acaba de re-disparar por una edicion del body) y no
+      se promueve.
+    - Sin check-runs -> PENDIENTE (el CI todavia no arranco).
+    """
+    if not check_runs:
+        return PENDIENTE, "el CI todavia no arranco (sin check-runs en el HEAD SHA)"
+
+    grupos = {}
+    for run in check_runs:
+        if not isinstance(run, dict):
+            continue
+        grupos.setdefault(run.get("name") or "?", []).append(run)
+    if not grupos:
+        return PENDIENTE, "el CI todavia no arranco (sin check-runs en el HEAD SHA)"
+
+    rojos = []
+    pendientes = []
+    for nombre, runs in grupos.items():
+        vigente = _vigente(runs)
+
+        # Un run en vuelo (queued/in_progress) creado despues del ultimo completado es el
+        # CI que esta corriendo ahora: manda el, y todavia no hay veredicto.
+        en_vuelo = [r for r in runs if _status(r) != "completed"]
+        if en_vuelo:
+            nuevo = max(_id(r) for r in en_vuelo)
+            viejo = max((_id(r) for r in runs if _status(r) == "completed"), default=-1)
+            if nuevo > viejo:
+                pendientes.append(f"{nombre} (corriendo)")
+                continue
+
+        if vigente is None:
+            pendientes.append(f"{nombre} (sin veredicto)")
+            continue
+
+        conclusion = _conclusion(vigente)
+        if conclusion in CHECK_OK:
+            continue
+        if conclusion in CHECK_ROJOS:
+            rojos.append(f"{nombre} ({conclusion})")
+            continue
+        if conclusion in ("cancelled", "stale"):
+            # Run superseded. Si hay un gemelo en verde creado despues, ese gana (es el run
+            # nuevo del mismo check); si no, no hay veredicto todavia -> pendiente.
+            gemelo = max((r for r in runs
+                          if _id(r) > _id(vigente) and _conclusion(r) in CHECK_OK),
+                         key=_id, default=None)
+            if gemelo is not None:
+                continue
+            pendientes.append(f"{nombre} ({conclusion})")
+            continue
+        # conclusion desconocida: no se la da por buena
+        pendientes.append(f"{nombre} ({conclusion or 'sin conclusion'})")
+
+    if rojos:
+        return ROJO, "rojo: " + ", ".join(sorted(rojos))
+    if pendientes:
+        return PENDIENTE, "pendiente: " + ", ".join(sorted(pendientes))
+    return VERDE, "verde: todos los checks del HEAD SHA estan en verde"
+
+
+def check_ci_verde(check_runs):
+    """(bool, detalle): True solo si el CI de GitHub del HEAD SHA esta VERDE.
+
+    Es el requisito ADICIONAL del gate local para promover un PR a ready: el gate local
+    sigue siendo el que decide, pero un PR con el CI de upstream en rojo no se puede
+    mergear, asi que no se promueve. Acepta la lista de check-runs (puro, testeable
+    offline); la version que habla con GitHub es check_ci_verde_sha().
+    """
+    estado, detalle = evaluar_check_runs(check_runs)
+    return estado == VERDE, detalle
+
+
+def fetch_check_runs(sha, repo=REPO):
+    """Los check-runs del HEAD SHA, uno por linea en JSON. (runs, error)"""
+    if not sha:
+        return [], "no se pudo leer el HEAD SHA"
+    r = subprocess.run(
+        [GH_BIN, "api", f"repos/{repo}/commits/{sha}/check-runs", "--paginate",
+         "--jq", ".check_runs[] | {name,status,conclusion,completed_at,started_at,id}"],
+        capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        return [], (r.stderr or "gh api fallo").strip().splitlines()[0] if r.stderr else "gh api fallo"
+    runs = []
+    for linea in (r.stdout or "").splitlines():
+        linea = linea.strip()
+        if not linea:
+            continue
+        try:
+            runs.append(json.loads(linea))
+        except json.JSONDecodeError:
+            continue
+    return runs, None
+
+
+def check_ci_verde_sha(sha, repo=REPO):
+    """(bool, detalle): el CI de GitHub del HEAD SHA, leido de GitHub."""
+    runs, error = fetch_check_runs(sha, repo)
+    if error:
+        return False, f"no pude leer los check-runs: {error}"
+    return check_ci_verde(runs)
+
+
+# --------------------------------------------------------------------------
+# LA LINEA "Changes a default:" (2026-11-07)
+#
+# El CI de upstream (scripts/pr-checks/pr-checks.js) exige una linea
+#   "Changes a default: no"
+# o la larga
+#   "Changes a default: yes - <que>, old behaviour kept behind preference <nombre>"
+# La linea que ya esta en el body es informacion DEL AUTOR: no se pisa nunca (un "yes"
+# pisado con un "no" es mentira, y el mantenedor lo va a marcar).
+# Y si la linea NO esta, este script NO la inventa con un "no" automatico: un PR que mete
+# una preferencia nueva SI cambia un default, y un "no" mentido pasa el check de upstream
+# y despues lo hace volver. Se deja el PR en draft y se loguea que la linea hay que
+# escribirla a mano.
+# --------------------------------------------------------------------------
+
+RE_LINEA_DEFAULTS = re.compile(r"^[ \t]*(?:[-*][ \t]+)?Changes a default:", re.I | re.M)
+RE_MENCIONA_DEFAULT = re.compile(
+    r"\b(defaults?|preferencias?|preferences?|valores? por defecto)\b", re.I)
+LABEL_CHANGES_DEFAULT = "changes-default"
+
+# El ruido que upstream ignora antes de mirar la linea (scripts/pr-checks/pr-checks.js,
+# stripNoise): los comentarios HTML y los bloques de codigo. Una linea de ejemplo dentro de
+# un bloque de codigo NO es una declaracion: si la pipeline la creyera presente, dejaria
+# pasar un PR que el check de upstream va a rechazar.
+RE_COMENTARIO_HTML = re.compile(r"<!--[\s\S]*?-->")
+RE_BLOQUE_CODIGO = re.compile(r"```[\s\S]*?```|~~~[\s\S]*?~~~")
+RE_CODIGO_EN_LINEA = re.compile(r"`[^`\n]*`")
+
+
+def strip_noise(body, inline_code=True):
+    """El body sin el ruido que upstream ignora (comentarios y bloques de codigo)."""
+    text = str(body or "")
+    text = RE_COMENTARIO_HTML.sub("", text)
+    text = RE_BLOQUE_CODIGO.sub("", text)
+    if inline_code:
+        text = RE_CODIGO_EN_LINEA.sub("", text)
+    return text
+
+
+def linea_defaults_presente(body):
+    """True si el body YA trae la linea 'Changes a default:' (la que sea).
+
+    Mismo criterio que upstream (parseDefaults): sobre el body sin ruido, una linea que
+    empiece con 'Changes a default:'. Una linea existente nunca se reescribe.
+    """
+    return bool(RE_LINEA_DEFAULTS.search(strip_noise(body, inline_code=False)))
+
+
+# El formato que upstream (scripts/pr-checks/pr-checks.js) acepta: "no" o la forma larga
+# "yes <—|–|->|→|-{1,2}|:> <que>, old behaviour kept behind (preference|pref|setting) <nombre>".
+RE_DEFAULTS_VALOR = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?Changes a default:[ \t]*(.*?)[ \t]*$", re.I | re.M)
+RE_DEFAULTS_NO = re.compile(r"^no\.?$", re.I)
+RE_DEFAULTS_YES = re.compile(r"^yes\b[ \t]*(?:—|–|->|→|-{1,2}|:)[ \t]*(.+)$", re.I)
+RE_DEFAULTS_PREF = re.compile(
+    r"^(.*?)[ ,;]*\bold (?:behaviou?r|value) kept behind "
+    r"(?:preference|pref|setting)[ \t]+`?([\w.:/-]+)`?\.?$", re.I)
+RE_PLACEHOLDER = re.compile(r"^<.*>$")
+
+
+def linea_defaults_malformada(body):
+    """True si la linea 'Changes a default:' existe pero NO matchea el formato de upstream.
+
+    Con la linea mal formada el check de upstream falla igual: avisarlo en el log es
+    mejor que esperar a ver el PR en rojo.
+    """
+    m = RE_DEFAULTS_VALOR.search(strip_noise(body, inline_code=False))
+    if not m:
+        return False
+    valor = m.group(1).replace("**", "").strip()
+    if RE_DEFAULTS_NO.match(valor):
+        return False
+    yes = RE_DEFAULTS_YES.match(valor)
+    if yes:
+        pref = RE_DEFAULTS_PREF.match(yes.group(1))
+        if pref and pref.group(1).strip() and not RE_PLACEHOLDER.match(pref.group(2)):
+            return False
+    return True
+
+
+def habla_de_defaults(*textos):
+    """True si alguno de los textos menciona un default o una preferencia: ahi, un 'no'
+    automatico es informacion falsa."""
+    for texto in textos:
+        if texto and RE_MENCIONA_DEFAULT.search(texto):
+            return True
+    return False
+
+
+def labels_de(pr):
+    """Los nombres de etiqueta de un PR (los devuelve 'gh pr list --json labels')."""
+    names = []
+    for l in (pr.get("labels") or []):
+        if isinstance(l, dict):
+            names.append(l.get("name") or "")
+        elif isinstance(l, str):
+            names.append(l)
+    return names
 
 
 def verdict_for(sha):
@@ -129,7 +419,8 @@ def enqueued_issues():
 
 def main():
     raw = gh("pr", "list", "--repo", REPO, "--author", "vdirienzo", "--state", "open",
-             "--limit", "30", "--json", "number,title,isDraft,body,headRefName")
+             "--limit", "30",
+             "--json", "number,title,isDraft,body,headRefName,headRefOid,labels")
     try:
         prs = json.loads(raw or "[]")
     except json.JSONDecodeError:
@@ -143,29 +434,73 @@ def main():
     verds = {}
     pendientes = 0
 
-    for pr in sorted(drafts, key=lambda p: p["number"]):
+    # El resumen de CI: el numero que al mantenedor le importa (a quien pinguear).
+    ci_conteo = {VERDE: 0, PENDIENTE: 0, ROJO: 0}
+    ci_rojos = []
+    ci_pendientes = []
+
+    for pr in sorted(prs, key=lambda p: p["number"]):
         num = pr["number"]
         body = pr.get("body") or ""
+        sha = pr.get("headRefOid") or ""
+
+        # 1. el estado del CI de GitHub en el HEAD SHA. Se mira en TODOS los PRs, no solo en
+        #    los draft: el resumen tiene que decir quien esta rojo y quien esta esperando.
+        if sha:
+            runs, error = fetch_check_runs(sha)
+            if error:
+                estado, detalle_ci = PENDIENTE, f"no pude leer los check-runs: {error}"
+            else:
+                estado, detalle_ci = evaluar_check_runs(runs)
+        else:
+            estado, detalle_ci = PENDIENTE, "no se pudo leer el HEAD SHA"
+
+        ci_conteo[estado] = ci_conteo.get(estado, 0) + 1
+        if estado == ROJO:
+            ci_rojos.append(num)
+        elif estado == PENDIENTE:
+            ci_pendientes.append(num)
+
+        if not pr.get("isDraft"):
+            continue
+
         iss = issue_of(body, num)
         if not iss:
             log(f"  PR #{num}: el body no referencia ningun issue -> no lo encolo")
             continue
 
-        # 1. el body tiene que cumplir lo que exige el CI upstream
-        if "Changes a default:" not in body:
-            nuevo = body.rstrip() + "\n\nChanges a default: no\n"
-            if gh("pr", "edit", str(num), "--repo", REPO, "--body", nuevo):
-                log(f"  PR #{num}: le agregue 'Changes a default: no' al body")
+        # 2. el body: la linea de defaults NO se inventa, la referencia al issue si.
+        edite = False
+        if not linea_defaults_presente(body):
+            # Un 'no' automatico puede ser FALSO (un PR que mete una preferencia nueva si
+            # cambia un default): mejor sin linea y con el PR en draft que con una linea
+            # mentida que pasa el check de upstream y vuelve marcada.
+            etiquetas = labels_de(pr)
+            if LABEL_CHANGES_DEFAULT in etiquetas:
+                pista = "el PR tiene la etiqueta 'changes-default'"
+            elif habla_de_defaults(body):
+                pista = "el PR habla de defaults/preferencias"
+            else:
+                pista = "el PR no dice nada de defaults, pero eso no alcanza para decir 'no'"
+            log(f"  PR #{num}: falta la linea 'Changes a default:' -> NO la invento "
+                f"({pista}): queda en draft y la linea la escribe el autor "
+                f"('no' o 'yes - <que>, old behaviour kept behind preference <nombre>')")
+        elif linea_defaults_malformada(body):
+            log(f"  PR #{num}: la linea 'Changes a default:' esta MAL FORMADA (el CI de "
+                f"upstream la va a rechazar) -> queda en draft y la reescribe el autor")
         if not re.search(r"(?:Fixes|Closes|Addresses|Refs)\s+#\d+", body):
+            # 'Addresses #N' es honesto: no reclama el cierre del issue.
             nuevo = body.rstrip() + f"\n\nAddresses #{iss}\n"
             if gh("pr", "edit", str(num), "--repo", REPO, "--body", nuevo):
                 log(f"  PR #{num}: le agregue la referencia al issue #{iss}")
+                edite = True
 
-        sha = gh("pr", "view", str(num), "--repo", REPO, "--json", "headRefOid")
-        sha = (json.loads(sha).get("headRefOid") if sha else None) or ""
+        if not sha:
+            sha = gh("pr", "view", str(num), "--repo", REPO, "--json", "headRefOid")
+            sha = (json.loads(sha).get("headRefOid") if sha else None) or ""
         v = verdict_for(sha)
         if v is None:
-            # 2. sin veredicto: encolar, salvo que la caja ya tengaenough trabajo
+            # 3. sin veredicto: encolar, salvo que la caja ya tenga enough trabajo
             if iss in queued:
                 continue
             if pendientes + len(queued) >= MAX_INFLIGHT:
@@ -180,16 +515,30 @@ def main():
             continue
 
         verds[num] = v
-        # 3. verde -> ready, con el veredicto en el comentario
+        # 4. verde local -> ready, con el veredicto en el comentario
         verde = v["verdict"].startswith("VERDE") or (
             v["status"] == "finished" and v["new_failures"] in ("0", ""))
         if not verde:
             log(f"  PR #{num} (issue #{iss}): gate {v['status']}/{v['verdict']} "
                 f"({v['new_failures']} fallos nuevos) -> sigue en draft")
             continue
-        if gh("pr", "ready", str(num), "--repo", REPO):
-            log(f"  PR #{num} (issue #{iss}): gate VERDE -> pasado a ready")
-        cuerpo = (f"Gate local en verde.\n\n"
+        if not linea_defaults_presente(body):
+            log(f"  PR #{num} (issue #{iss}): gate verde pero falta la linea "
+                f"'Changes a default:' -> sigue en draft (la linea la escribe el autor)")
+            continue
+        if edite:
+            # Se edito el body ahora: el workflow pr-checks vuelve a correr (types: edited) y
+            # su check todavia no existe. Promover ahora dejaria un check rojo en pantalla.
+            log(f"  PR #{num} (issue #{iss}): edite el body -> el CI de upstream vuelve a "
+                f"correr: lo promovio en la proxima pasada")
+            continue
+        if estado != VERDE:
+            log(f"  PR #{num} (issue #{iss}): gate local verde pero el CI de GitHub esta "
+                f"{estado.upper()} ({detalle_ci}) -> sigue en draft")
+            continue
+        if gh_ok("pr", "ready", str(num), "--repo", REPO):
+            log(f"  PR #{num} (issue #{iss}): gate VERDE y CI de GitHub VERDE -> pasado a ready")
+        cuerpo = (f"Gate local en verde y CI de GitHub en verde.\n\n"
                   f"- SHA: `{sha}`\n"
                   f"- Veredicto: `{v['verdict']}` (GATE_STATUS: {v['status']})\n"
                   f"- Fallos nuevos: {v['new_failures'] or '0'}\n"
@@ -198,6 +547,12 @@ def main():
 
     log(f"fin: {pendientes} encolado(s) ahora, {len(queued)} en la cola, "
         f"{len(verds)} con veredicto")
+    log(f"CI de GitHub (HEAD SHA): {ci_conteo[VERDE]} verde(s), "
+        f"{ci_conteo[PENDIENTE]} pendiente(s), {ci_conteo[ROJO]} rojo(s)")
+    if ci_rojos:
+        log(f"  PRs con el CI en rojo: {', '.join('#' + str(n) for n in ci_rojos)}")
+    if ci_pendientes:
+        log(f"  PRs con el CI pendiente: {', '.join('#' + str(n) for n in ci_pendientes)}")
     return 0
 
 
