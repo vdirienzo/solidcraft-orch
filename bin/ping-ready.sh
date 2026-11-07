@@ -41,20 +41,48 @@
 #      maintainer's decision). If the pull request already has that label, it
 #      does not ask for it.
 #   5. At the end it prints one summary line per pull request:
-#        <pr> <sha> <atras-de-main> <verde|rojo|pendiente> <si|no> LISTO|FALTA <que falta>
+#        <pr> <sha-corto> <n-atras> <si|no|desconocido> <verde|rojo|pendiente>
+#        <si|no> LISTO|FALTA <que falta>
 #      That summary is what the agent reads to decide who to ping.
 #
 # WHO GETS A COMMENT:
 #   Only the pull requests that are really ready: the CI of the head is
-#   green, the branch carries the current main and the pull request is not a
-#   draft. A pull request with a red CI or a stale branch is not pinged: it
-#   is reported in the summary as FALTA, with what is missing. That way the
-#   pull request does not collect a request that cannot be honoured yet, and
-#   it does not contradict the other CI comment the loop leaves
-#   (solidcraft-loop/bin/pr-comment.sh).
+#   green, the branch MERGES CLEANLY with the current main and the pull
+#   request is not a draft. The conflict is measured with `git merge-tree`,
+#   which says it exactly and without asking GitHub anything.
 #
-# IT WRITES NOTHING in the SolidCraft repo: only comments on the pull
-# requests. The scripts it touches live in the orchestrator (bin/).
+# WHY THE CONFLICT AND NOT THE "COMMITS BEHIND" (2026-11-08):
+#   "Behind main" is INFORMATION, not a block. Upstream merges very fast
+#   (81 new commits in five hours on 2026-11-07, with pull requests like
+#   #12377, #12515 and #12592), so demanding "0 behind" is a race that is
+#   always lost: by the time the comment is posted, main has moved again
+#   and every pull request looks stale. On 2026-11-07 all six open pull
+#   requests were blocked by that rule although their CI was green and
+#   they merged cleanly.
+#
+#   What the maintainer needs is a pull request that MERGES. That is what
+#   `git merge-tree --write-tree --name-only <head> origin/main` says, and
+#   it says it exactly. The number of commits behind is still measured and
+#   still printed, as data: the agent reads it, but it does not stop the
+#   ping.
+#
+#   A pull request with a red CI, or one whose branch CONFLICTS with the
+#   current main, is not pinged: it is reported in the summary as FALTA,
+#   with what is missing. That way the pull request does not collect a
+#   request that cannot be honoured yet, and it does not contradict the
+#   other CI comment the loop leaves (solidcraft-loop/bin/pr-comment.sh).
+#
+#   If the conflict can NOT be measured (no local clone, the fetch of
+#   origin failed, git too old, the head is not in the clone), the state is
+#   'desconocido' and the pull request is NOT pinged: it is a safe failure,
+#   it never asks for a review of something that could not be checked, and
+#   the summary says so.
+#
+# IT WRITES NOTHING in the SolidCraft working tree: only comments on the
+# pull requests. In the local clone of the SolidCraft it only READS the
+# history and asks git for a merge that is never made (`merge-tree` writes
+# an object and touches no branch). The scripts it touches live in the
+# orchestrator (bin/).
 #
 # EXIT CODE:
 #   0  every pull request ended with its comment (or there was nothing to do)
@@ -72,6 +100,13 @@ ORCH_DIR="${ORCH_DIR:-$(dirname "$HERE")}"
 REPO="${REPO:-tangency-labs/solidcraft}"
 AUTHOR="${AUTHOR:-vdirienzo}"
 GH_BIN="${GH_BIN:-gh}"
+# The local clone of the upstream. The conflict with main is measured there
+# with `git merge-tree`: it says exactly if the branch merges, it does not
+# touch the network of GitHub and it does not touch any branch or the
+# working tree. GIT_BIN and LOCAL_REPO can be pointed somewhere else (the
+# tests do it with a stub).
+GIT_BIN="${GIT_BIN:-git}"
+LOCAL_REPO="${LOCAL_REPO:-/home/user/solidcraft}"
 CI_LABEL="approved-for-ci"
 
 say(){ printf '[%s] %s\n' "$(date -Is)" "$*" >&2; }
@@ -83,6 +118,9 @@ uso: ping-ready.sh [--dry-run] [--report] [<pr> ...]
   --dry-run  prints what it would do, without commenting anything
   --report   prints only the summary, without commenting anything
   (with no <pr>: it lists them with gh pr list --author vdirienzo --state open)
+  se pinguea si el CI del head esta verde y la rama MERGEA LIMPIO con main
+  (el conflicto se mide con git merge-tree; 'commits atras' es dato, no bloqueo)
+  resumen: <pr> <sha> <n-atras> <si|no|desconocido> <verde|rojo|pendiente> <si|no> LISTO|FALTA <que falta>
 USAGE
 }
 
@@ -343,6 +381,82 @@ fetch_comments(){
 }
 
 # ---------------------------------------------------------------------------
+# el conflicto con main: git merge-tree
+#
+# 'commits atras' es INFORMACION, no un bloqueo (upstream mergea rapido: 81
+# commits nuevos en cinco horas el 2026-11-07). Lo que decide si el
+# mantenedor puede mergear es si la rama CONFLICTA con el main actual, y
+# eso lo dice exactamente, sin tocar la red de GitHub:
+#
+#   git merge-tree --write-tree --name-only <head-sha> origin/main
+#
+#   rc=0  la rama mergea limpio
+#   rc=1  la rama CONFLICTA
+#   rc>1  no se pudo medir (git viejo, sha que no esta, error)
+#
+# merge-tree escribe un objeto en el repo y NO toca ninguna rama ni el
+# working tree: es seguro.
+#
+# Si el conflicto NO se puede medir, el estado es 'desconocido' y el PR NO
+# se pinguea (fallo seguro): no se pide revisar algo que no se pudo
+# comprobar. El resumen lo dice.
+# ---------------------------------------------------------------------------
+MAIN_STATE="pendiente"
+
+# El main de referencia tiene que estar al dia: se trae una vez por corrida.
+prepare_main(){
+  case "$MAIN_STATE" in
+    listo) return 0 ;;
+    sin-repo|sin-fetch) return 1 ;;
+  esac
+  if ! "$GIT_BIN" -C "$LOCAL_REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    say "no hay repo local en $LOCAL_REPO: el conflicto con main no se puede medir"
+    MAIN_STATE="sin-repo"
+    return 1
+  fi
+  if ! "$GIT_BIN" -C "$LOCAL_REPO" fetch --no-tags --quiet origin main >/dev/null 2>&1; then
+    say "el fetch de origin/main fallo: el conflicto con main no se puede medir"
+    MAIN_STATE="sin-fetch"
+    return 1
+  fi
+  MAIN_STATE="listo"
+  return 0
+}
+
+# $1 = pr, $2 = head sha. Imprime: si | no | desconocido
+conflict_state(){
+  local pr="$1" sha="$2" rc
+  if ! prepare_main; then
+    printf 'desconocido\n'
+    return 0
+  fi
+  # el head tiene que estar en el repo local: si no esta, se trae la
+  # referencia del pull request (GitHub la publica)
+  if ! "$GIT_BIN" -C "$LOCAL_REPO" cat-file -e "$sha^{commit}" >/dev/null 2>&1; then
+    "$GIT_BIN" -C "$LOCAL_REPO" fetch --no-tags --quiet origin "refs/pull/$pr/head" \
+      >/dev/null 2>&1 || :
+  fi
+  if ! "$GIT_BIN" -C "$LOCAL_REPO" cat-file -e "$sha^{commit}" >/dev/null 2>&1; then
+    say "PR #$pr: el head $sha no esta en el repo local: el conflicto es desconocido"
+    printf 'desconocido\n'
+    return 0
+  fi
+  "$GIT_BIN" -C "$LOCAL_REPO" merge-tree --write-tree --name-only "$sha" origin/main \
+    > "$TMP/merge-tree.out" 2> "$TMP/merge-tree.err"
+  rc=$?
+  case "$rc" in
+    0)
+      printf 'no\n' ;;
+    1)
+      say "PR #$pr: la rama CONFLICTA con origin/main: $(head -3 "$TMP/merge-tree.out" | tr '\n' ' ')"
+      printf 'si\n' ;;
+    *)
+      say "PR #$pr: merge-tree fallo (rc=$rc): $(head -1 "$TMP/merge-tree.err")"
+      printf 'desconocido\n' ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # la cadena de merges de main
 #
 # Un head que es un merge de main puede arrastrar el resultado del heavy CI
@@ -417,7 +531,7 @@ build_body(){
       *)
         printf -- '- The heavy CI (native tests, native clippy) has not run on this head.\n' ;;
     esac
-    printf -- '- This branch already contains the current `main`.\n\n'
+    printf -- '- This branch merges cleanly with the current `main`.\n\n'
     if [ "$label" = "no" ]; then
       printf 'Please add the `approved-for-ci` label to this pull request. That is the only thing missing on our side.\n\n'
     else
@@ -429,13 +543,34 @@ build_body(){
 
 # ---------------------------------------------------------------------------
 # the summary
+#
+#   <pr> <sha-corto> <n-atras> <si|no|desconocido> <verde|rojo|pendiente>
+#   <si|no> LISTO|FALTA <que falta>
+#
+# 'n-atras' (cuantos commits esta la rama atras de main) es DATO, no un
+# bloqueo: sale siempre, pero no decide el veredicto. 'si|no|desconocido' es
+# el conflicto con main: 'si' hay conflicto, 'no' no hay, 'desconocido' no
+# se pudo medir. El '<si|no>' de adelante es si el PR ya tiene el label
+# approved-for-ci.
 # ---------------------------------------------------------------------------
 resumen(){
-  # $1 pr, $2 sha, $3 behind, $4 ci, $5 label, $6 LISTO|FALTA, $7 what is missing
-  if [ -n "${7:-}" ]; then
-    printf '%s %s %s %s %s %s %s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7"
+  # $1 pr, $2 sha, $3 behind, $4 conflicto, $5 ci, $6 label, $7 LISTO|FALTA,
+  # $8 que falta
+  local pr="$1" sha="${2:-?}" behind="${3:-?}" conflicto="${4:-?}" ci="${5:-?}"
+  local label="${6:-?}" veredicto="${7:-FALTA}" razon="${8:-}"
+  local corto atras
+  corto="$sha"
+  [ "${#corto}" -gt 12 ] && corto="${corto:0:12}"
+  case "$behind" in
+    ''|*[!0-9]*) atras="? atras" ;;
+    *)            atras="$behind atras" ;;
+  esac
+  if [ -n "$razon" ]; then
+    printf '%s %s %s %s %s %s %s %s\n' "$pr" "$corto" "$atras" "$conflicto" "$ci" \
+      "$label" "$veredicto" "$razon"
   else
-    printf '%s %s %s %s %s %s\n' "$1" "$2" "$3" "$4" "$5" "$6"
+    printf '%s %s %s %s %s %s %s\n' "$pr" "$corto" "$atras" "$conflicto" "$ci" \
+      "$label" "$veredicto"
   fi
 }
 
@@ -472,7 +607,7 @@ for pr in "${PRS[@]}"; do
   if ! "$GH_BIN" pr view "$pr" --repo "$REPO" \
        --json number,title,headRefOid,labels,isDraft,state > "$d/pr.json" 2> "$d/pr.err"; then
     say "PR #$pr: no se pudo leer: $(head -1 "$d/pr.err")"
-    resumen "$pr" "?" "?" "?" "?" "FALTA" "no se pudo leer el PR"
+    resumen "$pr" "?" "?" "?" "?" "?" "FALTA" "no se pudo leer el PR"
     FAILED=1
     continue
   fi
@@ -486,26 +621,31 @@ except Exception:
 print(d.get("headRefOid") or "")' "$d/pr.json")"
   if [ -z "$sha" ]; then
     say "PR #$pr: no tiene head sha"
-    resumen "$pr" "?" "?" "?" "?" "FALTA" "no se pudo leer el head sha"
+    resumen "$pr" "?" "?" "?" "?" "?" "FALTA" "no se pudo leer el head sha"
     FAILED=1
     continue
   fi
 
   fetch_check_runs "$sha" "$d/runs.jsonl" || {
-    resumen "$pr" "$sha" "?" "?" "?" "FALTA" "no se pudieron leer los check-runs"
+    resumen "$pr" "$sha" "?" "?" "?" "?" "FALTA" "no se pudieron leer los check-runs"
     FAILED=1
     continue
   }
   fetch_comments "$pr" "$d/comments.jsonl" || {
-    resumen "$pr" "$sha" "?" "?" "?" "FALTA" "no se pudieron leer los comentarios"
+    resumen "$pr" "$sha" "?" "?" "?" "?" "FALTA" "no se pudieron leer los comentarios"
     FAILED=1
     continue
   }
+  # El conflicto con main: lo decide git merge-tree, no el campo 'mergeable'
+  # de la API (ese campo puede ser UNKNOWN mientras GitHub recalcula, y
+  # UNKNOWN NO es un conflicto).
+  CONFLICT="$(conflict_state "$pr" "$sha")"
   if ! "$GH_BIN" api "repos/$REPO/compare/main...$sha" > "$d/compare.json" 2> "$d/compare.err"; then
+    # 'cuantos commits atras' es DATO: si no se pudo medir, el PR sigue
+    # evaluado (el CI y el conflicto son los que bloquean).
     say "PR #$pr: la comparacion con main fallo: $(head -1 "$d/compare.err")"
-    resumen "$pr" "$sha" "?" "?" "?" "FALTA" "no se pudo comparar con main"
+    : > "$d/compare.json"
     FAILED=1
-    continue
   fi
   "$GH_BIN" api "repos/$REPO/commits/$sha" > "$d/commit.json" 2>/dev/null || : > "$d/commit.json"
 
@@ -541,6 +681,9 @@ print(d.get("headRefOid") or "")' "$d/pr.json")"
   fi
 
   # --- the verdict ---------------------------------------------------------
+  # 'commits atras' NO bloquea: es informacion (upstream mergea rapido y una
+  # rama siempre queda atras). Bloquea el CI que no esta verde y la rama que
+  # CONFLICTA con main.
   FALTAN=()
   if [ "$CI" != "verde" ]; then
     case "$CI" in
@@ -549,16 +692,21 @@ print(d.get("headRefOid") or "")' "$d/pr.json")"
       *)         FALTAN+=("el CI esta $CI") ;;
     esac
   fi
-  if [ "$BEHIND" != "0" ]; then
-    FALTAN+=("la rama esta ${BEHIND} commits atras de main")
-  fi
+  case "$CONFLICT" in
+    si)          FALTAN+=("la rama conflictua con main") ;;
+    desconocido) FALTAN+=("el conflicto con main no se pudo medir") ;;
+  esac
   if [ "$DRAFT" = "si" ]; then
     FALTAN+=("el PR es un draft")
   fi
 
   if [ "${#FALTAN[@]}" -eq 0 ]; then
     VERDICTO="LISTO"
-    RAZON=""
+    if [ "$LABEL" = "si" ]; then
+      RAZON="nada, listo para revisar"
+    else
+      RAZON="falta el label approved-for-ci"
+    fi
   else
     VERDICTO="FALTA"
     RAZON="$(printf '%s; ' "${FALTAN[@]}")"
@@ -566,7 +714,7 @@ print(d.get("headRefOid") or "")' "$d/pr.json")"
   fi
 
   # --- the comment ---------------------------------------------------------
-  if [ "$CI" = "verde" ] && [ "$BEHIND" = "0" ] && [ "$DRAFT" != "si" ]; then
+  if [ "$CI" = "verde" ] && [ "$CONFLICT" = "no" ] && [ "$DRAFT" != "si" ]; then
     if [ "$ALREADY" = "si" ]; then
       say "PR #$pr: ya tiene el comentario de este head ($sha): no se comenta otra vez"
     else
@@ -612,7 +760,7 @@ print(d.get("headRefOid") or "")' "$d/pr.json")"
     say "PR #$pr: no se pinguea todavia (${RAZON:-sin estado})"
   fi
 
-  resumen "$pr" "$sha" "$BEHIND" "$CI" "$LABEL" "$VERDICTO" "$RAZON"
+  resumen "$pr" "$sha" "$BEHIND" "$CONFLICT" "$CI" "$LABEL" "$VERDICTO" "$RAZON"
 done
 
 if [ "$FAILED" -ne 0 ]; then

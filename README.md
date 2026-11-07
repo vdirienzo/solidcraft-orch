@@ -196,14 +196,25 @@ bash bin/ping-ready-report.sh       # solo el resumen, sin tocar GitHub
 El resumen es una linea por PR, y es lo que el agente lee para decidir a quien pinguear:
 
 ```
-<pr> <sha> <atras-de-main> <verde|rojo|pendiente> <si|no> LISTO|FALTA <que falta>
+<pr> <sha-corto> <n-atras> <si|no|desconocido> <verde|rojo|pendiente> <si|no> LISTO|FALTA <que falta>
 ```
 
-El `si|no` es si el PR ya tiene el label `approved-for-ci`. Un `FALTA` dice que falta de NUESTRO
-lado (el CI en rojo, la rama atrasada de main). El script NO pide merge: la merge es del
-maintainer. El estado del CI se lee de los check-runs del HEAD SHA agrupados por nombre (gana el
-mas reciente), nunca del rollup: el rollup mezcla el `cancelled` de un run viejo con el `success`
-del nuevo y muestra rojo un PR que esta verde.
+- `<n-atras>` son los commits que la rama esta atras de main. Es DATO, no un bloqueo: upstream
+  mergea muy rapido (81 commits nuevos en cinco horas el 2026-11-07), asi que exigir "0 atras"
+  es una carrera que se pierde siempre. Sale igual, para que el agente lo sepa.
+- `<si|no|desconocido>` es el CONFLICTO con main: `si` hay conflicto, `no` la rama mergea
+  limpio, `desconocido` no se pudo medir. Lo decide `git merge-tree --write-tree --name-only
+  <head-sha> origin/main` en el clon local de SolidCraft (rc=0 limpio, rc=1 conflicto). Si no se
+  puede medir, el PR NO se pinguea (fallo seguro) y el resumen lo dice.
+- El `<si|no>` que sigue es si el PR ya tiene el label `approved-for-ci`.
+- `LISTO` significa que se pinguea. `que falta` dice que falta: `falta el label
+  approved-for-ci` o `nada, listo para revisar`.
+
+Lo que BLOQUEA el ping es solo esto: el CI del head SHA esta rojo o tiene un check en curso, o la
+rama CONFLICTA con `origin/main`. Un `FALTA` dice que falta de NUESTRO lado. El script NO pide
+merge: la merge es del maintainer. El estado del CI se lee de los check-runs del HEAD SHA agrupados
+por nombre (gana el mas reciente), nunca del rollup: el rollup mezcla el `cancelled` de un run viejo
+con el `success` del nuevo y muestra rojo un PR que esta verde.
 
 ## 5. Que NO se versiona (se regenera en cada PC)
 

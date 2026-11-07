@@ -34,7 +34,21 @@
 #     f) a pull request that gh cannot read -> the script goes on with the
 #        others and exits with a code that is not 0.
 #
-# NOTHING IN THIS SCRIPT TOUCHES THE NETWORK: the gh is a stub.
+#   And the rule that replaced '0 commits behind' (2026-11-08):
+#     g) a branch 81 commits behind main that MERGES CLEANLY -> it IS
+#        pinged and the summary says LISTO (behind is DATA, not a block:
+#        upstream merges so fast that "0 behind" is a race that is always
+#        lost);
+#     h) a branch that CONFLICTS with main -> it is NOT pinged and the
+#        summary says FALTA naming the conflict;
+#     i) a CI that is still running -> it is NOT pinged and the summary
+#        says PENDIENTE;
+#     j) a conflict that can NOT be measured (no clone, fetch failed, git
+#        too old) -> 'desconocido', NOT pinged: a safe failure.
+#
+# NOTHING IN THIS SCRIPT TOUCHES THE NETWORK: the gh is a stub AND the git
+# is a stub (the conflict with main is measured with 'git merge-tree', and
+# the stub decides what it answers).
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -232,6 +246,78 @@ err("unknown command: %s" % " ".join(args))
 STUB
 chmod +x "$TMP/gh"
 
+# -----------------------------------------------------------------------
+# el stub de git
+#
+# El conflicto con main lo decide 'git merge-tree'. El stub lo simula con
+# archivos dentro de $STUB_DIR/git/:
+#
+#   no-repo            el repo local no sirve (rev-parse falla)
+#   no-fetch           el fetch de origin/main falla
+#   missing/<sha>      el head no esta en el repo local
+#   conflict/<sha>     merge-tree sale con 1: la rama CONFLICTA con main
+#   error/<sha>        merge-tree sale con 128: no se pudo medir
+#
+# Por defecto merge-tree sale con 0: la rama mergea limpio con main.
+# El stub deja en git-calls.log cada llamada, para que el test vea que se
+# midio el conflicto con merge-tree y no con el campo 'mergeable' de la API.
+# -----------------------------------------------------------------------
+cat > "$TMP/git" <<'STUB'
+#!/usr/bin/env bash
+D="${STUB_DIR:-.}"
+args=("$@")
+if [ "${args[0]:-}" = "-C" ]; then
+  dir="${args[1]:-}"; args=("${args[@]:2}")
+else
+  dir="."
+fi
+cmd="${args[0]:-}"
+printf '%s %s\n' "$cmd" "${args[*]:-}" >> "$D/git-calls.log"
+case "$cmd" in
+  rev-parse)
+    if [ -f "$D/git/no-repo" ] || [ ! -d "$dir" ]; then
+      echo "fatal: not a git repository" >&2
+      exit 128
+    fi
+    printf '%s/.git\n' "$dir"; exit 0 ;;
+  fetch)
+    if [ -f "$D/git/no-fetch" ]; then
+      echo "fatal: could not fetch from origin" >&2
+      exit 128
+    fi
+    exit 0 ;;
+  cat-file)
+    sha="${args[2]:-}"; sha="${sha%^*}"
+    if [ -f "$D/git/missing/$sha" ]; then exit 1; fi
+    exit 0 ;;
+  merge-tree)
+    sha=""
+    for a in "${args[@]:1}"; do
+      case "$a" in
+        [0-9a-f]*) sha="$a"; break ;;
+      esac
+    done
+    if [ -f "$D/git/conflict/$sha" ]; then
+      printf 'cafebabe00000000000000000000000000000000\nsrc/file.rs\n'
+      exit 1
+    fi
+    if [ -f "$D/git/error/$sha" ]; then
+      echo "fatal: not a valid object name" >&2
+      exit 128
+    fi
+    printf 'cafebabe00000000000000000000000000000000\n'
+    exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$TMP/git"
+
+# El conflicto con main se mide con el stub: el test NO toca la red ni el
+# repo real de SolidCraft.
+export GIT_BIN="$TMP/git"
+export LOCAL_REPO="$TMP/local-repo"
+mkdir -p "$LOCAL_REPO"
+
 # ---------------------------------------------------------------------------
 # los datos de cada caso
 # ---------------------------------------------------------------------------
@@ -245,6 +331,9 @@ SHA_A="1111111111111111111111111111111111111111"
 SHA_B="2222222222222222222222222222222222222222"
 SHA_OLD="9999999999999999999999999999999999999999"
 SHA_PARENT="8888888888888888888888888888888888888888"
+# el resumen imprime el sha corto
+SHORT_A="${SHA_A:0:12}"
+SHORT_B="${SHA_B:0:12}"
 
 run_check(){ # $1 nombre, $2 conclusion, $3 completed_at, $4 id, $5 status
   python3 - "$1" "$2" "$3" "$4" "${5:-completed}" <<'PY'
@@ -252,6 +341,15 @@ import json, sys
 name, conclusion, completed, rid, status = sys.argv[1:6]
 print(json.dumps({"name": name, "status": status, "conclusion": conclusion,
                   "completed_at": completed, "started_at": completed, "id": int(rid)}))
+PY
+}
+
+run_running(){ # $1 nombre, $2 started_at, $3 id: un check que CORRE ahora
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, sys
+name, started, rid = sys.argv[1:4]
+print(json.dumps({"name": name, "status": "in_progress", "conclusion": None,
+                  "started_at": started, "completed_at": None, "id": int(rid)}))
 PY
 }
 
@@ -280,6 +378,11 @@ CHECKS_C2="$CHECKS_C2$(run_check 'Native Linux Clippy' skipped 2026-11-07T15:28:
 CHECKS_PARENT="[$(run_check 'ci' success 2026-11-07T15:20:00Z 700),"
 CHECKS_PARENT="$CHECKS_PARENT$(run_check 'Native Linux tests' success 2026-11-07T15:19:00Z 600),"
 CHECKS_PARENT="$CHECKS_PARENT$(run_check 'Native Linux Clippy' success 2026-11-07T15:19:30Z 610)]"
+
+# (i) el CI CORRE: uno verde viejo y uno in_progress mas nuevo -> PENDIENTE.
+CHECKS_PENDIENTE="[$(run_check 'ci' success 2026-11-07T15:34:38Z 900),"
+CHECKS_PENDIENTE="$CHECKS_PENDIENTE$(run_check 'Quick compile' success 2026-11-07T15:30:46Z 830),"
+CHECKS_PENDIENTE="$CHECKS_PENDIENTE$(run_running 'ci' 2026-11-07T16:02:11Z 950)]"
 
 # el escenario base: un PR verde sin label.
 setup_base(){ # $1 = stub dir, $2 = sha
@@ -318,7 +421,7 @@ if printf '%s' "$body" | grep -qi 'CI on this head: red\|CI is red\|rojo'; then
 else
   ok "(a) el comentario NO dice que el CI esta rojo"
 fi
-if printf '%s' "$out" | grep -q "^12891 $SHA_A 0 verde no LISTO"; then
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no verde no LISTO"; then
   ok "(a) el resumen dice verde y LISTO"
 else
   no "(a) el resumen dice verde y LISTO" "$out"
@@ -332,7 +435,7 @@ setup_base "$D" "$SHA_A"
 printf '%s' "$CHECKS_B" > "$D/checkruns/$SHA_A.json"
 out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$PING_READY" 12891 2>"$D/err")"
 rc=$?
-if printf '%s' "$out" | grep -q "^12891 $SHA_A 0 rojo no FALTA"; then
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no rojo no FALTA"; then
   ok "(b) el resumen dice ROJO y FALTA"
 else
   no "(b) el resumen dice ROJO y FALTA" "$out"
@@ -367,7 +470,7 @@ elif printf '%s' "$body" | grep -qi 'add the .approved-for-ci. label\|please add
 else
   ok "(c) el comentario NO pide el label"
 fi
-if printf '%s' "$out" | grep -q "^12891 $SHA_A 0 verde si LISTO"; then
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no verde si LISTO"; then
   ok "(c) el resumen dice que el label esta puesto"
 else
   no "(c) el resumen dice que el label esta puesto" "$out"
@@ -480,7 +583,7 @@ if printf '%s' "$out" | grep -q '^12891 .* FALTA '; then
 else
   no "(f) el PR ilegible sale como FALTA en el resumen" "$out"
 fi
-if printf '%s' "$out" | grep -q "^12574 $SHA_A 0 verde no LISTO"; then
+if printf '%s' "$out" | grep -q "^12574 $SHORT_A 0 atras no verde no LISTO"; then
   ok "(f) el script sigue con los demas PRs"
 else
   no "(f) el script sigue con los demas PRs" "$out"
@@ -562,7 +665,7 @@ if printf '%s' "$out" | grep -q 'ping-ready: sha='; then
 else
   no "(--dry-run) imprime lo que haria" "$out"
 fi
-if printf '%s' "$out" | grep -q "^12891 $SHA_A 0 verde no LISTO"; then
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no verde no LISTO"; then
   ok "(--dry-run) imprime tambien el resumen"
 else
   no "(--dry-run) imprime tambien el resumen" "$out"
@@ -576,7 +679,7 @@ if [ ! -s "$D/comment-calls.log" ]; then
 else
   no "(--report) no comenta nada" "$(cat "$D/comment-calls.log")"
 fi
-if printf '%s' "$out" | grep -q "^12891 $SHA_A 0 verde no LISTO"; then
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no verde no LISTO"; then
   ok "(--report) imprime el resumen"
 else
   no "(--report) imprime el resumen" "$out"
@@ -587,7 +690,7 @@ if [ -f "$REPORT" ]; then
   D="$(mkstub rep2)"
   setup_base "$D" "$SHA_A"
   out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$REPORT" 12891 2>"$D/err")"
-  if [ ! -s "$D/comment-calls.log" ] && printf '%s' "$out" | grep -q "^12891 $SHA_A 0 verde no LISTO"; then
+  if [ ! -s "$D/comment-calls.log" ] && printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no verde no LISTO"; then
     ok "(ping-ready-report.sh) imprime el resumen y no comenta"
   else
     no "(ping-ready-report.sh) imprime el resumen y no comenta" "$out"
@@ -597,16 +700,151 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# una rama atrasada de main no es LISTO
+# (g) una rama 81 commits atras pero SIN conflicto: SE PINGUEA
+#
+# 'commits atras' es DATO, no un bloqueo. Upstream mergea tan rapido (81
+# commits nuevos en cinco horas el 2026-11-07) que exigir '0 atras' es una
+# carrera que se pierde siempre: el 2026-11-07 el script bloqueo los seis
+# PRs abiertos con 'la rama esta 81 commits atras de main' aunque su CI
+# estaba verde y mergeaban limpio con main.
 # ---------------------------------------------------------------------------
 D="$(mkstub behind)"
 setup_base "$D" "$SHA_A"
-printf '%s' '{"behind_by": 7, "ahead_by": 3}' > "$D/compare/$SHA_A.json"
+printf '%s' '{"behind_by": 81, "ahead_by": 3}' > "$D/compare/$SHA_A.json"
 out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$PING_READY" 12891 2>"$D/err")"
-if printf '%s' "$out" | grep -q "^12891 $SHA_A 7 verde no FALTA" && printf '%s' "$out" | grep -q 'atras de main'; then
-  ok "(behind) una rama atrasada de main sale como FALTA con el numero"
+rc=$?
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 81 atras no verde no LISTO"; then
+  ok "(g) una rama 81 atras y sin conflicto sale LISTO"
 else
-  no "(behind) una rama atrasada de main sale como FALTA con el numero" "$out"
+  no "(g) una rama 81 atras y sin conflicto sale LISTO" "$out"
+fi
+if grep -q '^12891	' "$D/comment-calls.log" 2>/dev/null; then
+  ok "(g) una rama 81 atras y sin conflicto SE PINGUEA"
+else
+  no "(g) una rama 81 atras y sin conflicto SE PINGUEA" "$(cat "$D/comment-calls.log" 2>/dev/null)"
+fi
+if printf '%s' "$out" | grep -q 'falta el label approved-for-ci'; then
+  ok "(g) el resumen dice que falta el label"
+else
+  no "(g) el resumen dice que falta el label" "$out"
+fi
+if printf '%s' "$out" | grep -qi 'atras de main'; then
+  no "(g) el resumen NO reporta la atraso como FALTA" "$out"
+else
+  ok "(g) el resumen NO reporta la atraso como FALTA"
+fi
+[ "$rc" -eq 0 ] && ok "(g) el script sale con 0" || no "(g) el script sale con 0" "rc=$rc"
+
+# ---------------------------------------------------------------------------
+# (h) una rama que CONFLICTA con main: NO se pinguea
+# ---------------------------------------------------------------------------
+D="$(mkstub conflict)"
+setup_base "$D" "$SHA_A"
+mkdir -p "$D/git/conflict"
+: > "$D/git/conflict/$SHA_A"
+out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$PING_READY" 12891 2>"$D/err")"
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras si verde no FALTA"; then
+  ok "(h) una rama que CONFLICTA con main sale FALTA"
+else
+  no "(h) una rama que CONFLICTA con main sale FALTA" "$out"
+fi
+if printf '%s' "$out" | grep -q 'la rama conflictua con main'; then
+  ok "(h) el resumen NOMBRA el conflicto"
+else
+  no "(h) el resumen NOMBRA el conflicto" "$out"
+fi
+if [ -s "$D/comment-calls.log" ]; then
+  no "(h) una rama que conflictua NO se pinguea" "$(cat "$D/comment-calls.log")"
+else
+  ok "(h) una rama que conflictua NO se pinguea"
+fi
+if grep -q 'merge-tree' "$D/git-calls.log" 2>/dev/null; then
+  ok "(h) el conflicto se midio con git merge-tree"
+else
+  no "(h) el conflicto se midio con git merge-tree" "$(cat "$D/git-calls.log" 2>/dev/null)"
+fi
+
+# ---------------------------------------------------------------------------
+# (i) el CI esta CORRIENDO: NO se pinguea, dice pendiente
+# ---------------------------------------------------------------------------
+D="$(mkstub pending)"
+setup_base "$D" "$SHA_A"
+printf '%s' "$CHECKS_PENDIENTE" > "$D/checkruns/$SHA_A.json"
+out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$PING_READY" 12891 2>"$D/err")"
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no pendiente no FALTA"; then
+  ok "(i) el CI en curso sale PENDIENTE y FALTA"
+else
+  no "(i) el CI en curso sale PENDIENTE y FALTA" "$out"
+fi
+if printf '%s' "$out" | grep -q 'el CI esta pendiente'; then
+  ok "(i) el resumen dice que el CI esta pendiente"
+else
+  no "(i) el resumen dice que el CI esta pendiente" "$out"
+fi
+if [ -s "$D/comment-calls.log" ]; then
+  no "(i) con el CI en curso NO se pinguea" "$(cat "$D/comment-calls.log")"
+else
+  ok "(i) con el CI en curso NO se pinguea"
+fi
+
+# ---------------------------------------------------------------------------
+# (j) el conflicto NO se pudo medir: 'desconocido' y NO se pinguea
+#
+# Es el fallo seguro: si no se puede comprobar que la rama mergea, no se
+# pide revisar. El resumen lo dice.
+# ---------------------------------------------------------------------------
+D="$(mkstub unknown)"
+setup_base "$D" "$SHA_A"
+mkdir -p "$D/git/error"
+: > "$D/git/error/$SHA_A"
+out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$PING_READY" 12891 2>"$D/err")"
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras desconocido verde no FALTA"; then
+  ok "(j) un conflicto que no se pudo medir sale desconocido y FALTA"
+else
+  no "(j) un conflicto que no se pudo medir sale desconocido y FALTA" "$out"
+fi
+if printf '%s' "$out" | grep -q 'el conflicto con main no se pudo medir'; then
+  ok "(j) el resumen dice que el conflicto no se pudo medir"
+else
+  no "(j) el resumen dice que el conflicto no se pudo medir" "$out"
+fi
+if [ -s "$D/comment-calls.log" ]; then
+  no "(j) con el conflicto desconocido NO se pinguea" "$(cat "$D/comment-calls.log")"
+else
+  ok "(j) con el conflicto desconocido NO se pinguea"
+fi
+
+# (j2) sin repo local: el conflicto tampoco se puede medir
+D="$(mkstub norepo)"
+setup_base "$D" "$SHA_A"
+out="$(LOCAL_REPO="$TMP/no-existe-local" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 12891 2>"$D/err")"
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras desconocido verde no FALTA"; then
+  ok "(j2) sin repo local el conflicto sale desconocido"
+else
+  no "(j2) sin repo local el conflicto sale desconocido" "$out"
+fi
+if [ -s "$D/comment-calls.log" ]; then
+  no "(j2) sin repo local NO se pinguea" "$(cat "$D/comment-calls.log")"
+else
+  ok "(j2) sin repo local NO se pinguea"
+fi
+
+# (j3) el fetch de origin falla: tambien es desconocido
+D="$(mkstub nofetch)"
+setup_base "$D" "$SHA_A"
+mkdir -p "$D/git"
+: > "$D/git/no-fetch"
+out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$PING_READY" 12891 2>"$D/err")"
+if printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras desconocido verde no FALTA"; then
+  ok "(j3) con el fetch caido el conflicto sale desconocido"
+else
+  no "(j3) con el fetch caido el conflicto sale desconocido" "$out"
+fi
+if [ -s "$D/comment-calls.log" ]; then
+  no "(j3) con el fetch caido NO se pinguea" "$(cat "$D/comment-calls.log")"
+else
+  ok "(j3) con el fetch caido NO se pinguea"
 fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
