@@ -197,4 +197,85 @@ fi
 # a child and this script exits with its code, so the trap fires and the
 # token comes back whatever happens.
 bash "$GATE_SCRIPT" --slot "$ISSUE" "$BASE" "$SHA"
-exit $?
+GATE_RC=$?
+
+# ---------------------------------------------------------------------------
+# THE EFFECTIVE VERDICT (2026-11-07).
+#
+# The gate leaves the RAW verdict (scope.verdict) and NOTHING wrote the
+# EFFECTIVE one (scope.effective.verdict): the raw one counts EVERY failure
+# of the scope, including the ones that origin/main already had broken, so
+# every pull request of ours came out ROJO for reasons that have nothing to
+# do with the change, and the pipeline (and the daily report) read that raw
+# verdict. gate-baseline.sh writes the effective one next to the raw one
+# (the raw one minus the failures that were already failing in origin/main)
+# and it is the one that counts. It is called HERE, at the end of the gate,
+# because the gate is the thing that knows that the slot has a verdict.
+#
+# THE NAME OF THE SLOT: gate-quick.sh normalizes the name before it writes
+# the verdict (lowercase, [a-z0-9._-], 60 characters at most), so the
+# verdict is in $LOOP_DIR/gates/<nombre normalizado>/scope.verdict and NOT
+# in gates/<$ISSUE>/. The normalized name is taken from the target
+# directory of the slot, which is <base>/slot-<nombre normalizado>: the
+# same rule, in the same helper (slot-target-dir.sh).
+# ---------------------------------------------------------------------------
+SLOT_REAL="$(basename "${CARGO_TARGET_DIR:-}")"
+SLOT_REAL="${SLOT_REAL#slot-}"
+
+# Two SHAs are the same commit when one is the prefix of the other: the
+# gate writes the SHA it was given and the queue can carry an abbreviated
+# one. A SHA that is a prefix of another is NOT the same commit (a SHA of
+# 7 characters is a prefix of MANY commits), so only the long one can
+# match the short one.
+same_sha() {
+  local a="${1:-}" b="${2:-}"
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  [ "$a" = "$b" ] && return 0
+  case "$a" in "$b"*) [ ${#b} -ge 7 ] && return 0 ;; esac
+  case "$b" in "$a"*) [ ${#a} -ge 7 ] && return 0 ;; esac
+  return 1
+}
+
+# The effective verdict is only written for the verdict of THIS run: the
+# raw file of the slot can be the one of a previous run (the gate that
+# died before writing its own leaves the old one there), and the effective
+# verdict of ANOTHER commit is worse than none.
+verdict_is_ours() {
+  local f="$1" sha
+  [ -f "$f" ] || return 1
+  sha="$(grep -E '^SHA=' "$f" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+  same_sha "$sha" "$SHA"
+}
+
+RAW_VERDICT="$LOOP_DIR/gates/$SLOT_REAL/scope.verdict"
+if ! verdict_is_ours "$RAW_VERDICT"; then
+  # The name did not hold our commit: the gate wrote its verdict
+  # somewhere else (the normalization of the loop changed). The verdict
+  # is looked up by the SHA of this run, which is what the pipeline does
+  # too. The lookup only accepts a UNIQUE match: with two slots of the
+  # same commit, picking one of them at random would leave the other one
+  # without an effective verdict.
+  SLOT_REAL=""
+  for _cand in "$LOOP_DIR"/gates/*/scope.verdict; do
+    [ -f "$_cand" ] || continue
+    verdict_is_ours "$_cand" || continue
+    if [ -n "$SLOT_REAL" ]; then
+      SLOT_REAL=""
+      break
+    fi
+    SLOT_REAL="$(basename "$(dirname "$_cand")")"
+  done
+  [ -n "$SLOT_REAL" ] && echo "gate.sh: el veredicto de $SHA esta en el slot '$SLOT_REAL'" >&2
+fi
+
+if [ -n "$SLOT_REAL" ]; then
+  # gate-baseline.sh decides what the effective verdict is: a DEFERRED
+  # scope (DEFERRED=) or a SKIP has NO effective verdict (and the one of
+  # a previous run is removed), and a failure of the baseline does not
+  # break the gate: the gate already said what it had to say.
+  bash "$ORCH_DIR/bin/gate-baseline.sh" "$SLOT_REAL" >/dev/null 2>&1 || true
+fi
+
+# The exit code of the GATE is the exit code of this script (the trap of
+# the build token runs on the way out, whatever it is).
+exit $GATE_RC

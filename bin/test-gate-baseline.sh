@@ -37,7 +37,7 @@ engine::old::one
 kernel::old::two
 EOF
 
-mkverdict(){ # $1 slot, $2 verdict, $3 new, $4 failed(csv)
+mkverdict(){ # $1 slot, $2 verdict, $3 new, $4 failed(csv), $5 deferred(opcional)
   mkdir -p "$LOOP_DIR/gates/$1"
   {
     echo "GATE_STATUS=finished"
@@ -45,6 +45,7 @@ mkverdict(){ # $1 slot, $2 verdict, $3 new, $4 failed(csv)
     echo "NEW_FAILURES=$3"
     echo "FAILED_TESTS=$4"
     echo "SHA=abc123def4567890"
+    [ -n "${5:-}" ] && echo "DEFERRED=$5"
   } > "$LOOP_DIR/gates/$1/scope.verdict"
 }
 
@@ -92,6 +93,49 @@ run d
 # 5. a slot without a verdict fails loudly.
 ORCH_DIR="$ORCH_DIR" LOOP_DIR="$LOOP_DIR" bash "$ORCH_DIR/bin/gate-baseline.sh" noexiste >/dev/null 2>&1
 [ $? -ne 0 ] && ok "un slot sin veredicto da error" || no "un slot sin veredicto da error"
+
+# 6. a failure WITHOUT a name is a failure of the branch (2026-11-07).
+#
+# The NEW_FAILURES of the raw verdict is the sum of the new FAILING TESTS
+# (which have a name and are the ones listed in FAILED_TESTS) and the
+# PROBLEMS of the phases (a fmt that fails, a clippy that fails, a check
+# that fails). A PROBLEM HAS NO NAME: it is not in FAILED_TESTS and it
+# can not be looked up in the catalogue of the failures of origin/main,
+# which only has names. The slot 6738 (fmt:fail) came out VERDE-SCOPE
+# with NEW_FAILURES=0, a GREEN that the branch never earned: the discount
+# was "COUNT == 0 means every failure was preexisting", and a failure
+# without a name has COUNT 0.
+cat > "$ORCH_DIR/baseline/failures-origin-main.txt" <<'EOF'
+# comment line
+engine::old::one
+kernel::old::two
+EOF
+: > "$KNOWN_FAILING_TESTS"
+mkverdict e ROJO-SCOPE 1 ""
+run e
+[ "$(field e VERDICT)" = "ROJO-SCOPE" ] && ok "un fallo SIN nombre deja el PR en rojo" \
+  || no "un fallo SIN nombre deja el PR en rojo (quedo $(field e VERDICT))"
+[ "$(field e NEW_FAILURES)" = "1" ] && ok "un fallo SIN nombre cuenta como fallo nuevo" \
+  || no "un fallo SIN nombre cuenta como fallo nuevo (quedo $(field e NEW_FAILURES))"
+
+# 7. a DEFERRED scope is not a verdict (2026-11-07).
+#
+# The gate says it out loud when it postpones a scope: "the scope was
+# deferred (nextest-timeout): it is not a verdict". There is nothing to
+# discount and nothing to publish, so the effective verdict of a deferred
+# slot is NOT written. The one of a PREVIOUS run IS removed: it is the
+# verdict of ANOTHER commit, and reading it as the verdict of this one is
+# exactly the bug this script exists to avoid.
+mkverdict f VERDE-SCOPE 0 ""
+run f
+[ -f "$LOOP_DIR/gates/f/scope.effective.verdict" ] && ok "un slot normal deja veredicto efectivo" \
+  || no "un slot normal deja veredicto efectivo"
+mkverdict f SKIP 0 "" "nextest-timeout"
+run f
+[ ! -f "$LOOP_DIR/gates/f/scope.effective.verdict" ] && ok "un scope diferido NO deja veredicto efectivo" \
+  || no "un scope diferido NO deja veredicto efectivo"
+[ ! -f "$LOOP_DIR/gates/f/scope.effective.verdict" ] && ok "un scope diferido borra el veredicto efectivo de un run anterior" \
+  || no "un scope diferido borra el veredicto efectivo de un run anterior"
 
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"
 [ "$fail" -eq 0 ] || exit 1
