@@ -175,6 +175,36 @@ hermes cron create --name solidcraft-pipeline --schedule '*/5 * * * *' \
   --script pipeline.py --no-agent --deliver local
 ```
 
+### Pedirle al maintainer el `approved-for-ci`
+
+El CI de upstream tiene dos lanes. El LIVIANO corre en cada push. El PESADO (native tests,
+native clippy, el build de tests) corre SOLO cuando un maintainer agrega el label
+`approved-for-ci`: hasta ese momento upstream le da un quick compile en su lugar. Ese label solo
+lo puede poner un maintainer, asi que es LA UNICA accion que necesitamos de el.
+
+| script | para que |
+|---|---|
+| `bin/ping-ready.sh` | deja UN comentario por PR (idempotente, por head sha) pidiendo el label, e imprime el resumen |
+| `bin/ping-ready-report.sh` | el mismo resumen SIN tocar GitHub (solo lee) |
+
+```bash
+bash bin/ping-ready.sh              # comenta los PRs listos y imprime el resumen
+bash bin/ping-ready.sh --dry-run    # imprime lo que haria, sin comentar
+bash bin/ping-ready-report.sh       # solo el resumen, sin tocar GitHub
+```
+
+El resumen es una linea por PR, y es lo que el agente lee para decidir a quien pinguear:
+
+```
+<pr> <sha> <atras-de-main> <verde|rojo|pendiente> <si|no> LISTO|FALTA <que falta>
+```
+
+El `si|no` es si el PR ya tiene el label `approved-for-ci`. Un `FALTA` dice que falta de NUESTRO
+lado (el CI en rojo, la rama atrasada de main). El script NO pide merge: la merge es del
+maintainer. El estado del CI se lee de los check-runs del HEAD SHA agrupados por nombre (gana el
+mas reciente), nunca del rollup: el rollup mezcla el `cancelled` de un run viejo con el `success`
+del nuevo y muestra rojo un PR que esta verde.
+
 ## 5. Que NO se versiona (se regenera en cada PC)
 
 `targets/ logs/ locks/ gates/ state/ state.json history.jsonl` son el estado de una maquina
