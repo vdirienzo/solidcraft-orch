@@ -77,6 +77,13 @@ else
   else
     fail "el RUNBOOK de la lista de copia NO menciona bin/publish-pr.sh: un deploy lo pierde"
   fi
+  # El SNIPPET del bucle de copia es lo que la gente ejecuta de verdad: si
+  # el fichero esta en la tabla pero no en el bucle, el deploy lo pierde.
+  if awk '/^for f in /,/; do/' "$RUNBOOK" | grep -q 'bin/publish-pr\.sh'; then
+    ok "el bucle de copia del RUNBOOK copia bin/publish-pr.sh"
+  else
+    fail "el bucle de copia del RUNBOOK NO copia bin/publish-pr.sh: el deploy lo pierde"
+  fi
 fi
 
 # --- 3. la ruta que los prompts invocan resuelve a un archivo que existe --
