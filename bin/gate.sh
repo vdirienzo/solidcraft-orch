@@ -37,6 +37,13 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
+# The PATH of cargo (2026-11-06): this script is launched by gate-queue.sh
+# under `systemd-run --user --scope`, and a systemd unit does NOT read
+# ~/.bashrc nor the login PATH. Without this, `cargo metadata` inside
+# scripts/ci/affected.py fails with FileNotFoundError: 'cargo' and the gate
+# ends with GATE_STATUS=failed VERDICT=SKIP without compiling anything.
+export PATH="$HOME/.cargo/bin:$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 # The paths come from the environment, with the default of THIS
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
@@ -44,6 +51,11 @@ LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 GATE_SCRIPT="$LOOP_DIR/bin/gate-quick.sh"
+# The gate and the baseline have to look at the SAME gates directory (the
+# one of this slot) and the SAME orchestrator: the paths are exported so the
+# two children resolve the same directories this script resolved. On the
+# other PC they come from the environment, and this keeps them in one place.
+export ORCH_DIR LOOP_DIR SOLIDCRAFT_REPO WORKTREES_DIR
 
 ISSUE="${1:-}"
 SHA="${2:-}"
@@ -178,4 +190,11 @@ if ! cargo build --profile ci --package xtask >/dev/null 2>&1; then
   echo "gate.sh: xtask no se pudo pre-calentar: la fase layers lo compilara en frio" >&2
 fi
 
-exec bash "$GATE_SCRIPT" --slot "$ISSUE" "$BASE" "$SHA"
+# NOT `exec` (2026-11-06): `exec bash "$GATE_SCRIPT"` REPLACES this shell, so
+# the EXIT trap that gives the build token back NEVER RUNS. Every gate that
+# ended that way left its token on the machine, and after two gates the whole
+# build queue was blocked by tokens whose owner was dead. The gate is run as
+# a child and this script exits with its code, so the trap fires and the
+# token comes back whatever happens.
+bash "$GATE_SCRIPT" --slot "$ISSUE" "$BASE" "$SHA"
+exit $?

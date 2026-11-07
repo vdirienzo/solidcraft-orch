@@ -101,27 +101,83 @@ done
 COUNT=0
 [ -n "$REAL_NEW" ] && COUNT="$(printf '%s\n' "$REAL_NEW" | tr ',' '\n' | grep -c .)"
 
-VERDICT="$(grep -E '^VERDICT=' "$RAW" | head -1 | cut -d= -f2-)"
-# A ROJO whose failures are all preexisting is not a red of the branch.
-if [ "$VERDICT" != "VERDE-SCOPE" ] && [ "$COUNT" -eq 0 ] && [ "$NEW_N" -gt 0 ]; then
+# HOW MANY OF THE FAILURES OF THE RAW VERDICT HAVE A NAME (2026-11-07).
+#
+# The NEW_FAILURES of the raw verdict is the sum of two things: the new
+# FAILING TESTS (which have a name and are the ones listed in FAILED_TESTS)
+# and the PROBLEMS of the phases (a fmt that fails, a clippy that fails, a
+# check that fails, a test run that could not be judged). A PROBLEM HAS NO
+# NAME: it is not in FAILED_TESTS and it can not be looked up in the
+# catalogue of the failures of origin/main, which only has names.
+#
+# WHY IT MATTERS: the discount used to be "COUNT == 0 means every failure
+# was preexisting", and with a failure WITHOUT a name COUNT is 0 while the
+# raw verdict says NEW_FAILURES=1: the slot 6738 (fmt:fail) came out
+# VERDE-SCOPE with NEW_FAILURES=0, a GREEN that the branch never earned. A
+# failure without a name is a failure OF THE BRANCH and it is not
+# discounted.
+NAMED_N=0
+[ -n "$FAILED" ] && NAMED_N="$(printf '%s\n' "$FAILED" | grep -c .)"
+UNNAMED=$(( NEW_N - NAMED_N ))
+[ "$UNNAMED" -lt 0 ] && UNNAMED=0
+# The failures of the branch: the named ones that are not in the catalogue
+# plus the ones without a name.
+NEW_EFFECTIVE=$(( COUNT + UNNAMED ))
+# The failures that were ALREADY failing in origin/main: the named ones that
+# ARE in the catalogue. The unnamed ones are not counted here: nobody knows
+# that they were failing before.
+PREEXISTING=$(( NAMED_N - COUNT ))
+
+VERDICT="$(grep -E '^VERDICT=' "$RAW" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+
+# A DEFERRED SCOPE IS NOT A VERDICT (2026-11-07).
+#
+# The gate says it out loud when it postpones a scope: "the scope was
+# deferred (nextest-timeout): it is not a verdict". There is nothing to
+# discount and nothing to publish, so the effective verdict of a deferred
+# slot is NOT written. The one of a previous run IS removed: it is the
+# verdict of ANOTHER commit and reading it as the verdict of this one is
+# exactly the bug this script exists to avoid.
+DEFERRED="$(grep -E '^DEFERRED=' "$RAW" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+if [ -n "$DEFERRED" ] || [ "$VERDICT" = "SKIP" ]; then
+  rm -f "$EFF" 2>/dev/null || true
+  echo "gate-baseline: el scope del slot $SLOT quedo diferido (${DEFERRED:-sin motivo}): no hay veredicto efectivo" >&2
+  exit 0
+fi
+
+if [ -z "$VERDICT" ]; then
+  echo "gate-baseline: el veredicto crudo del slot $SLOT no dice VERDICT: no se calcula el efectivo" >&2
+  exit 1
+fi
+
+# A ROJO whose failures are ALL preexisting is not a red of the branch. But
+# only if there is not ONE failure of the branch: the unnamed ones count
+# too, so the brake is not loosened.
+if [ "$VERDICT" != "VERDE-SCOPE" ] && [ "$NEW_EFFECTIVE" -eq 0 ] && [ "$NEW_N" -gt 0 ]; then
   VERDICT="VERDE-SCOPE"
 fi
 
+# The file is written and THEN moved: a reader (the pipeline, the report)
+# never sees a half-written verdict.
 {
   echo "GATE_STATUS=$(grep -E '^GATE_STATUS=' "$RAW" | head -1 | cut -d= -f2-)"
   echo "VERDICT=$VERDICT"
-  echo "NEW_FAILURES=$COUNT"
-  echo "PREEXISTING_FAILURES=$(( NEW_N - COUNT ))"
+  echo "NEW_FAILURES=$NEW_EFFECTIVE"
+  echo "PREEXISTING_FAILURES=$PREEXISTING"
   echo "FAILED_TESTS=$REAL_NEW"
   echo "SHA=$(grep -E '^SHA=' "$RAW" | head -1 | cut -d= -f2-)"
   echo "AT=$(date +%s)"
   echo "BASE=baseline/failures-origin-main.txt"
-} > "$EFF"
+} > "$EFF.tmp" 2>/dev/null && mv -f "$EFF.tmp" "$EFF" 2>/dev/null || {
+  rm -f "$EFF.tmp" 2>/dev/null || true
+  echo "gate-baseline: el veredicto efectivo no se pudo escribir: $EFF" >&2
+  exit 1
+}
 
 if [ "${2:-}" = "--show" ]; then
   cat "$EFF"
 else
   printf 'slot=%s verdict=%s new_failures=%s preexisting=%s\n' \
-    "$SLOT" "$VERDICT" "$COUNT" "$(( NEW_N - COUNT ))"
+    "$SLOT" "$VERDICT" "$NEW_EFFECTIVE" "$PREEXISTING"
 fi
 exit 0
