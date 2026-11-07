@@ -159,6 +159,16 @@ Los scripts toman las rutas de variables con default, asi que en otra PC alcanza
 ORCH_DIR=...  LOOP_DIR=...  SOLIDCRAFT_REPO=...  WORKTREES_DIR=...  HERMES_SCRIPTS=...
 ```
 
+El default de cada uno (el de esta maquina, que la otra PC exporta):
+
+```
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
+HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"
+```
+
 Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 
 | cron | cada | script | para que |
@@ -166,6 +176,7 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 | solidcraft-gate-queue | 3 min | gate-queue.sh | drena la cola de gates (2 a la vez) |
 | solidcraft-pipeline | 5 min | pipeline.py | corrige bodies, encola gates, pasa a ready |
 | solidcraft-nice-compilations | 2 min | nice-compilations.sh | baja la prioridad de las compilaciones nuevas |
+| solidcraft-ping-ready | 30 min | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
 | solidcraft-reporte-diario | 10 y 22 | daily-report.py | el reporte, sin LLM |
 
 ```bash
@@ -174,6 +185,9 @@ hermes cron create --name solidcraft-gate-queue --schedule '*/3 * * * *' \
 hermes cron create --name solidcraft-pipeline --schedule '*/5 * * * *' \
   --script pipeline.py --no-agent --deliver local
 ```
+
+Los scripts que los crons ejecutan viven en `HERMES_SCRIPTS` (`~/.hermes/scripts/`): el cron
+los busca ahi, y el script tiene que existir ANTES de que el job se cree.
 
 ### Pedirle al maintainer el `approved-for-ci`
 
@@ -192,6 +206,16 @@ bash bin/ping-ready.sh              # comenta los PRs listos y imprime el resume
 bash bin/ping-ready.sh --dry-run    # imprime lo que haria, sin comentar
 bash bin/ping-ready-report.sh       # solo el resumen, sin tocar GitHub
 ```
+
+El ping CORRE SOLO: el cron `solidcraft-ping-ready` (cada 30 min, `--no-agent`, entrega
+`local`) ejecuta la COPIA de `bin/ping-ready.sh` que vive en `~/.hermes/scripts/`. La copia
+tiene que ser IDENTICA al canonico (`diff -q`), porque el cron no usa el repo: usa esa. El
+script resuelve el orquestador por la REGLA DEL CI (el directorio que tiene `bin/pipeline.py`),
+no por su propia ubicacion, asi que funciona igual desde el repo y desde la copia.
+
+El cron entrega a `local` a proposito: el ping es una ACCION HACIA GITHUB, no un aviso. Al
+usuario no le llega nada por Telegram. El script es idempotente por head sha, asi que correr de
+mas no genera ruido: el comentario se deja UNA vez por PR y por sha.
 
 El resumen es una linea por PR, y es lo que el agente lee para decidir a quien pinguear:
 

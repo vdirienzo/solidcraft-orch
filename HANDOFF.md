@@ -66,8 +66,16 @@ cat ~/.local/share/solidcraft-loop/gates/<issue>/scope.verdict   # el veredicto;
 # el body de un PR contra el parser del upstream
 bash ~/.local/share/solidcraft-loop/bin/pr-defaults-line.sh --body <file>   # exit 0 = pasa
 
+# el ping al maintainer: UN comentario por PR pidiendo el label approved-for-ci
+bash bin/ping-ready.sh --report        # solo el resumen, NO toca GitHub
+bash bin/ping-ready-report.sh          # lo mismo (wrapper)
+# el ping CORRE SOLO: cron solidcraft-ping-ready, cada 30 min, --no-agent, entrega local
+# (idempotente por head sha: la copia en ~/.hermes/scripts/ping-ready.sh tiene que ser
+#  identica al canonico; 'diff -q bin/ping-ready.sh ~/.hermes/scripts/ping-ready.sh')
+
 # la suite del orquestador
 bash bin/test-slot-parallelism.sh    # 27 tests
+bash bin/test-ping-ready.sh          # el ping: idempotencia, conflicto, formato del resumen
 ```
 
 ## La máquina
