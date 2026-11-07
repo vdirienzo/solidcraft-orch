@@ -307,6 +307,30 @@ else
 fi
 
 # =====================================================================
+# h) el body con un "\n" LITERAL (una sola linea): NO se publica
+#    con un mensaje que diga la verdad (el "\`\\n" literal no es un salto)
+# =====================================================================
+echo "# h) el body con un '\n' literal no se publica y el mensaje lo explica"
+B_ESCAPE="$TMP/body-escape.md"
+printf 'Fixes #12842.\\nChanges a default: no\\n' > "$B_ESCAPE"
+RC=$(run_publish "$B_ESCAPE" 12842 "Fix a crash when closing the window (#12842)")
+if [ "$RC" != "0" ]; then
+  ok "un body con un '\\n' literal NO se publica (rc!=0)"
+else
+  no "un body con un '\\n' literal NO se publica" "rc=0"
+fi
+if grep -qi "literal" "$TMP/err.log"; then
+  ok "el mensaje explica que el '\\n' es literal y no un salto de linea"
+else
+  no "el mensaje explica que el '\\n' es literal y no un salto de linea" "$(cat "$TMP/err.log")"
+fi
+if [ -f "$TMP/created.json" ]; then
+  no "no se abrio ningun pull request con el body del escape literal"
+else
+  ok "no se abrio ningun pull request con el body del escape literal"
+fi
+
+# =====================================================================
 # c) sin linea y SI tocando defaults: NO se publica
 # =====================================================================
 echo "# c) sin linea y tocando defaults: no se publica y no se inventa un 'no'"

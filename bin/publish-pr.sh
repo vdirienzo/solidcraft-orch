@@ -163,6 +163,35 @@ if [ "$HAVE_LINE" = "ERROR" ]; then
   die 6 "no se pudo analizar el body (no esta pipeline.py): el check de la linea de los defaults NO se hizo"
 fi
 
+# Un "\`\\n" LITERAL en el body (escribirlo en una sola linea) es una trampa:
+# el upstream lee el body linea por linea, asi que "Changes a default:" no
+# queda al principio de una linea y el check la rechaza. Solo se avisa cuando
+# el arreglo es claro (convertirlo en un salto de verdad deja la linea en su
+# sitio); un "\n" de verdad dentro de un bloque de codigo no se toca.
+ESCAPE_ALT="$(PUBLISH_PR_BIN_DIR="$HERE" python3 - "$TMP_BODY" <<'PY' 2>/dev/null
+import os, sys
+sys.path.insert(0, os.environ.get("PUBLISH_PR_BIN_DIR", "."))
+try:
+    import pipeline as P
+except Exception:
+    print("0"); raise SystemExit(0)
+body = open(sys.argv[1], encoding="utf-8").read()
+if "\\n" not in body:
+    print("0"); raise SystemExit(0)
+try:
+    if P.linea_defaults_presente(body):
+        print("0"); raise SystemExit(0)
+    if P.linea_defaults_presente(body.replace("\\n", "\n")):
+        print("1"); raise SystemExit(0)
+except Exception:
+    pass
+print("0")
+PY
+)"
+if [ "$ESCAPE_ALT" = "1" ]; then
+  die 3 "el body tiene un '\\n' LITERAL (la barra y la ene, no un salto de linea): el upstream lee el body linea por linea, asi que la linea 'Changes a default:' no queda al principio de una linea y el check la rechaza. Escribi el body con saltos de linea de verdad (un archivo con --body-file, o el prompt que lo arma) y volve a intentarlo"
+fi
+
 # La etiqueta 'changes-default' (la del upstream) tambien dice que el cambio
 # toca defaults. Se mira en el issue y en un pull request que ya exista de esta
 # rama: un "no" automatico con esa etiqueta seria mentira.
