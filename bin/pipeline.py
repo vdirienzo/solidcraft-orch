@@ -148,6 +148,24 @@ def _vigente(runs):
     return max(completados, key=lambda r: (_completed_at(r), _id(r)))
 
 
+def _en_vuelo(runs, vigente):
+    """El run que esta corriendo AHORA en un grupo de check-runs del mismo nombre, o None.
+
+    Un run en vuelo (queued/in_progress) que arranco DESPUES de que terminara el ultimo
+    completado es el CI que se esta re-disparando ahora: todavia no hay veredicto. Un run
+    en vuelo mas viejo que el ultimo completado es un resto (un run que GitHub nunca
+    finalizo): no cuenta, porque si contara el PR quedaria pendiente para siempre.
+    """
+    for run in runs:
+        if _status(run) == "completed":
+            continue
+        if vigente is None:
+            return run
+        if (run.get("started_at") or "", _id(run)) > (_completed_at(vigente), _id(vigente)):
+            return run
+    return None
+
+
 def evaluar_check_runs(check_runs):
     """El estado del CI de un SHA a partir de SUS check-runs. (estado, detalle)
 
@@ -178,15 +196,11 @@ def evaluar_check_runs(check_runs):
     for nombre, runs in grupos.items():
         vigente = _vigente(runs)
 
-        # Un run en vuelo (queued/in_progress) creado despues del ultimo completado es el
+        # Un run en vuelo (queued/in_progress) MAS NUEVO que el ultimo completado es el
         # CI que esta corriendo ahora: manda el, y todavia no hay veredicto.
-        en_vuelo = [r for r in runs if _status(r) != "completed"]
-        if en_vuelo:
-            nuevo = max(_id(r) for r in en_vuelo)
-            viejo = max((_id(r) for r in runs if _status(r) == "completed"), default=-1)
-            if nuevo > viejo:
-                pendientes.append(f"{nombre} (corriendo)")
-                continue
+        if _en_vuelo(runs, vigente) is not None:
+            pendientes.append(f"{nombre} (corriendo)")
+            continue
 
         if vigente is None:
             pendientes.append(f"{nombre} (sin veredicto)")
@@ -299,6 +313,24 @@ def strip_noise(body, inline_code=True):
     return text
 
 
+# El resumen que CodeRabbit pega al final del body: no es del autor del PR y menciona
+# 'default' en casi todos los cuerpos, asi que no sirve para saber si el PR toca un default.
+RE_CODERABBIT = re.compile(
+    r"<!--\s*This is an auto-generated comment.*?end of auto-generated comment.*?-->",
+    re.S | re.I)
+
+
+def cuerpo_del_autor(body):
+    """El body que escribio el autor, sin el ruido ni el resumen de CodeRabbit.
+
+    Ademas saca la propia linea 'Changes a default:': esa linea DECLARA si el PR toca un
+    default, asi que no puede usarse como evidencia de que el PR habla de defaults.
+    """
+    texto = RE_CODERABBIT.sub("", str(body or ""))
+    texto = RE_LINEA_DEFAULTS.sub("", texto)
+    return strip_noise(texto, inline_code=True)
+
+
 def linea_defaults_presente(body):
     """True si el body YA trae la linea 'Changes a default:' (la que sea).
 
@@ -344,7 +376,7 @@ def habla_de_defaults(*textos):
     """True si alguno de los textos menciona un default o una preferencia: ahi, un 'no'
     automatico es informacion falsa."""
     for texto in textos:
-        if texto and RE_MENCIONA_DEFAULT.search(texto):
+        if texto and RE_MENCIONA_DEFAULT.search(cuerpo_del_autor(texto)):
             return True
     return False
 
@@ -358,6 +390,16 @@ def labels_de(pr):
         elif isinstance(l, str):
             names.append(l)
     return names
+
+
+def contar_ci(conteo, rojos, pendientes, num, estado):
+    """Suma el estado del CI de un PR al resumen: lo que al mantenedor le importa para
+    decidir a quien pinguear."""
+    conteo[estado] = conteo.get(estado, 0) + 1
+    if estado == ROJO:
+        rojos.append(num)
+    elif estado == PENDIENTE:
+        pendientes.append(num)
 
 
 def verdict_for(sha):
@@ -455,18 +497,14 @@ def main():
         else:
             estado, detalle_ci = PENDIENTE, "no se pudo leer el HEAD SHA"
 
-        ci_conteo[estado] = ci_conteo.get(estado, 0) + 1
-        if estado == ROJO:
-            ci_rojos.append(num)
-        elif estado == PENDIENTE:
-            ci_pendientes.append(num)
-
         if not pr.get("isDraft"):
+            contar_ci(ci_conteo, ci_rojos, ci_pendientes, num, estado)
             continue
 
         iss = issue_of(body, num)
         if not iss:
             log(f"  PR #{num}: el body no referencia ningun issue -> no lo encolo")
+            contar_ci(ci_conteo, ci_rojos, ci_pendientes, num, PENDIENTE)
             continue
 
         # 2. el body: la linea de defaults NO se inventa, la referencia al issue si.
@@ -485,15 +523,27 @@ def main():
             log(f"  PR #{num}: falta la linea 'Changes a default:' -> NO la invento "
                 f"({pista}): queda en draft y la linea la escribe el autor "
                 f"('no' o 'yes - <que>, old behaviour kept behind preference <nombre>')")
+            # Sin la linea (o mal formada) el check de upstream no puede dar verde.
+            estado = PENDIENTE
+            detalle_ci = "falta la linea 'Changes a default:'"
         elif linea_defaults_malformada(body):
             log(f"  PR #{num}: la linea 'Changes a default:' esta MAL FORMADA (el CI de "
                 f"upstream la va a rechazar) -> queda en draft y la reescribe el autor")
+            estado = PENDIENTE
+            detalle_ci = "la linea 'Changes a default:' esta mal formada"
         if not re.search(r"(?:Fixes|Closes|Addresses|Refs)\s+#\d+", body):
             # 'Addresses #N' es honesto: no reclama el cierre del issue.
             nuevo = body.rstrip() + f"\n\nAddresses #{iss}\n"
             if gh("pr", "edit", str(num), "--repo", REPO, "--body", nuevo):
                 log(f"  PR #{num}: le agregue la referencia al issue #{iss}")
                 edite = True
+        if edite:
+            # Se edito el body: el workflow pr-checks vuelve a correr (types: edited) y su
+            # check todavia no existe. El CI que acabamos de leer judged el body VIEJO.
+            estado = PENDIENTE
+            detalle_ci = "el body se acaba de editar: el CI de upstream vuelve a correr"
+
+        contar_ci(ci_conteo, ci_rojos, ci_pendientes, num, estado)
 
         if not sha:
             sha = gh("pr", "view", str(num), "--repo", REPO, "--json", "headRefOid")

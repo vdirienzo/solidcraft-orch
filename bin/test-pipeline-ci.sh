@@ -142,6 +142,22 @@ elif caso == "defaults":
     check("un body sin la linea no se marca como mal formada",
           P.linea_defaults_malformada("Fixes #1\n") is False)
 
+    # el resumen de CodeRabbit no es del autor: no cuenta como que el PR hable de defaults.
+    body_cr = ("Fixes #1\n\nChanges a default: no\n\n"
+               "<!-- This is an auto-generated comment: release notes by coderabbit.ai -->\n\n"
+               "## Summary by CodeRabbit\n\n"
+               "* The tool's default number is interpreted directly.\n\n"
+               "<!-- end of auto-generated comment: release notes by coderabbit.ai -->\n")
+    check("el cuerpo del autor no incluye el resumen de CodeRabbit",
+          "CodeRabbit" not in P.cuerpo_del_autor(body_cr))
+    check("el resumen de CodeRabbit NO hace creer que el PR habla de defaults",
+          P.habla_de_defaults(body_cr) is False)
+
+    # un PR que SI habla de defaults (en su propio texto) se detecta igual.
+    body_pref = ("Fixes #1\n\nAdds a preference scaled_length_defaults for the new field.\n")
+    check("un PR que habla de una preferencia SI se detecta",
+          P.habla_de_defaults(body_pref) is True)
+
     # la linea dentro de un bloque de codigo o de un comentario NO cuenta:
     # upstream la ignora (stripNoise), asi que el pipeline tampoco la da por buena.
     body_falso = "Fixes #1\n\n```\nChanges a default: no\n```\n"
@@ -355,6 +371,65 @@ if grep -qE "CI de GitHub \(HEAD SHA\): 2 verde\(s\), 0 pendiente\(s\), 0 rojo\(
   ok "el resumen dice cuantos PRs tienen el CI verde, pendiente y rojo"
 else
   no "el resumen dice cuantos PRs tienen el CI verde, pendiente y rojo" "$(cat "$TMP/out.log")"
+fi
+
+# --- caso F: el body se acaba de editar -> el CI vuelve a correr ------------
+# El pipeline le agrega 'Addresses #N': eso dispara el workflow pr-checks (types: edited).
+# Promover en la misma pasada dejaria un check rojo en pantalla: el PR espera.
+cat > "$TMP/pr-list.json" <<'EOF'
+[{"number":12574,"title":"Sin referencia al issue","isDraft":true,
+  "headRefOid":"abc123def4567890","labels":[],
+  "body":"Arregla el crash de #12418\n\nChanges a default: no\n"}]
+EOF
+: > "$TMP/calls.log"
+run_pipeline
+if grep -q "^READY:12574" "$TMP/calls.log"; then
+  no "un PR cuyo body se acaba de editar NO se promueve en la misma pasada"
+else
+  ok "un PR cuyo body se acaba de editar NO se promueve en la misma pasada"
+fi
+if grep -q "Addresses #" "$TMP/calls.log"; then
+  ok "la referencia al issue se agrega igual (es honesta)"
+else
+  no "la referencia al issue se agrega igual (es honesta)" "$(cat "$TMP/calls.log")"
+fi
+
+# --- caso G: la linea de defaults esta mal formada --------------------------
+cat > "$TMP/pr-list.json" <<'EOF'
+[{"number":12574,"title":"Linea mal formada","isDraft":true,
+  "headRefOid":"abc123def4567890","labels":[],
+  "body":"Arregla\n\nFixes #12418\n\nChanges a default: yes - cambia el color\n"}]
+EOF
+: > "$TMP/calls.log"
+run_pipeline
+if grep -q "^READY:12574" "$TMP/calls.log"; then
+  no "un PR con la linea de defaults mal formada NO se promueve"
+else
+  ok "un PR con la linea de defaults mal formada NO se promueve"
+fi
+if grep -q "MAL FORMADA" "$TMP/out.log"; then
+  ok "el log avisa que la linea de defaults esta mal formada"
+else
+  no "el log avisa que la linea de defaults esta mal formada" "$(cat "$TMP/out.log")"
+fi
+
+# --- caso H: la etiqueta 'changes-default' ----------------------------------
+cat > "$TMP/pr-list.json" <<'EOF'
+[{"number":12574,"title":"Sin la linea, con etiqueta","isDraft":true,
+  "headRefOid":"abc123def4567890","labels":[{"name":"changes-default"}],
+  "body":"Arregla\n\nFixes #12418\n"}]
+EOF
+: > "$TMP/calls.log"
+run_pipeline
+if grep -q "Changes a default:" "$TMP/calls.log"; then
+  no "con la etiqueta 'changes-default' NO se escribe un 'no' automatico"
+else
+  ok "con la etiqueta 'changes-default' NO se escribe un 'no' automatico"
+fi
+if grep -q "changes-default" "$TMP/out.log"; then
+  ok "el log dice que el PR tiene la etiqueta 'changes-default'"
+else
+  no "el log dice que el PR tiene la etiqueta 'changes-default'" "$(cat "$TMP/out.log")"
 fi
 
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"
