@@ -151,6 +151,7 @@ if args[:2] == ["pr", "view"]:
         "labels": [{"name": n} for n in pr.get("labels", [])],
         "isDraft": bool(pr.get("draft", False)),
         "state": pr.get("state", "OPEN"),
+        "createdAt": pr.get("created", "2026-11-01T00:00:00Z"),
     }
     print(json.dumps(out))
     sys.exit(0)
@@ -171,7 +172,11 @@ if args[:2] == ["pr", "comment"]:
         fh.write("%s\t%s\n" % (num, body.replace("\n", "\\n")))
     lst = load(os.path.join(D, "comments", "%s.json" % num), []) or []
     cid = 900000 + len(lst) + 1
-    lst.append({"id": cid, "user": {"login": "vdirienzo"}, "body": body})
+    now = os.environ.get("STUB_NOW") or ""
+    if not now:
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lst.append({"id": cid, "user": {"login": "vdirienzo"}, "body": body, "created_at": now})
     save_comments(num, lst)
     print("https://github.com/tangency-labs/solidcraft/pull/%s#issuecomment-%s" % (num, cid))
     sys.exit(0)
@@ -845,6 +850,372 @@ if [ -s "$D/comment-calls.log" ]; then
   no "(j3) con el fetch caido NO se pinguea" "$(cat "$D/comment-calls.log")"
 else
   ok "(j3) con el fetch caido NO se pinguea"
+fi
+
+# -----------------------------------------------------------------------
+# LA TANDA de los pedidos 'approved-for-ci'
+#
+# El mantenedor mergea EN GRUPOS POR AREA: pedirle el label a cuatro PRs
+# repartidos en tres areas lo dispersa. La tanda pone un tope a los pedidos
+# EN CURSO (los que tienen nuestro comentario de ping para su head sha
+# actual y NO tienen el label), elige a quien entra por area (la que mas PRs
+# listos tiene) y dentro del area por antiguedad (el mas viejo primero), y
+# tiene una valvula de 72 horas para que una tanda ignorada no trabe la
+# cola.
+#
+# Los shas de estos casos.
+# -----------------------------------------------------------------------
+TAB=$(printf '\t')
+SHA_C="3333333333333333333333333333333333333333"
+SHA_D="4444444444444444444444444444444444444444"
+SHA_E="5555555555555555555555555555555555555555"
+SHA_F="6666666666666666666666666666666666666666"
+SHORT_C="${SHA_C:0:12}"
+SHORT_D="${SHA_D:0:12}"
+SHORT_E="${SHA_E:0:12}"
+SHORT_F="${SHA_F:0:12}"
+
+# mkpr <dir> <num> <sha> <labels csv> <created>
+mkpr(){
+  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json, os, sys
+d, num, sha, labels, created = sys.argv[1:6]
+p = os.path.join(d, "prs.json")
+prs = {}
+if os.path.exists(p):
+    prs = json.load(open(p))
+prs[num] = {"number": int(num), "title": "PR %s" % num, "sha": sha,
+            "labels": [x for x in labels.split(",") if x],
+            "draft": False, "state": "OPEN", "created": created}
+json.dump(prs, open(p, "w"), indent=1)
+PY
+  printf '%s' "$CHECKS_A" > "$1/checkruns/$3.json"
+  printf '%s' '{"behind_by": 0, "ahead_by": 3}' > "$1/compare/$3.json"
+  printf '%s' '{"parents": [], "commit": {"message": "Fix: whatever"}}' > "$1/commits/$3.json"
+  printf '%s' '[]' > "$1/comments/$2.json"
+}
+
+# mkpedido <dir> <num> <sha> <created_at>: deja el comentario de ping (el
+# pedido en curso) para ese head sha, con su fecha.
+mkpedido(){
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, os, sys
+d, num, sha, created = sys.argv[1:5]
+path = os.path.join(d, "comments", "%s.json" % num)
+lst = []
+if os.path.exists(path):
+    lst = json.load(open(path))
+body = ("Ready for review: algo\n\n- Head: `%s`\n\n<!-- ping-ready: sha=%s -->\n" % (sha, sha))
+lst.append({"id": 700000 + len(lst) + 1, "user": {"login": "vdirienzo"},
+            "body": body, "created_at": created})
+json.dump(lst, open(path, "w"), indent=1)
+PY
+}
+
+# el "ahora" de los tests: una epoch fija, para que la valvula de 72h sea
+# medible sin depender del reloj.
+NOW="$(python3 -c 'import time; print(time.time())')"
+HACE100H="$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=100)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+HACE10H="$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+
+# -----------------------------------------------------------------------
+# (a) cuatro PRs listos sin pedido, tope 2: se postean SOLO 2
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_a)"
+mkpr "$D" 2001 "$SHA_C" "area:ui"  "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui"  "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+mkpr "$D" 2004 "$SHA_F" "area:ui"  "2026-11-04T00:00:00Z"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2004 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+[ "$n" = "2" ] && ok "(tanda) con tope 2 se postean SOLO 2 pedidos" \
+  || no "(tanda) con tope 2 se postean SOLO 2 pedidos" "comentarios=$n"
+if grep -q "^2001$TAB" "$D/comment-calls.log" && grep -q "^2002$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) los dos primeros del area entran (el mas viejo primero)"
+else
+  no "(tanda) los dos primeros del area entran (el mas viejo primero)" \
+     "$(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$out" | grep -q "^2001 $SHORT_C 0 atras no verde no LISTO"; then
+  ok "(tanda) el que entra sale LISTO en el resumen"
+else
+  no "(tanda) el que entra sale LISTO en el resumen" "$out"
+fi
+if printf '%s' "$out" | grep -q "^2004 $SHORT_F 0 atras no verde no ESPERA"; then
+  ok "(tanda) el que no entra sale ESPERA en el resumen"
+else
+  no "(tanda) el que no entra sale ESPERA en el resumen" "$out"
+fi
+if printf '%s' "$out" | grep -q 'espera su turno'; then
+  ok "(tanda) el resumen dice POR QUE espera"
+else
+  no "(tanda) el resumen dice POR QUE espera" "$out"
+fi
+
+# -----------------------------------------------------------------------
+# (b) uno de los dos en curso recibe el label: entra el siguiente
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_b)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui" "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+mkpedido "$D" 2001 "$SHA_C" "$HACE10H"
+mkpedido "$D" 2002 "$SHA_D" "$HACE10H"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+[ "$n" = "0" ] && ok "(tanda) con 2 pedidos en curso no se postea nada" \
+  || no "(tanda) con 2 pedidos en curso no se postea nada" "comentarios=$n"
+if printf '%s' "$out" | grep -q "^2001 $SHORT_C 0 atras no verde no EN-TURNO"; then
+  ok "(tanda) el pedido en curso sale EN-TURNO"
+else
+  no "(tanda) el pedido en curso sale EN-TURNO" "$out"
+fi
+if printf '%s' "$out" | grep -q "^2003 $SHORT_E 0 atras no verde no ESPERA"; then
+  ok "(tanda) el que espera sale ESPERA mientras la tanda esta llena"
+else
+  no "(tanda) el que espera sale ESPERA mientras la tanda esta llena" "$out"
+fi
+# el mantenedor pone el label en el primero
+python3 - "$D/prs.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["2001"]["labels"] = ["area:ui", "approved-for-ci"]
+json.dump(d, open(p, "w"), indent=1)
+PY
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+[ "$n" = "1" ] && ok "(tanda) con el label puesto entra el siguiente" \
+  || no "(tanda) con el label puesto entra el siguiente" "comentarios=$n"
+if grep -q "^2003$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) el que entra es el que estaba esperando"
+else
+  no "(tanda) el que entra es el que estaba esperando" \
+     "$(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$out" | grep -q "^2001 $SHORT_C 0 atras no verde si LISTO"; then
+  ok "(tanda) el que tiene el label ya NO es un pedido en curso"
+else
+  no "(tanda) el que tiene el label ya NO es un pedido en curso" "$out"
+fi
+
+# -----------------------------------------------------------------------
+# (c) un pedido en curso que ya no esta (mergeado/cerrado) libera su lugar
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_c)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:doc" "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:infra" "2026-11-03T00:00:00Z"
+mkpedido "$D" 2001 "$SHA_C" "$HACE10H"
+mkpedido "$D" 2002 "$SHA_D" "$HACE10H"
+python3 - "$D/prs.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["2002"]["state"] = "MERGED"
+json.dump(d, open(p, "w"), indent=1)
+PY
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "1" ] && grep -q "^2003$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) un pedido mergeado libera su lugar y entra el siguiente"
+else
+  no "(tanda) un pedido mergeado libera su lugar y entra el siguiente" \
+     "comentarios=$n out=$out"
+fi
+
+# -----------------------------------------------------------------------
+# (d) la valvula de 72h: un pedido en curso mas viejo de 72h abre un lugar
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_d)"
+mkpr "$D" 2001 "$SHA_C" "area:ui"   "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui"   "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc"  "2026-11-03T00:00:00Z"
+mkpedido "$D" 2001 "$SHA_C" "$HACE100H"
+mkpedido "$D" 2002 "$SHA_D" "$HACE10H"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "1" ] && grep -q "^2003$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) la valvula de 72h deja entrar UN pedido mas"
+else
+  no "(tanda) la valvula de 72h deja entrar UN pedido mas" "comentarios=$n out=$out"
+fi
+if printf '%s' "$out" | grep -q 'valvula de 72h abierta'; then
+  ok "(tanda) el resumen reporta que la valvula se abrio"
+else
+  no "(tanda) el resumen reporta que la valvula se abrio" "$out"
+fi
+# sin valvula (el pedido viejo es reciente) NO entra nadie
+D="$(mkstub tanda_d2)"
+mkpr "$D" 2001 "$SHA_C" "area:ui"  "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui"  "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+mkpedido "$D" 2001 "$SHA_C" "$HACE10H"
+mkpedido "$D" 2002 "$SHA_D" "$HACE10H"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+[ "$n" = "0" ] && ok "(tanda) sin valvula no entra nadie" \
+  || no "(tanda) sin valvula no entra nadie" "comentarios=$n"
+
+# -----------------------------------------------------------------------
+# (e) la eleccion por area: el area con MAS PRs listos entra primero
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_e)"
+mkpr "$D" 2001 "$SHA_C" "area:ui"  "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui"  "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "2" ] && grep -q "^2001$TAB" "$D/comment-calls.log" && grep -q "^2002$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) el area con mas PRs (area:ui) entra primero"
+else
+  no "(tanda) el area con mas PRs (area:ui) entra primero" \
+     "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$out" | grep -q "^2003 $SHORT_E 0 atras no verde no ESPERA"; then
+  ok "(tanda) el area siguiente (area:doc) espera su turno"
+else
+  no "(tanda) el area siguiente (area:doc) espera su turno" "$out"
+fi
+# con tope 3 entran los tres: los dos de area:ui y despues el de area:doc
+D="$(mkstub tanda_e2)"
+mkpr "$D" 2001 "$SHA_C" "area:ui"  "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui"  "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+out="$(MAX_PEDIDOS=3 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+[ "$n" = "3" ] && ok "(tanda) con tope 3 entran los tres PRs" \
+  || no "(tanda) con tope 3 entran los tres PRs" "comentarios=$n"
+
+# -----------------------------------------------------------------------
+# (f) dentro del area entra el MAS ANTIGUO primero
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_f)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-05T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui" "2026-11-01T00:00:00Z"
+out="$(MAX_PEDIDOS=1 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "1" ] && grep -q "^2002$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) dentro del area entra el mas ANTIGUO (creado antes)"
+else
+  no "(tanda) dentro del area entra el mas ANTIGUO (creado antes)" \
+     "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+
+# -----------------------------------------------------------------------
+# (g) la idempotencia se mantiene con la tanda: tres corridas, un comentario
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_g)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+for _ in 1 2 3; do
+  MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+    bash "$PING_READY" 2001 >/dev/null 2>&1
+done
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+[ "$n" = "1" ] && ok "(tanda) tres corridas dejan UN comentario por PR" \
+  || no "(tanda) tres corridas dejan UN comentario por PR" "comentarios=$n"
+
+# -----------------------------------------------------------------------
+# (h) un PR con 'approved-for-ci' NO es un pedido y NO ocupa lugar
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_h)"
+mkpr "$D" 2001 "$SHA_C" "area:ui,approved-for-ci" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui" "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+out="$(MAX_PEDIDOS=1 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if grep -q "^2002$TAB" "$D/comment-calls.log" && ! grep -q "^2003$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) el PR con el label NO ocupa lugar: entra el que estaba esperando"
+else
+  no "(tanda) el PR con el label NO ocupa lugar: entra el que estaba esperando" \
+     "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$out" | grep -q "^2001 $SHORT_C 0 atras no verde si LISTO"; then
+  ok "(tanda) el PR con el label sale LISTO con el label en si"
+else
+  no "(tanda) el PR con el label sale LISTO con el label en si" "$out"
+fi
+body="$(grep "^2001$TAB" "$D/comment-calls.log" | cut -f2)"
+if printf '%s' "$body" | grep -qi 'please add the .approved-for-ci. label'; then
+  no "(tanda) el PR con el label NO pide el label" "$body"
+else
+  ok "(tanda) el PR con el label NO pide el label"
+fi
+
+# -----------------------------------------------------------------------
+# (i) la tanda NO cambia el criterio: CI rojo y conflicto no entran
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_i)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui" "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+printf '%s' "$CHECKS_B" > "$D/checkruns/$SHA_C.json"
+mkdir -p "$D/git/conflict"
+: > "$D/git/conflict/$SHA_D"
+out="$(MAX_PEDIDOS=1 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2003 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "1" ] && grep -q "^2003$TAB" "$D/comment-calls.log"; then
+  ok "(tanda) el CI rojo y el que conflictua NO entran (ni ocupan lugar)"
+else
+  no "(tanda) el CI rojo y el que conflictua NO entran (ni ocupan lugar)" \
+     "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$out" | grep -q "^2001 $SHORT_C 0 atras no rojo no FALTA"; then
+  ok "(tanda) el PR con el CI rojo sale FALTA"
+else
+  no "(tanda) el PR con el CI rojo sale FALTA" "$out"
+fi
+if printf '%s' "$out" | grep -q "^2002 $SHORT_D 0 atras si verde no FALTA"; then
+  ok "(tanda) el PR que conflictua sale FALTA"
+else
+  no "(tanda) el PR que conflictua sale FALTA" "$out"
+fi
+
+# -----------------------------------------------------------------------
+# (j) la tanda y el --report: el resumen dice que hace, sin comentar
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_j)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui" "2026-11-02T00:00:00Z"
+mkpr "$D" 2003 "$SHA_E" "area:doc" "2026-11-03T00:00:00Z"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" --report 2001 2002 2003 2>"$D/err")"
+if [ ! -s "$D/comment-calls.log" ]; then
+  ok "(tanda) --report no comenta nada"
+else
+  no "(tanda) --report no comenta nada" "$(cat "$D/comment-calls.log")"
+fi
+if printf '%s' "$out" | grep -q "^2001 $SHORT_C 0 atras no verde no LISTO"; then
+  ok "(tanda) --report dice que PR entra en la tanda"
+else
+  no "(tanda) --report dice que PR entra en la tanda" "$out"
+fi
+# el --dry-run muestra lo que haria y NO postea
+D="$(mkstub tanda_k)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:ui" "2026-11-02T00:00:00Z"
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" --dry-run 2001 2002 2>"$D/err")"
+if [ ! -s "$D/comment-calls.log" ]; then
+  ok "(tanda) --dry-run no postea nada"
+else
+  no "(tanda) --dry-run no postea nada" "$(cat "$D/comment-calls.log")"
+fi
+if printf '%s' "$out" | grep -q 'ping-ready: sha='; then
+  ok "(tanda) --dry-run imprime el comentario que haria"
+else
+  no "(tanda) --dry-run imprime el comentario que haria" "$out"
 fi
 
 # ----------------------------------------------------------------------

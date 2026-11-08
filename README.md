@@ -217,6 +217,15 @@ El cron entrega a `local` a proposito: el ping es una ACCION HACIA GITHUB, no un
 usuario no le llega nada por Telegram. El script es idempotente por head sha, asi que correr de
 mas no genera ruido: el comentario se deja UNA vez por PR y por sha.
 
+LA TANDA de los pedidos `approved-for-ci`: el maintainer mergea EN GRUPOS POR AREA, asi que nunca
+hay mas de `MAX_PEDIDOS` (2) pedidos EN CURSO a la vez (un pedido en curso = nuestro comentario de
+ping para su head sha ACTUAL y sin el label); cuando uno se resuelve (el maintainer pone el
+label, o el PR se mergea/cierra) entra el siguiente, elegido por el area con MAS PRs listos
+primero y dentro del area el MAS ANTIGUO, y una valvula de 72 h abre UN lugar mas si el pedido mas
+viejo sigue sin label (para que la cola no se trabe). El resumen dice la decision de cada PR:
+`LISTO` (entra en la tanda), `EN-TURNO` (ya tiene un pedido), `ESPERA` (listo, tanda llena) o
+`FALTA` (le falta algo de nuestro lado).
+
 El resumen es una linea por PR, y es lo que el agente lee para decidir a quien pinguear:
 
 ```

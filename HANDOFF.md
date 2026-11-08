@@ -72,6 +72,9 @@ bash bin/ping-ready-report.sh          # lo mismo (wrapper)
 # el ping CORRE SOLO: cron solidcraft-ping-ready, cada 30 min, --no-agent, entrega local
 # (idempotente por head sha: la copia en ~/.hermes/scripts/ping-ready.sh tiene que ser
 #  identica al canonico; 'diff -q bin/ping-ready.sh ~/.hermes/scripts/ping-ready.sh')
+# la TANDA: nunca mas de MAX_PEDIDOS (2) pedidos approved-for-ci en curso; entra el
+#  siguiente por el area con MAS PRs listos y dentro del area el MAS ANTIGUO, y a los
+#  72 h del pedido mas viejo sin resolver se abre UN lugar mas (valvula).
 
 # la suite del orquestador
 bash bin/test-slot-parallelism.sh    # 27 tests
