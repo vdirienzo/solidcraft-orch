@@ -31,6 +31,7 @@ serian elegibles ahora). El runner NUNCA ejecuta los nodos que compilan: esos lo
 | gate | compila y da el veredicto | `bin/gate.sh` |
 | gate-baseline | separa lo preexistente de lo nuevo | `bin/gate-baseline.sh` |
 | verify-pr | valida el PR listo | `bin/verify-pr.sh` |
+| dup-scan | este PR es duplicado de otro abierto? | `bin/dup-scan.sh` |
 | ci-upstream | espera al CI y al maintainer | el maintainer (la merge queue es suya) |
 
 ---
@@ -260,6 +261,10 @@ concreta, no codigo. El `state.json` se REGENERA desde `state/` con `bin/merge-s
 Las suites de `bin/test-*.sh` y `bin/test-rules.py` tienen que dar rc=0 antes de commitear cualquier
 cambio del orquestador. Las dos que viven en el loop:
 `/home/user/.local/share/solidcraft-loop/bin/test-gate-quick.sh` y `.../test-rules.py`.
+
+`bin/test-dup-scan.sh` mide el detector de duplicados por parche, con el contraste contra
+`claim-verify.sh`: el competidor que describe el fallo en prosa es invisible para el guard del
+claim y visible para el detector.
 
 ## 7. Estructura
 

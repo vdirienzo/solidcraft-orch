@@ -37,6 +37,41 @@ some PRs and a filter over the body then finds nothing.
 | a PR exists but its author is not moving it | wait for the takeover rule (an idle draft may be taken over), do not duplicate |
 | the bug is ALREADY FIXED in `origin/main` | stop the agent; open nothing; say in the report that upstream carries the fix |
 
+## 2a. The competitor that names the issue in PROSE: the guard cannot see it
+
+The claim check (`bin/claim-verify.sh`) and the upstream `Duplicate PR check` both look for the
+CLOSING VERB: `Fixes` / `Closes` / `Resolves` followed by `#N`. A competitor that describes the
+same failure in PROSE, without the verb, is invisible to BOTH. So our PR can be a byte-identical
+duplicate of someone else's and still look clean — while theirs has the LOWER number and wins.
+
+Measured on 2026-11-11: our #14822 was byte-identical to #14811 (DuBearte, opened 43 minutes
+earlier, carrying `approved-for-ci` + `ready to merge`). `claim-verify.sh` answered
+`VEREDICTO=OCUPADO el PR #14822 ya reclama #14801` — it pointed at OUR OWN PR as the competitor,
+because #14811 mentioned the issue in prose and not with a closing verb.
+
+Two ways to catch it:
+
+1. By the TEXT of the symptom. `gh pr list --search` indexes the title and the body, not the
+   diff, so search for the panic message or the test name:
+   `gh pr list --state open --search 'Dropped TexturesDelta'`. Searching `textures_delta` (the
+   identifier that only exists in the diff) found nothing.
+2. Mechanically, by the PATCH: `bin/dup-scan.sh <issue> <branch|sha>`. It compares the ADDED
+   lines of our change against the added lines of every open PR that touches the same files, and
+   excludes our own PR by number and by head sha. rc=1 means a confirmed duplicate.
+   `bin/publish-pr.sh` refuses to publish on rc=1; `bin/gate.sh` warns.
+
+The ratio guard: ours counts as a duplicate when our added lines are a SUBSET of theirs AND ours
+is at least 40% of their added lines. The ratio stops a large unrelated PR that happens to contain
+one of our lines from counting as a duplicate.
+
+When you close yours because of a duplicate, ask the author to add the closing keyword. #14811
+did not carry `Fixes #14801`, so without that request the issue stays open after the fix lands.
+And if the fix lands through the OTHER PR, the issue still does not close on its own: the bot only
+closes an issue when the merged PR carries a closing verb. After the merge, put the evidence on
+the issue (the merge sha, the line in the file) and say it can be closed; if you were the
+claimant, release it with `/unclaim` as a comment (the bot answers "Released. This one is free
+again" and drops the `in progress` label).
+
 ## 2b. The fix may already be in `main`, under a DIFFERENT issue number
 Before an agent writes a fix, run its RED test against a clean worktree of `origin/main`.
 If the RED PASSES there, the bug is fixed upstream: the fix landed with another issue's
