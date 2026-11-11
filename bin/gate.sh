@@ -172,6 +172,34 @@ if [ -x "$ORCH_DIR/bin/claim-verify.sh" ] || [ -f "$ORCH_DIR/bin/claim-verify.sh
   fi
 fi
 
+# El duplicado por PARCHE (11-11-2026).
+#
+# WHY: claim-verify.sh (y el Duplicate PR check del upstream) buscan solo el
+# verbo de cierre (Fixes/Closes/Resolves #N). Un competidor que describe el
+# fallo en prosa, sin el verbo, es INVISIBLE para los dos: asi nos paso con
+# el PR #14822, duplicado byte a byte del #14811 de otro autor, que el guard
+# dio por nuestro ("VEREDICTO=OCUPADO el PR #14822 ya reclama #14801")
+# cuando el rival era el nuestro. El PR perdedor no se mergea nunca.
+#
+# Este check razona sobre el parche: si otro PR abierto agrega las MISMAS
+# lineas que el nuestro, compiten por el mismo merge. No mira el issue, asi
+# que no le escapa el competidor que no nombra el issue.
+#
+# Es un AVISO, no una parada: el gate es el trabajo y el freno de publicar
+# vuelve a mirar antes de abrir el PR. Un rc=2 (no se pudo verificar) no
+# detiene nada.
+if [ -f "$ORCH_DIR/bin/dup-scan.sh" ] && [ -n "${OUR_PR:-}" ]; then
+  dup_out="$(SC_OUR_PR="$OUR_PR" SC_WORKTREE="$REPO" \
+               bash "$ORCH_DIR/bin/dup-scan.sh" "$ISSUE" "$SHA" 2>&1)"
+  dup_rc=$?
+  echo "gate.sh: duplicado: $(echo "$dup_out" | tail -3 | tr '\n' ' ')" >&2
+  if [ "$dup_rc" -eq 1 ]; then
+    echo "gate.sh: ATENCION: hay un PR abierto que replica NUESTRO parche." >&2
+    echo "gate.sh: $dup_out" >&2
+    echo "gate.sh: el numero mas bajo gana. Si el nuestro es el mayor, hay que cerrarlo." >&2
+  fi
+fi
+
 # The phases of the gate (fmt, xtask layers, clippy, check, nextest) run in
 # the WORKING DIRECTORY of the process, not in $REPO: the gate uses $REPO for
 # the diff and for the metadata, but the cargo commands read the manifest of

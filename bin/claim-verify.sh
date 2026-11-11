@@ -31,7 +31,12 @@ if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
 fi
 
 REPO="${SC_REPO:-tangency-labs/solidcraft}"
-LIMIT="${SC_PR_LIMIT:-1000}"
+# El tope de PRs abiertos que se consultan (9-11-2026): el upstream tiene
+# 1009 abiertos y con 1000 el guard se quedaba CIEGO para todos los issues
+# (no encontraba el reclamo de nadie). MEDIDO: `gh pr list --limit 2000`
+# devuelve los 1009, todos con su body. El 1000 era un numero nuestro, no
+# un techo de la herramienta.
+LIMIT="${SC_PR_LIMIT:-2000}"
 
 # Los PRs abiertos que REALMENTE reclaman el issue.
 #

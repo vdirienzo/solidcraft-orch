@@ -201,10 +201,14 @@ echo "== la lista de pull requests no se trunca =="
 
 # The upstream has more than 800 open pull requests; a limit of 800 hides the
 # competitor. The limit has to be above that.
-if grep -q 'SC_PR_LIMIT:-1000' "$HERE/claim-verify.sh"; then
-  ok "el limite de pull requests es 1000 (el upstream tiene mas de 800 abiertos)"
+#
+# 9-11-2026: the limit went from 1000 to 2000. The upstream had 1009 open PRs,
+# and with a limit of 1000 the guard went BLIND for every issue (it did not
+# find anyone's claim). `gh pr list --limit 2000` returns all of them.
+if grep -q 'SC_PR_LIMIT:-2000' "$HERE/claim-verify.sh"; then
+  ok "el limite de pull requests es 2000 (el upstream tiene mas de 1000 abiertos)"
 else
-  bad "el limite de pull requests es 1000" \
+  bad "el limite de pull requests es 2000" \
       "$(grep -n 'SC_PR_LIMIT' "$HERE/claim-verify.sh" | head -2 | tr '\n' ' ')"
 fi
 

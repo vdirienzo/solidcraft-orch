@@ -349,6 +349,37 @@ if [ "$ISSUE_STATE" != "open" ]; then
   die 4 "el issue $ISSUE esta '$ISSUE_STATE' (ya no esta abierto): no se publica"
 fi
 
+# --- 5b. el DUPLICADO por parche, ANTES de abrir ---------------------------
+# claim-verify.sh (y el Duplicate PR check del upstream) buscan solo el verbo
+# de cierre (Fixes/Closes/Resolves #N). Un competidor que describe el fallo en
+# prosa, sin el verbo, es INVISIBLE para los dos: asi nos paso con el PR
+# #14822, duplicado byte a byte del #14811 de otro autor, y el guard dio por
+# nuestro lo que era el rival. Dos PRs con el mismo diff se bloquean entre si
+# y el perdedor no se mergea nunca.
+#
+# dup-scan.sh razona sobre el PARCHE: si otro PR abierto agrega las mismas
+# lineas que el nuestro, compiten por el mismo merge. rc=1 = duplicado
+# CONFIRMADO: no se publica.
+#
+# rc=2 (no se pudo verificar) NO frena: es un fallo de la herramienta, no un
+# hecho. Publicar de mas se corrige cerrando el PR; frenar el wave por un
+# error de red no tiene arreglo. El aviso queda en el log.
+DUP_SCAN="${DUP_SCAN:-$ORCH_DIR/bin/dup-scan.sh}"
+if [ -f "$DUP_SCAN" ]; then
+  DUP_OUT="$(SC_REPO="$REPO" SC_WORKTREE="${SC_WORKTREE:-$REPO}" \
+               bash "$DUP_SCAN" "$ISSUE" "$HEAD" 2>&1)"
+  DUP_RC=$?
+  case "$DUP_RC" in
+    0) echo "publish-pr: sin duplicado por parche." >&2 ;;
+    1) printf '%s\n' "$DUP_OUT" >&2
+       die 4 "hay un PR abierto que replica nuestro parche: no se publica (el numero mas bajo gana)" ;;
+    2) printf '%s\n' "$DUP_OUT" >&2
+       echo "publish-pr: ATENCION: no se pudo verificar el duplicado por parche: se publica igual." >&2 ;;
+    *) printf '%s\n' "$DUP_OUT" >&2
+       echo "publish-pr: ATENCION: el chequeo de duplicado dio un codigo inesperado ($DUP_RC): se publica igual." >&2 ;;
+  esac
+fi
+
 # --- 6. abrir el pull request, EN DRAFT ------------------------------------
 # "gh pr create" con --body-file: el body que se lee es EXACTAMENTE el que
 # se valido arriba (con la linea dentro). Nunca "gh pr edit" despues.
