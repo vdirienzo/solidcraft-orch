@@ -203,10 +203,29 @@ lo puede poner un maintainer, asi que es LA UNICA accion que necesitamos de el.
 | `bin/ping-ready-report.sh` | el mismo resumen SIN tocar GitHub (solo lee) |
 
 ```bash
-bash bin/ping-ready.sh              # comenta los PRs listos y imprime el resumen
+bash bin/ping-ready.sh              # comenta los PRs listos e imprime el resumen
 bash bin/ping-ready.sh --dry-run    # imprime lo que haria, sin comentar
 bash bin/ping-ready-report.sh       # solo el resumen, sin tocar GitHub
 ```
+
+El estado del CI de un head, en UNA linea, sale con `bin/ci-status.sh`:
+
+```bash
+bash bin/ci-status.sh 15188         # un numero de PR (se resuelve a su head sha)
+bash bin/ci-status.sh --sha <sha>   # un sha
+```
+
+```
+ESTADO=VERDE|ROJO|PENDIENTE SHA=<sha> CHECKS=<n> ROJO=<nombres|-> \
+  PENDIENTE=<nombres|-> SOBRA=<nombres|-> DETALLE=<que pasa>
+```
+
+`ROJO` son los checks que fallaron, `PENDIENTE` los que todavia no tienen veredicto
+(FALTAN) y `SOBRA` los que tienen un run superado (el `cancelled` que cancela al run
+nuevo del mismo nombre: no es un rojo, es un run de mas). El codigo de salida es 0 si
+verde, 1 si rojo, 2 si pendiente, 3 si el uso esta mal. El veredicto lo dice
+`pipeline.evaluar_check_runs` (la MISMA regla que usan `ping-ready.sh` y `gate.sh`): el
+helper no tiene una copia de la regla, la usa.
 
 El ping CORRE SOLO: el cron `solidcraft-ping-ready` (cada 30 min, `--no-agent`, entrega
 `local`) ejecuta la COPIA de `bin/ping-ready.sh` que vive en `~/.hermes/scripts/`. La copia
@@ -265,6 +284,12 @@ cambio del orquestador. Las dos que viven en el loop:
 `bin/test-dup-scan.sh` mide el detector de duplicados por parche, con el contraste contra
 `claim-verify.sh`: el competidor que describe el fallo en prosa es invisible para el guard del
 claim y visible para el detector.
+
+`bin/test-ci-status.sh` mide el helper del estado del CI: verde/rojo/pendiente con el codigo
+de salida que corresponde, la resolucion de un numero de PR a su head sha, y el caso de la casa
+(un `cancelled` viejo + un `success` nuevo del mismo nombre NO es un rojo). El stub de `gh`
+APLICA el `--jq` de verdad, como el gh real: un stub que lo ignorara mediria el stub y no la
+regla.
 
 ## 7. Estructura
 

@@ -1218,6 +1218,98 @@ else
   no "(tanda) --dry-run imprime el comentario que haria" "$out"
 fi
 
+# -----------------------------------------------------------------------
+# (l) un PR que se MERGEA entre dos corridas del ping no pide el label
+#
+# POR QUE ESTE CASO (2026-11-12): el agente pinguea los PRs que salen
+# LISTO en el resumen de la corrida anterior. Si el maintainer mergea un
+# PR entre esa corrida y la siguiente, la siguiente corrida lo vuelve a
+# mirar, y ese PR NO puede recibir un comentario pidiendo 'approved-for-ci':
+# un PR mergeado no tiene label que poner. Pedirlo es ruido en el PR que
+# el maintainer acaba de mergear.
+#
+# El caso que DISCRIMINA (no lo tapa la idempotencia): el PR mergeado que
+# NUNCA fue pingueado (no tiene el marcador de nuestro comentario). Con
+# solo el marcador, el filtro por state no se nota; este caso lo nota.
+#
+# El filtro esta en plan.py: los candidatos de la tanda exigen
+# r["state"] == "OPEN", y un PR que no esta abierto sale FALTA con accion
+# 'skip' (nunca 'post').
+# -----------------------------------------------------------------------
+D="$(mkstub tanda_l)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+# el PR se mergea entre dos corridas: state != OPEN
+python3 - "$D/prs.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["2001"]["state"] = "MERGED"
+json.dump(d, open(p, "w"), indent=1)
+PY
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "0" ]; then
+  ok "(mergeado) un PR mergeado NO recibe un comentario pidiendo el label"
+else
+  no "(mergeado) un PR mergeado NO recibe un comentario pidiendo el label" \
+     "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$out" | grep -q "^2001 .* FALTA "; then
+  ok "(mergeado) el PR mergeado sale FALTA en el resumen"
+else
+  no "(mergeado) el PR mergeado sale FALTA en el resumen" "$out"
+fi
+if printf '%s' "$out" | grep -qi 'no esta abierto\|mergeado'; then
+  ok "(mergeado) el resumen dice que el PR no esta abierto (mergeado o cerrado)"
+else
+  no "(mergeado) el resumen dice que el PR no esta abierto (mergeado o cerrado)" "$out"
+fi
+
+# el mismo PR mergeado pero que YA TIENE nuestro pedido (pedido en curso):
+# tampoco puede recibir un comentario nuevo.
+D="$(mkstub tanda_l2)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpedido "$D" 2001 "$SHA_C" "$HACE10H"
+python3 - "$D/prs.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["2001"]["state"] = "MERGED"
+json.dump(d, open(p, "w"), indent=1)
+PY
+out="$(MAX_PEDIDOS=2 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "0" ]; then
+  ok "(mergeado) un PR mergeado con pedido previo NO recibe comentario nuevo"
+else
+  no "(mergeado) un PR mergeado con pedido previo NO recibe comentario nuevo" \
+     "comentarios=$n"
+fi
+# y ademas: un pedido sobre un PR mergeado NO ocupa lugar en la tanda, asi
+# que el siguiente PR listo entra.
+D="$(mkstub tanda_l3)"
+mkpr "$D" 2001 "$SHA_C" "area:ui" "2026-11-01T00:00:00Z"
+mkpr "$D" 2002 "$SHA_D" "area:doc" "2026-11-02T00:00:00Z"
+mkpedido "$D" 2001 "$SHA_C" "$HACE10H"
+python3 - "$D/prs.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["2001"]["state"] = "MERGED"
+json.dump(d, open(p, "w"), indent=1)
+PY
+out="$(MAX_PEDIDOS=1 PING_NOW="$NOW" GH_BIN="$TMP/gh" STUB_DIR="$D" \
+       bash "$PING_READY" 2001 2002 2>"$D/err")"
+n="$(grep -c . "$D/comment-calls.log" 2>/dev/null || echo 0)"
+if [ "$n" = "1" ] && grep -q "^2002$TAB" "$D/comment-calls.log"; then
+  ok "(mergeado) el pedido de un PR mergeado NO ocupa lugar: entra el siguiente"
+else
+  no "(mergeado) el pedido de un PR mergeado NO ocupa lugar: entra el siguiente" \
+     "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
+fi
+
 # ----------------------------------------------------------------------
 # la COPIA que el cron ejecuta, y la deriva
 #
