@@ -91,12 +91,127 @@ if [ -s "$TMP_LIST" ]; then
 fi
 rm -f "$TMP_LIST" "$TMP_KNOWN" 2>/dev/null || true
 
-REAL_NEW=""
-for t in $FAILED; do
-  if ! printf '%s\n' "$BASE_N" | grep -qxF "$t"; then
-    REAL_NEW="${REAL_NEW:+$REAL_NEW,}$t"
-  fi
-done
+# THE MATCH OF A FAILURE AGAINST THE CATALOGUE (2026-11-14).
+#
+# TWO FALSE REDS ARE FIXED HERE.
+#
+# 1. THE NAME IN THE CATALOGUE IS NOT ALWAYS THE NAME IN THE VERDICT.
+#    The catalogue holds "solidcraft-cli::naming_corpus::corpus_designs_..."
+#    and nextest reports the failure as "solidcraft-cli::corpus_designs_...":
+#    the module in the middle of the path is not always there. The match
+#    was EXACT (grep -qxF), so a failure that was already failing in
+#    origin/main was counted as a NEW failure of the branch. NOW a
+#    failure is preexisting when the catalogue holds an entry with the
+#    SAME CRATE and the SAME LAST SEGMENT of the path. The crate is
+#    compared WITHOUT its "solidcraft-" prefix on BOTH sides: the
+#    catalogue of the upstream has the prefix stripped ("cli") and ours
+#    has it ("solidcraft-cli"), and they are the same crate. The exact
+#    match still counts too.
+#
+# 2. A FLAKY TEST IS NOT A REGRESSION. The gate runs nextest and, when
+#    the run fails, it runs it AGAIN (without sccache): the FAILED_TESTS
+#    of the raw verdict is the UNION of the failures of the two runs. A
+#    test that failed in one run and PASSED in the other one is a flake
+#    of the load, not a failure of the branch. NOW a failure that
+#    appears as a PASS in the log of the SAME sha is not counted as a
+#    new failure. The comparison is by the path AFTER the crate (the
+#    crate of the log is the binary of nextest and the separator of the
+#    two forms is not the same), never by the whole line.
+#
+# THE LOG IS THE ONE OF THE RUN THAT PRODUCED THE VERDICT: the newest
+# file of the log directory whose name starts with "gate-quick-" and the
+# first ten characters of the sha of the verdict.
+SHA_RAW="$(grep -E '^SHA=' "$RAW" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+SHA_PRE="$(printf '%s' "$SHA_RAW" | cut -c1-10)"
+GATE_LOG=""
+if [ -n "$SHA_PRE" ]; then
+  GATE_LOG="$(ls -t "$LOOP_DIR"/logs/gate-quick-"$SHA_PRE"*.log 2>/dev/null | head -1)"
+  [ -f "${GATE_LOG:-/nonexistent}" ] || GATE_LOG=""
+fi
+
+# THE PROGRAM OF THE MATCH (in a file of its own: the program is long and
+# it is read with -f so that the shell does not have to quote it).
+TMP_AWK="$(mktemp 2>/dev/null || echo "/tmp/gate-baseline.$$.awk")"
+cat > "$TMP_AWK" <<'GATE_BASELINE_AWK'
+function canon(c,   p) {
+  p = index(c, "::")
+  if (p > 0) c = substr(c, 1, p - 1)
+  sub(/^solidcraft-/, "", c)
+  return c
+}
+function last_seg(s,   p, k) {
+  p = 0
+  for (k = length(s) - 1; k >= 1; k--) if (substr(s, k, 2) == "::") { p = k; break }
+  return (p > 0) ? substr(s, p + 2) : s
+}
+function crate_of(s,   p) {
+  p = index(s, "::")
+  return (p > 0) ? substr(s, 1, p - 1) : s
+}
+function name_of(s,   p) {
+  p = index(s, "::")
+  return (p > 0) ? substr(s, p + 2) : s
+}
+BEGIN {
+  while ((getline line < catf) > 0) {
+    if (line == "") continue
+    exact[line] = 1
+    catkey[canon(crate_of(line)) "\t" last_seg(line)] = 1
+  }
+  close(catf)
+  n = 0
+  while ((getline line < failf) > 0) {
+    if (line == "") continue
+    if (line in exact) continue
+    if ((canon(line) "\t" last_seg(line)) in catkey) continue
+    pending[++n] = line
+  }
+  close(failf)
+  if (n > 0 && logf != "") {
+    while ((getline line < logf) > 0) {
+      gsub(/\033\[[0-9;]*[A-Za-z]/, "", line)
+      sub(/\r$/, "", line)
+      if (line !~ /^[ \t]*PASS[ \t]+\[/) continue
+      rest = line
+      sub(/^[ \t]*PASS[ \t]+\[[^]]*\][ \t]*/, "", rest)
+      sub(/^\([ \t]*[0-9]+[ \t]*\/[ \t]*[0-9]+[ \t]*\)[ \t]*/, "", rest)
+      sub(/^[ \t]+/, "", rest)
+      sp = index(rest, " ")
+      if (sp > 0) {
+        b = substr(rest, 1, sp - 1)
+        nm = substr(rest, sp + 1)
+      } else {
+        q = index(rest, "::")
+        if (q == 0) continue
+        b = substr(rest, 1, q - 1)
+        nm = substr(rest, q + 2)
+      }
+      sub(/[ \t]+$/, "", nm)
+      if (nm == "") continue
+      passkey[canon(b) "\t" nm] = 1
+    }
+    close(logf)
+  }
+  out = ""
+  m = 0
+  for (i = 1; i <= n; i++) {
+    if ((canon(pending[i]) "\t" name_of(pending[i])) in passkey) continue
+    m++
+    out = (m > 1) ? out "," pending[i] : pending[i]
+  }
+  print out
+}
+GATE_BASELINE_AWK
+
+# The catalogue and the failures of the verdict, one per line.
+TMP_CAT="$(mktemp 2>/dev/null || echo "/tmp/gate-baseline.$$.cat")"
+TMP_FAIL="$(mktemp 2>/dev/null || echo "/tmp/gate-baseline.$$.fail")"
+printf '%s\n' "$BASE_N" | grep -v '^$' > "$TMP_CAT"
+printf '%s\n' "$FAILED" | grep -v '^$' > "$TMP_FAIL"
+
+REAL_NEW="$(awk -v catf="$TMP_CAT" -v failf="$TMP_FAIL" -v logf="$GATE_LOG" -f "$TMP_AWK" 2>/dev/null)"
+
+rm -f "$TMP_AWK" "$TMP_CAT" "$TMP_FAIL" 2>/dev/null || true
 
 COUNT=0
 [ -n "$REAL_NEW" ] && COUNT="$(printf '%s\n' "$REAL_NEW" | tr ',' '\n' | grep -c .)"

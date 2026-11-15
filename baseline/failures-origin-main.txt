@@ -8,7 +8,7 @@
 # Formato: un test por linea, con el prefijo del crate (nextest lo usa asi).
 # Refrescar cuando upstream cambie: el reporte completo esta en
 # /home/user/.hermes/cache/scratch/verify-5857-origin-main-report.txt
-solidcraft-cli::corpus_designs_name_alike_every_build_and_fail_where_a_reference_is_gone
+solidcraft-cli::naming_corpus::corpus_designs_name_alike_every_build_and_fail_where_a_reference_is_gone
 engine::cmd::file::tests::each_format_has_an_export_command_of_its_own
 engine::cmd::sketch_project::tests::intersection_curve_of_picked_faces_spans_the_whole_surface
 engine::extent_tests::cut_to_the_far_side_of_a_curved_wall
@@ -34,3 +34,4 @@ kernel::issue_851_tests::fillet_the_top_front_edge_and_the_front_upright_at_the_
 kernel::issue_851_tests::fillet_the_top_front_edge_and_the_front_left_upright
 kernel::corner_g2::tests::a_long_setback_keeps_the_g2_patch_inside_the_box
 kernel::smooth_edges::tests::a_seam_split_in_two_edges_is_drawn_whole
+ui-egui::agent_chat_home_page

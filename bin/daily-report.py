@@ -57,9 +57,11 @@ drafts = [p for p in abiertos if p.get("isDraft")]
 
 # ---------------------------------------------------------------- en marcha
 en_marcha = []
+slots = {}
 try:
     state = json.load(open(f"{ORCH}/state.json"))
-    for slot, s in (state.get("slots") or {}).items():
+    slots = state.get("slots") or {}
+    for slot, s in slots.items():
         if isinstance(s, dict) and s.get("status") not in ("done", None):
             issue = s.get("issue")
             rol = s.get("role") or slot
@@ -70,9 +72,14 @@ except Exception as e:
 vivos = 0
 try:
     c = sqlite3.connect(f"file:{HERMES_HOME}/state.db?mode=ro", uri=True)
+    # Las subagentes se cierran (ended_at) apenas terminan, y las que viven
+    # dentro de un turno aparecen como 'local' o 'cron': se cuentan TODAS las
+    # sesiones sin ended_at cuya ultima actividad es reciente.
+    import time as _t
+    _limite = _t.time() - 900
     vivos = c.execute(
-        "select count(*) from sessions where parent_session_id is not null "
-        "and source='subagent' and ended_at is null").fetchone()[0]
+        "select count(*) from sessions where ended_at is null "
+        "and (last_activity_at is null or last_activity_at > ?)", (_limite,)).fetchone()[0]
 except Exception as e:
     fallos.append(f"state.db: {e}")
 
@@ -93,6 +100,46 @@ if resumen:
                 pendientes[-1] += " -> " + lineas[i + 2].strip()[6:].strip()[:70]
         i += 1
 
+# ---------------------------------------------------------------- los issues
+issues_abiertos = 0
+issues_trabajados = []
+try:
+    out = sh(f"gh api --paginate 'repos/{REPO}/issues?state=open&per_page=100' "
+             f"--jq '.[] | select(.pull_request == null) | .number'")
+    issues_abiertos = len([x for x in out.split() if x.strip().isdigit()])
+except Exception as e:
+    fallos.append(f"issues: {e}")
+
+# los issues que estamos atacando: los slots del orquestador + las ramas vivas
+for slot, sl in (slots or {}).items():
+    if isinstance(sl, dict) and sl.get("status") == "running":
+        n = sl.get("issue")
+        if n and str(n).isdigit():
+            issues_trabajados.append(str(n))
+issues_trabajados = sorted(set(issues_trabajados))
+
+# ---------------------------------------------------------------- los verdicts
+verdicts = []
+try:
+    gates = f"{ORCH}/../solidcraft-loop/gates"
+    if not os.path.isdir(gates):
+        gates = os.path.expanduser("~/.local/share/solidcraft-loop/gates")
+    for d in sorted(os.listdir(gates)) if os.path.isdir(gates) else []:
+        f = os.path.join(gates, d, "scope.effective.verdict")
+        if not os.path.exists(f):
+            continue
+        try:
+            txt = open(f, errors="replace").read()
+        except Exception:
+            continue
+        v = re.search(r"^VERDICT=(.+)$", txt, re.M)
+        n = re.search(r"^NEW_FAILURES=(\d+)$", txt, re.M)
+        sha = re.search(r"^SHA=([0-9a-f]{9})", txt, re.M)
+        if v:
+            verdicts.append((d, v.group(1).strip(), n.group(1) if n else "?", sha.group(1) if sha else "-"))
+except Exception as e:
+    fallos.append(f"verdicts: {e}")
+
 # ---------------------------------------------------------------- maquina
 load = sh("cut -d' ' -f1-3 /proc/loadavg").strip()
 disco = sh("df -h / | tail -1 | awk '{print $4\" libres de \"$2\" (\"$5\")\"}'").strip()
@@ -104,6 +151,19 @@ titulo = f"Reporte SolidCraft - {ts.strftime('%d-%m %H:%M')}"
 L = [f"**{titulo}**", ""]
 L.append(f"PRs: {len(abiertos)} abiertos ({len(drafts)} draft), {len(mergeados)} mergeados, "
          f"{len(cerrados)} cerrados sin merge, {len(nuevos_hoy)} creados hoy.")
+if issues_abiertos:
+    L.append(f"Issues abiertos en upstream: {issues_abiertos}.")
+if issues_trabajados:
+    L.append("Issues que atacamos: " + ", ".join("#" + i for i in issues_trabajados[:10]))
+if nuevos_hoy:
+    L.append("PRs de hoy: " + ", ".join("#" + str(p["number"]) for p in nuevos_hoy[:10]))
+verdes = [v for v in verdicts if v[1] == "VERDE-SCOPE"]
+if verdes:
+    L.append(f"Gates en verde: {len(verdes)}/{len(verdicts)} slots verificados "
+             + ", ".join(f"{d}" for d, _, _, _ in verdes[:8]))
+rojos = [v for v in verdicts if v[1] != "VERDE-SCOPE"]
+if rojos:
+    L.append("Gates con fallos nuevos: " + ", ".join(f"{d} ({n})" for d, _, n, _ in rojos[:6]))
 if en_marcha:
     L.append("En marcha: " + ", ".join(en_marcha[:8]) +
              (f" (+{len(en_marcha)-8})" if len(en_marcha) > 8 else ""))

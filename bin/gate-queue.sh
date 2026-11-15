@@ -103,6 +103,13 @@ run(){
     echo "gate-queue: lanzando el gate del slot $issue ($sha) (hay $free de $total slots libres)"
     sed -i '1d' "$QUEUE"
     ( cd "$WORKTREES_DIR/issue-$issue" 2>/dev/null || cd "$SOLIDCRAFT_REPO"
+      # The scoped gate gives the fmt phase 2% of the budget: with the 60 min default that
+      # is 72 s, and `cargo fmt --all -- --check` over the whole workspace takes ~67 s
+      # on an idle box and more when the agents are compiling. The phase is then killed
+      # by timeout and the gate reports ROJO-SCOPE with fmt:fail and NO failed test:
+      # a false red that keeps the pull request in draft for nothing. 120 min gives the
+      # phase 144 s and it passes. (skill: solidcraft-gate-fmt-slice)
+      GATE_QUICK_TIMEOUT_MIN="${GATE_QUICK_TIMEOUT_MIN:-120}" \
       bash "$BIN/gate.sh" "$issue" "$sha" > "$LOGDIR/gate-queue-$issue.log" 2>&1
     ) &
     sleep "${GATE_STAGGER:-90}"   # delay medido: con 90 s el 2do gate encuentra el sccache caliente
