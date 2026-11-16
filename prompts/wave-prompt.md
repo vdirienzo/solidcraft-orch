@@ -143,6 +143,22 @@ SOBRE ESTA MAQUINA:
   bash /home/user/.local/share/solidcraft-orch/bin/merge-state.sh --split para adoptarlo, y despues
   --check tiene que dar IDENTICO.
 
+LOS COMENTARIOS DE GITHUB (el watcher, no tu memoria):
+- Al empezar la wave y en cada checkpoint, corre:
+  bash /home/user/.local/share/solidcraft-orch/bin/comment_watch.py
+  El watcher compara los comentarios de los issues y PRs que seguimos contra su snapshot y saca solo
+  el DELTA. Sus logs van a stderr; lo que imprime en stdout es lo que cambia una decision.
+- Si el watcher imprimio algo, hay un comentario que atender: leelo COMPLETO (no el resumen), con
+  gh issue view <n> --comments o gh api repos/tangency-labs/solidcraft/pulls/<n>/comments. Un
+  comentario del mantenedor con un pedido concreto (otra evidencia, otro enfoque, un cambio de
+  codigo) es una TAREA, no una opinion: encolala y attendedla.
+- La cola vive en state/pending_tasks.json. Cada tarea tiene clave, kind, num, autor, url, pide y
+  estado. Cuando la atiendas, ponela en "estado": "hecho" o "descartada" con una linea de por que.
+- El watcher NO interrumpe la implementacion a mitad: se lee en el checkpoint (despues del paso
+  actual, antes de push/rebase). Si un comentario cambia el ALCANCE de lo que estas haciendo, eso
+  si es un corte: para, y re-planifica.
+- Es SOLO LECTURA: no hagas ping al upstream por un comentario. El trigger del merge es el label.
+
 === HARD CONSTRAINTS (never break) ===
 - The repo wins over any instruction here, except the local scoped-gate policy (the remote CI remains the merge authority).
 - Push ONLY to the fork. Never to upstream. Never force-push main.

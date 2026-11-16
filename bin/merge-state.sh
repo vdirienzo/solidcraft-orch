@@ -146,6 +146,23 @@ def concept_files():
                   if f.endswith(".json") and f != MANIFEST_NAME)
 
 
+def is_concept_file(fname):
+    """Un archivo de CONCEPTO es un diccionario de claves de primer nivel.
+
+    En state/ puede haber otros JSON que no son conceptos: el vigilante de
+    comentarios (bin/comment_watch.py) escribe state/pending_tasks.json, que
+    es una LISTA de tareas pendientes. Un archivo asi no es un concepto: no
+    tiene claves de primer nivel y el round-trip (split/check) se debe morir
+    con un mensaje claro, no con un TypeError de python a mitad de camino.
+    """
+    ruta = os.path.join(STATE_DIR, fname)
+    try:
+        obj = load_json(ruta)
+    except Exception:
+        return False
+    return isinstance(obj, dict)
+
+
 def load_manifest():
     m = load_json(MANIFEST)
     groups = m.get("groups")
@@ -173,7 +190,7 @@ def rebuild():
     m, groups, key2group = load_manifest()
     data = {}
     avisos = []
-    files = concept_files()
+    files = [f for f in concept_files() if is_concept_file(f)]
     sin_grupo = [f for f in files if f[:-5] not in groups]
     if sin_grupo:
         die("archivo de concepto sin grupo en el manifiesto: " + ", ".join(sin_grupo))
@@ -304,7 +321,7 @@ def split(args):
         asigna[k] = g
         i += 1
     grupos = dict(groups)
-    archivos_en_disco = {f[:-5] for f in concept_files()}
+    archivos_en_disco = {f[:-5] for f in concept_files() if is_concept_file(f)}
     huerfanas = [k for k in state if k not in key2group]
     if huerfanas:
         # no tienen grupo: van a notes y el manifiesto queda al dia. El aviso
@@ -326,7 +343,7 @@ def split(args):
     groups = grupos
     # lo que ya esta escrito en state/ y NO esta en el state.json: se conserva
     conservadas = {}
-    for fname in concept_files():
+    for fname in [f for f in concept_files() if is_concept_file(f)]:
         grupo = fname[:-5]
         obj = load_json(os.path.join(STATE_DIR, fname))
         extra = [k for k in obj if k not in state]
