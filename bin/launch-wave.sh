@@ -3,15 +3,16 @@
 # Each runner gets its own per-slot CARGO_TARGET_DIR so two cargo builds
 # never fight over the build directory lock.
 set -u
-ORCH=/home/user/.local/share/solidcraft-orch
-LOOP=/home/user/.local/share/solidcraft-loop
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 for i in "$@"; do
-  TD="$(bash "$ORCH/bin/slot-target-dir.sh" --slot "$i")"
+  TD="$(bash "$ORCH_DIR/bin/slot-target-dir.sh" --slot "$i")"
   mkdir -p "$TD"
-  LOG="$ORCH/logs/$i-wave.log"
+  LOG="$ORCH_DIR/logs/$i-wave.log"
   setsid nohup env CARGO_TARGET_DIR="$TD" CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 \
-    bash "$LOOP/bin/agent-issue.sh" "$i" \
-      --repo tangency-labs/solidcraft --work /home/user/solidcraft-wt --timeout 45 \
+    bash "$LOOP_DIR/bin/agent-issue.sh" "$i" \
+      --repo tangency-labs/solidcraft --work "$WORKTREES_DIR" --timeout 45 \
       > "$LOG" 2>&1 < /dev/null &
   echo "launched issue=$i target=$TD log=$LOG pid=$!"
   sleep 2

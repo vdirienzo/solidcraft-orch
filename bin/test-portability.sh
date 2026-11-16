@@ -39,13 +39,21 @@ bad()  { FAIL=$(( FAIL + 1 )); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && print
 HOMEBASE='/home/'"user"
 DEFPAT=':-'"$HOMEBASE"
 
-# The scripts of bin/: the ones that are really there. NOT the .bak backups
-# (another agent is removing those) and NOT the __pycache__ (bytecode, not
-# source).
+# The scripts of bin/: the ones that TRAVEL to the other PC. Those are the
+# ones Git knows (tracked or staged): a script lying loose in the directory
+# is NOT in the repo, so it does not travel and it cannot break the
+# portability of the repo. Measuring the index, not the directory, is what
+# makes this gate answer the question it asks. When the tree is not a git
+# repo (a tarball), it falls back to the directory.
 scripts() {
-  find "$BIN" -maxdepth 1 -type f \
-    ! -name '*.bak*' ! -name '*.pyc' \
-    -printf '%f\n' 2>/dev/null | sort
+  if git -C "$ORCH_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$ORCH_DIR" ls-files -- 'bin/*' 2>/dev/null \
+      | sed -n 's|^bin/\([^/]*\)$|\1|p'
+  else
+    find "$BIN" -maxdepth 1 -type f \
+      ! -name '*.bak*' ! -name '*.pyc' \
+      -printf '%f\n' 2>/dev/null
+  fi | sort
 }
 
 # --- 1. no absolute path of this machine outside the defaults ----------------

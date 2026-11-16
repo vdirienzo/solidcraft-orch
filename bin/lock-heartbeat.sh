@@ -12,8 +12,8 @@
 # This unit refreshes the locks of the slots of this wave every 30 minutes.
 # --------------------------------------------------------------------------
 set -uo pipefail
-ORCH=/home/user/.local/share/solidcraft-orch
-LOCK="$ORCH/bin/slot-lock.sh"
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOCK="$ORCH_DIR/bin/slot-lock.sh"
 INTERVAL="${INTERVAL:-1800}"
 
 while true; do

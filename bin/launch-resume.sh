@@ -27,8 +27,11 @@ OVERLAY="${2:?falta el overlay}"
 TIMEOUT_MIN="${3:?falta el timeout}"
 UNIT="${4:?falta el nombre de la unidad}"
 
-ORCH=/home/user/.local/share/solidcraft-orch
-LOOP=/home/user/.local/share/solidcraft-loop
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+# El corredor SIEMPRE sale del loop canonico, no del overlay: el overlay es
+# solo el prompt. El nombre es propio a proposito, porque mas abajo se
+# exporta LOOP_DIR="$OVERLAY" y ese debe seguir siendo el overlay.
+LOOP_BIN_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 MAX_WAIT_MIN="${MAX_WAIT_MIN:-150}"
 MAX_LOAD="${MAX_LOAD:-8}"
 
@@ -52,7 +55,7 @@ gates_busy() {
 # with a gate that is about to start (the load is still low for seconds after
 # the gate launches), and two agents starting together with a gate is what
 # starved this machine on 14-11-2026.
-GO_FILE="${GO_DIR:-/home/user/.local/share/solidcraft-orch/go}/$ISSUE"
+GO_FILE="${GO_DIR:-$ORCH_DIR/go}/$ISSUE"
 
 waited=0
 while [ "$waited" -lt "$((MAX_WAIT_MIN * 60))" ]; do
@@ -75,7 +78,7 @@ fi
 
 cd "$OVERLAY" || exit 1
 export LOOP_DIR="$OVERLAY"
-exec $NICE bash "$LOOP/bin/agent-issue.sh" "$ISSUE" \
+exec $NICE bash "$LOOP_BIN_DIR/bin/agent-issue.sh" "$ISSUE" \
   --repo tangency-labs/solidcraft \
-  --work /home/user/solidcraft-wt \
+  --work "${WORKTREES_DIR:-/home/user/solidcraft-wt}" \
   --timeout "$TIMEOUT_MIN"

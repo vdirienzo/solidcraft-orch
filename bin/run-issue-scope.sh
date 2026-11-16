@@ -22,12 +22,14 @@ TARGET_DIR="$2"
 UNIT="$3"
 TIMEOUT_MIN="${4:-40}"
 
-LOOP=/home/user/.local/share/solidcraft-loop
-ORCH=/home/user/.local/share/solidcraft-orch
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 
 # A per-slot CARGO_TARGET_DIR keeps two agents off one cargo build lock.
 # NOTE: agent-issue.sh sources config.env with `set -a`, and config.env pins
-# CARGO_TARGET_DIR=/home/user/solidcraft/target, so the export below is
+# CARGO_TARGET_DIR=<repo>/target, so the export below is
 # OVERRIDDEN for the runner's own shell. It is exported anyway so the agent
 # inherits it if config.env ever stops pinning it.
 export CARGO_TARGET_DIR="$TARGET_DIR"
@@ -36,9 +38,9 @@ export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
 
-LOG="$ORCH/logs/$ISSUE-wave.log"
+LOG="$ORCH_DIR/logs/$ISSUE-wave.log"
 
 exec systemd-run --user --scope --quiet --unit="$UNIT" \
   -p MemoryHigh=12G -p MemoryMax=16G \
   -p CPUWeight=100 -p IOWeight=50 \
-  /bin/bash -c "cd /home/user/solidcraft && exec nice -n 19 bash $LOOP/bin/agent-issue.sh $ISSUE --repo tangency-labs/solidcraft --work /home/user/solidcraft-wt --timeout $TIMEOUT_MIN >> $LOG 2>&1"
+  /bin/bash -c "cd $SOLIDCRAFT_REPO && exec nice -n 19 bash $LOOP_DIR/bin/agent-issue.sh $ISSUE --repo tangency-labs/solidcraft --work $WORKTREES_DIR --timeout $TIMEOUT_MIN >> $LOG 2>&1"

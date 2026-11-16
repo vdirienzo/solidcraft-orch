@@ -11,12 +11,14 @@ set -u
 ISSUE="${1:?falta el issue}"
 TIMEOUT="${2:-45}"
 SUFFIX="${3:-$(date -u +%Y%m%d-%H%M)}"
-ORCH=/home/user/.local/share/solidcraft-orch
-LOOP=/home/user/.local/share/solidcraft-loop
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 
-TD="$(bash "$ORCH/bin/slot-target-dir.sh" --slot "$ISSUE")" || exit 1
+TD="$(bash "$ORCH_DIR/bin/slot-target-dir.sh" --slot "$ISSUE")" || exit 1
 mkdir -p "$TD"
-LOG="$ORCH/logs/${ISSUE}-wave-${SUFFIX}.log"
+LOG="$ORCH_DIR/logs/${ISSUE}-wave-${SUFFIX}.log"
 UNIT="sc${ISSUE}.service"
 
 systemd-run --user --unit="$UNIT" --collect \
@@ -27,9 +29,9 @@ systemd-run --user --unit="$UNIT" --collect \
   --setenv=CARGO_TARGET_DIR="$TD" \
   --setenv=CARGO_BUILD_JOBS=4 \
   --setenv=CARGO_INCREMENTAL=0 \
-  --working-directory=/home/user/solidcraft \
-  bash "$LOOP/bin/agent-issue.sh" "$ISSUE" \
-    --repo tangency-labs/solidcraft --work /home/user/solidcraft-wt \
+  --working-directory="$SOLIDCRAFT_REPO" \
+  bash "$LOOP_DIR/bin/agent-issue.sh" "$ISSUE" \
+    --repo tangency-labs/solidcraft --work "$WORKTREES_DIR" \
     --timeout "$TIMEOUT" >/dev/null 2>&1
 RC=$?
 echo "launched issue=$ISSUE unit=$UNIT rc=$RC target=$TD log=$LOG"

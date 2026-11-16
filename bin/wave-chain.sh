@@ -24,8 +24,8 @@
 # --------------------------------------------------------------------------
 set -uo pipefail
 
-ORCH=/home/user/.local/share/solidcraft-orch
-GO_DIR="$ORCH/go"
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+GO_DIR="$ORCH_DIR/go"
 mkdir -p "$GO_DIR" 2>/dev/null || true
 
 log() { printf '%s wave-chain: %s\n' "$(date -u +%FT%TZ)" "$*"; }
@@ -48,10 +48,10 @@ log "el gate de PR #16718 termino"
 # 2. the gate of PR #16685 again, WITHOUT sccache and alone on the machine
 log "relanzo el gate de PR #16685 (sin sccache: el servidor murio y el rojo era falso)"
 RUSTC_WRAPPER="" SCCACHE_DISABLE=1 GATE_QUICK_TIMEOUT_MIN="${GATE_QUICK_TIMEOUT_MIN:-240}" \
-  bash "$ORCH/bin/gate.sh" 16186 fe64ea2179334ae8d1eae23951f679d2109c81aa origin/main 16685 \
-  > "$ORCH/logs/gate-16186-chain.log" 2>&1
+  bash "$ORCH_DIR/bin/gate.sh" 16186 fe64ea2179334ae8d1eae23951f679d2109c81aa origin/main 16685 \
+  > "$ORCH_DIR/logs/gate-16186-chain.log" 2>&1
 rc=$?
-log "el gate de PR #16685 termino con rc=$rc (ver $ORCH/logs/gate-16186-chain.log)"
+log "el gate de PR #16685 termino con rc=$rc (ver $ORCH_DIR/logs/gate-16186-chain.log)"
 
 # 3. the two RESUME agents get their go file
 log "libero los dos agentes de RESUME (16738 y 16784)"

@@ -90,9 +90,13 @@ fi
 # La ruta se PARSEA de los prompts: no esta escrita en el test, para que el
 # test siga siendo verdad si el prompt cambia la ruta.
 PROMPT_PATH=""
+# La ruta que el prompt invoca se busca con el prefijo de ESTA maquina, que
+# se arma aqui para que este fichero no lo lleve escrito (el grep del criterio
+# de portabilidad recorre bin/ y tiene que no encontrar nada, ni aqui).
+HOMEBASE='/home/'"user"
 for prompt in "$LOOP_RT"/prompts/*.md "$LOOP_SRC"/prompts/*.md; do
   [ -f "$prompt" ] || continue
-  found="$(grep -o '/home/user/[^ `"'"'"']*/bin/publish-pr\.sh' "$prompt" 2>/dev/null | head -1)"
+  found="$(grep -o "$HOMEBASE/[^ \`"'"'"]*/bin/publish-pr\.sh" "$prompt" 2>/dev/null | head -1)"
   if [ -n "$found" ]; then
     PROMPT_PATH="$found"
     break

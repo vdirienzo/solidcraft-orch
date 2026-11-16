@@ -15,20 +15,20 @@
 # USO: bash bin/run-chain.sh <issue> [<issue> ...]
 # --------------------------------------------------------------------------
 set -u
-ORCH=/home/user/.local/share/solidcraft-orch
-LOOP=/home/user/.local/share/solidcraft-loop
+ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 TIMEOUT_MIN="${CHAIN_TIMEOUT:-40}"
 SUFFIX="${CHAIN_SUFFIX:-$(date -u +%Y%m%d-%H%M)}"
 
 for ISSUE in "$@"; do
   echo "chain: === issue $ISSUE $(date -u +%FT%TZ) ==="
-  bash "$ORCH/bin/launch-slot-service.sh" "$ISSUE" "$TIMEOUT_MIN" "$SUFFIX"
+  bash "$ORCH_DIR/bin/launch-slot-service.sh" "$ISSUE" "$TIMEOUT_MIN" "$SUFFIX"
   # El lock se refresca mientras el agente corre: un lock que nadie refresca
   # se vuelve stale a los 240 min y la proxima wave lo reapea por error.
   (
     while systemctl --user is-active --quiet "sc${ISSUE}.service"; do
       sleep 120
-      bash "$ORCH/bin/slot-lock.sh" --slot "$ISSUE" --heartbeat >/dev/null 2>&1 || true
+      bash "$ORCH_DIR/bin/slot-lock.sh" --slot "$ISSUE" --heartbeat >/dev/null 2>&1 || true
     done
   ) &
   HB=$!
