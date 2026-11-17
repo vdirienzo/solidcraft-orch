@@ -1,3 +1,7 @@
+> **Este brief esta retirado (2026-11-17): el issue #2130 esta CERRADO en upstream.**
+> Un brief de un issue cerrado hace que un agente gaste su presupuesto en un trabajo que
+> ya esta hecho. No se despacha.
+
 # Brief: #2130 - la highlight de la cara se apaga mientras se panea
 
 **Objetivo unico: que el test `hover_pan_tests` de `crates/ui-egui/src/viewport_hover_pan_tests.rs` pase.**

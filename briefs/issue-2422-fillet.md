@@ -1,3 +1,12 @@
+> **BLOQUEADO (2026-11-17): el issue #2422 esta en el area del KERNEL, y el kernel esta
+> en PAUSA** (`RULES.md`: booleans, fillets, chamfers, shell, offsets, sweeps, lofts,
+> threads, holes, STEP/IGES, tessellation). El issue sigue abierto en upstream y con el
+> label `area:kernel`, pero **este brief no se despacha** hasta que el maintainer
+> levante la pausa. El brief queda aca para cuando eso pase.
+> Ademas: el ancla de la cadena de llamada estaba VIEJA. Hoy la cadena es
+> `crates/kernel/src/blend_corner.rs:255` (`fillet_radii`) ->
+> `crates/kernel/src/blend.rs:979` (`fillet_each`).
+
 # Brief: el issue #2422 (FILLET: operation failed) en el kernel
 
 **Un solo objetivo: que el test `issue2422_vertical_after_separate_bottom_rounds` pase.** El issue
@@ -12,7 +21,8 @@ repo: `crates/kernel/src/blend_corner.rs:425`.
   against the body's 0.01"*.
 - La cadena de llamadas, toda en este repo:
   `crates/kernel/src/blend_corner.rs` -> `pub fn fillet(body, edges, radius)`
-  -> `crates/smlib/src/ffi.rs:255` -> `pub fn fillet_radii(body, edges)` -> `crate::blend_smlib::fillet_each(body, &points, &radii)`.
+  -> `crates/kernel/src/blend_corner.rs:255` -> `pub fn fillet_radii(body, edges)` ->
+  `crates/kernel/src/blend.rs:979` -> `pub fn fillet_each(body, edges, radii, turn)`.
 - El test hace: una caja 40 x 80 x 27, las cuatro aristas de abajo con R2 una por una (con
   tangencia propagada), y despues una arista vertical R2; despues compara el volumen con el valor
   analitico, con una tolerancia de 1e-6. Tambien hace la variante con la cavidad (shelled).
