@@ -385,6 +385,68 @@ r = correr(
 check("the new comment is reported", "please rebase" in r[1]["out"], repr(r[1]["out"][:160]))
 check("the new comment is a task", len(pendientes(r[1]["orch"])) == 1, str(pendientes(r[1]["orch"])))
 
+print("10b. the queue has a ceiling: a PR does not get five jobs")
+# The cost of attending is real (the repo measured $0.25 and sixteen hours
+# of agent per issue) and a maintainer who answers five times was not
+# asking for five jobs. The third request for the same PR is the last one
+# that is queued; the fourth is recorded and NOT queued.
+# The first run seeds the snapshot; every run after that is a delta. The
+# ceiling is three queued requests per PR, so the fifth request is the
+# one that does not get queued.
+pasos = []
+for i in range(1, 6):
+    pasos.append(
+        {
+            "fixtures": fx(comentarios=[comentario(f"C{i}", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+        }
+    )
+r = correr("topes", pasos)
+queue = pendientes(r[4]["orch"])
+check("the queue stops at the ceiling of rounds per PR", len(queue) == 3, f"{len(queue)} tareas: {[t.get('clave') for t in queue]}")
+check("the request that was not queued is in the history", "no se encolaron" in historia(r[4]["orch"]), historia(r[4]["orch"])[-300:])
+check("it says why it was not queued", "pedidos" in historia(r[4]["orch"]), historia(r[4]["orch"])[-300:])
+
+print("10c. the queue has a ceiling overall")
+# A full queue does not take more: a spike of comments is noise, not work.
+llena = {"state/pending_tasks.json": json.dumps(
+    [{"clave": f"pr-1-{i}", "kind": "pr", "num": 900 + i, "estado": "pendiente"} for i in range(12)]
+)}
+r = correr(
+    "cota",
+    [
+        {
+            "fixtures": fx(comentarios=[comentario("C1", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+        },
+        {
+            "fixtures": fx(comentarios=[comentario("C2", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+            "estado": llena,
+        },
+    ],
+)
+check("a full queue does not take a new task", len(pendientes(r[1]["orch"])) == 12, str(len(pendientes(r[1]["orch"]))))
+check("the circuit breaker says so", "circuit breaker" in log_de(r[1]["orch"]).lower(), log_de(r[1]["orch"])[-300:])
+
+print("10d. the task carries a deadline and the history carries the action")
+r = correr(
+    "plazo",
+    [
+        {
+            "fixtures": fx(comentarios=[comentario("C1", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+        },
+        {
+            "fixtures": fx(comentarios=[comentario("C2", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+        },
+    ],
+)
+t0 = pendientes(r[1]["orch"])
+check("the task has a deadline", bool(t0 and t0[0].get("deadline")), str(t0))
+check("the history entry has the action the reader prints", '"action"' in historia(r[1]["orch"]), historia(r[1]["orch"])[-200:])
+
 print("11. I3: a corrupt snapshot does not report everything")
 r = correr(
     "i3",

@@ -79,6 +79,10 @@ RC_ERROR = 1
 # How old a lock has to be before it can be released.
 LOCK_EDAD_MIN = 20
 
+MAX_RONDAS_POR_PR = int(os.environ.get("COMMENT_WATCH_MAX_RONDAS", "3"))
+MAX_TAREAS_ABIERTAS = int(os.environ.get("COMMENT_WATCH_MAX_TAREAS", "12"))
+PLAZO_HORAS = int(os.environ.get("COMMENT_WATCH_PLAZO_HORAS", "72"))
+
 # Las cuentas que hablan por nosotros: un comentario nuestro no es un delta.
 NOSOTROS = {"vdirienzo", "vdirienzo[bot]"}
 
@@ -781,6 +785,10 @@ def correr(forzar_sembrado):
                             "at": ts,
                             "tipo": c.get("tipo", "comentario"),
                             "que": f"{c['kind']} #{c['num']}: {c['autor']}{estado}: {c['cuerpo'][:600]}",
+                            # The same text under "action": the reader of the
+                            # history (bin/orch-state.sh history) prints that
+                            # key, and it was showing an empty line.
+                            "action": f"{c['kind']} #{c['num']}: {c['autor']}{estado}: {c['cuerpo'][:600]}",
                             "url": c.get("url", ""),
                         },
                         ensure_ascii=False,
@@ -793,12 +801,24 @@ def correr(forzar_sembrado):
     # La cola de tareas: lo que pide una accion concreta. No interrumpe nada:
     # se atiende en el proximo checkpoint.
     vistos = {p.get("clave") for p in pend}
+    abiertas = [p for p in pend if (p.get("estado") or "pendiente") == "pendiente"]
+    por_pr = {}
+    for p in abiertas:
+        if p.get("kind") == "pr":
+            por_pr[p.get("num")] = por_pr.get(p.get("num"), 0) + 1
     nuevas = []
+    superadas = []
     for c in deltas:
         if not es_tarea(c):
             continue
         clave = f"{c['kind']}-{c['num']}-{c['clave']}"
         if clave in vistos:
+            continue
+        if len(abiertas) + len(nuevas) >= MAX_TAREAS_ABIERTAS:
+            superadas.append((c, "la cola de tareas esta llena (circuit breaker)"))
+            continue
+        if c["kind"] == "pr" and por_pr.get(c["num"], 0) >= MAX_RONDAS_POR_PR:
+            superadas.append((c, f"el PR #{c['num']} ya tiene {MAX_RONDAS_POR_PR} pedidos"))
             continue
         pide = cuerpo(c["cuerpo"])[:1200]
         if not es_confiable(c["autor"]):
@@ -815,6 +835,7 @@ def correr(forzar_sembrado):
             "creado": c["creado"],
             "detectado": ts,
             "estado": "pendiente",
+            "deadline": int(time.time()) + PLAZO_HORAS * 3600,
             "tipo": c.get("tipo", "comentario"),
             "confiable": es_confiable(c["autor"]),
             "pide": pide,
@@ -829,6 +850,29 @@ def correr(forzar_sembrado):
         except OSError as e:
             log(f"ERROR: the pending task queue could not be written ({e})")
             return RC_ERROR
+    if superadas:
+        # Lo que no se encola no se pierde: queda en la historia, con el
+        # motivo. El agente lo lee y PREGUNTA una vez en vez de gastar.
+        motivos = "; ".join(sorted({m for _, m in superadas}))
+        try:
+            os.makedirs(ORCH_DIR, exist_ok=True)
+            with open(HISTORY, "a") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "at": ts,
+                            "tipo": "tope",
+                            "que": f"{len(superadas)} pedido(s) no se encolaron: {motivos}",
+                            "action": f"{len(superadas)} pedido(s) no se encolaron: {motivos}",
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except OSError as e:
+            log(f"ERROR: the history could not be written ({e})")
+        for c, motivo in superadas:
+            log(f"NO se encola: {c['kind']} #{c['num']} ({motivo})")
 
     # Al chat: SOLO lo que cambia una decision. Lo demas queda en disco.
     cambios = [c for c in deltas if se_imprime(c)]
