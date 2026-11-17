@@ -40,7 +40,7 @@ done
 # The suites that need a working checkout of SolidCraft, a deploy
 # directory or the loop's scripts do not run anywhere else. They are
 # skipped by --fast and reported as failures otherwise.
-HEAVY="test-slot-parallelism.sh test-deploy-drift.sh test-publish-pr.sh test-state-split.sh"
+HEAVY="test-slot-parallelism.sh test-deploy-drift.sh test-publish-pr.sh test-state-split.sh test-briefs.sh"
 
 suites=()
 while IFS= read -r f; do

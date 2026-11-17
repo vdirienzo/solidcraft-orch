@@ -35,6 +35,10 @@ LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"
+# The root of THIS repo: the comparison with the copy has to be with an
+# absolute path, or the check is silently skipped when the preflight is
+# run from anywhere but the root.
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 STRICT=0
 [ "${1:-}" = "--strict" ] && STRICT=1
@@ -58,7 +62,7 @@ say_warn() {
 # needs it, so the message says what breaks without it.
 for entry in \
   "agent-issue.sh|el publisher: sin el no se abre ningun PR|bin/run-issue-scope.sh, bin/launch-wave.sh, bin/launch-slot-service.sh, bin/launch-resume.sh" \
-  "claim-race.sh|el arbitro del claim|bin/claim-verify.sh lo delega en el (ver RULES.md)" \
+  "claim-race.sh|el arbitro del claim|la mitad LOOP tiene su propia regla y el repo tiene la otra (ver docs/la-otra-mitad.md)" \
   "claim-brake.sh|el freno: convierte el veredicto del claim en exit codes|el publisher lo llama antes de publicar y en el push" \
   "claim-salvage.sh|el rescate del trabajo de un claim perdido|el publisher lo llama cuando el claim se perdio" \
   "gate-quick.sh|el gate que compila y escribe el verdict|bin/gate.sh:53 sale con rc=2 sin el" \
@@ -95,7 +99,7 @@ else
       base="$(basename "$script")"
       if [ ! -f "$HERMES_SCRIPTS/$base" ]; then
         say_missing "$HERMES_SCRIPTS/$base" "el cron $job corre esa copia, no el repo: sin ella el cron no hace nada"
-      elif [ -f "$script" ] && ! diff -q "$HERMES_SCRIPTS/$base" "$script" >/dev/null 2>&1; then
+      elif [ -f "$REPO_DIR/$script" ] && ! diff -q "$HERMES_SCRIPTS/$base" "$REPO_DIR/$script" >/dev/null 2>&1; then
         say_warn "$HERMES_SCRIPTS/$base" "la copia del cron $job NO es identica a $script: el cron corre codigo viejo"
       fi
     done < "$CRONS_FILE"
