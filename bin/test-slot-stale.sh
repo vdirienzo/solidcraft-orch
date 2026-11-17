@@ -442,6 +442,27 @@ else
   ok "--prs NO imprime la seccion de locks"
 fi
 
+# --- a lock whose worktree is GONE is not "not stuck" ------------------------
+# It was invisible: the summary said "ningun slot atascado" without having
+# looked at that slot. The lock still blocks, so it has to be visible.
+# (The same blindness the audit found as B2, only narrower.)
+mkdir -p "$ORCH/locks/slot-9911"
+printf '99999\n' > "$ORCH/locks/slot-9911/pid"
+printf '2020-01-01T00:00:00Z\n' > "$ORCH/locks/slot-9911/since"
+printf 'prueba\n' > "$ORCH/locks/slot-9911/owner"
+# The worktree of this slot does NOT exist: that is the case.
+run_stale --locks --hours 1
+if printf '%s' "$OUT$ERR" | grep -q 'could not be read\|UNKNOWN\|no se pudo leer\|sin veredicto'; then
+  ok "un lock cuyo worktree no existe NO se reporta como 'ningun slot atascado'"
+else
+  no "un lock cuyo worktree no existe NO se reporta como 'ningun slot atascado'" "rc=$RC out=[$OUT] err=[$ERR]"
+fi
+if printf '%s' "$OUT" | grep -q 'ningun slot atascado'; then
+  no "un lock sin worktree no puede hacer que el resumen diga 'ningun slot atascado'" "out=[$OUT]"
+else
+  ok "un lock sin worktree no puede hacer que el resumen diga 'ningun slot atascado'"
+fi
+
 # --- the verdict -------------------------------------------------------------
 printf '\n%d ok, %d FALLA\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
