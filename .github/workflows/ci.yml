@@ -1,0 +1,129 @@
+# ------------------------------------------------------------------
+# The orchestrator's own CI.
+#
+# WHY THIS EXISTS (2026-11-17): there was no CI at all. README.md:280
+# says the suites have to give rc=0 before committing any change to the
+# orchestrator, and nothing ran them: the rule lived in the head, and
+# the head was not there. A rule nobody can fail is a rule nobody
+# follows.
+#
+# WHAT IT RUNS, AND WHY ONLY THAT:
+#   - bin/test-all.sh --fast   the suites that are hermetic: their own
+#                              tmpdirs, their own stubs, no network, no
+#                              SolidCraft checkout, no locks.
+#   - bin/rules-sync.sh       the snapshot of the upstream rules must
+#                              not have aged (RULES.md is a cache of
+#                              AGENTS.md + skills/ + CONTRIBUTING.md).
+#
+# The heavy suites (they need this machine's deploy directory, the
+# loop's scripts or a SolidCraft checkout) do not run here: they cannot
+# pass on another machine, and a check that cannot pass is not a check.
+# bin/test-all.sh reports them as failures when it runs the full set,
+# so they are not silently forgotten.
+#
+# SECURITY (GitHub's secure-use guidance): the workflow takes no
+# secrets, needs no write token, and every value that comes from the
+# event goes through `env:` and never into a `run:` script body.
+# ------------------------------------------------------------------
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# One run per ref: a new push cancels the previous one. Two runs of the
+# same ref race for the same tmpdirs and the same conclusions.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this job reads the repository and runs a shell
+# script. It writes nothing and needs no token of its own.
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    name: suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # bin/test-workflow.sh and bin/workflow-validate.py need PyYAML. The
+      # image of the runner may not have it, and a suite that exits 2 ("no
+      # se puede correr") is not a failure you can read as a bug.
+      - name: PyYAML
+        run: |
+          python3 -c "import yaml" 2>/dev/null || {
+            sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml;
+          }
+          python3 -c "import yaml"
+
+      - name: The suites
+        run: bash bin/test-all.sh --fast
+
+      # The four heavy suites need the orchestrator's machine (its deployed
+      # copy, its worktrees, its loop scripts) and cannot pass anywhere
+      # else. A green CI therefore certifies 16 of the 20 suites, and that
+      # has to be visible, not buried in the log.
+      - name: What the CI does not certify
+        run: |
+          {
+            echo "### Suites NOT run by this CI"
+            echo ""
+            echo "They need the orchestrator's machine: the deployed copy, the"
+            echo "worktrees and the loop scripts. A green CI certifies the rest."
+            echo ""
+            echo '```'
+            bash bin/test-all.sh --fast 2>&1 | grep '^SKIP-' || echo "(none)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rules-sync:
+    name: the upstream rules did not age
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # IT INFORMS, IT DOES NOT BLOCK. The snapshot is a hash manifest of the
+    # upstream's rules, and the upstream changes them constantly ("81
+    # commits in five hours"). A job that fails every time upstream moves
+    # is an alarm that people learn to ignore. The hard failure belongs in
+    # the LOCAL gate, where the person who has to act sees it.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # The upstream checkout is needed to compare the snapshot against.
+      # It is read-only here and shallow: the check only hashes files.
+      - name: The upstream rules
+        uses: actions/checkout@v4
+        with:
+          repository: tangency-labs/solidcraft
+          ref: main
+          path: upstream
+          sparse-checkout: |
+            AGENTS.md
+            CONTRIBUTING.md
+            CLAUDE.md
+            skills/
+            scripts/pr-checks/
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: The snapshot is current
+        env:
+          # The value goes through the environment, never into the
+          # script body: a path from the event context is untrusted.
+          SOLIDCRAFT_REPO: ${{ github.workspace }}/upstream
+        run: bash bin/rules-sync.sh --verbose
+
+      # The briefs are instructions that a subagent receives literally: a
+      # brief that points at a file that moved sends the agent looking in
+      # the old place and burns its whole budget on a dead end. This needs
+      # the same upstream checkout.
+      - name: The briefs point at code that exists
+        env:
+          SOLIDCRAFT_REPO: ${{ github.workspace }}/upstream
+        run: bash bin/test-briefs.sh
