@@ -74,14 +74,37 @@ for entry in \
   say_missing "$LOOP_DIR/bin/$file" "$what - lo necesitan: $who"
 done
 
-# The hermes scripts: the cron runs a COPY of ping-ready.sh from there,
-# and the copy has to be byte-identical to the canonical one.
+# The hermes scripts: the cron runs a COPY from there, not the repo. So a
+# fix in this repo does NOT reach the cron until the copy is updated. The
+# copy of ping-ready.sh has to be byte-identical to the canonical one; the
+# rest only have to EXIST, but a copy that is older than the repo is a
+# cron running old code.
 if [ ! -d "$HERMES_SCRIPTS" ]; then
   say_missing "$HERMES_SCRIPTS" "los scripts que corren los crons viven ahi (ver README.md, tabla de crons)"
-elif [ ! -f "$HERMES_SCRIPTS/ping-ready.sh" ]; then
-  say_missing "$HERMES_SCRIPTS/ping-ready.sh" "el cron solidcraft-ping-ready corre esa copia; tiene que ser identica a bin/ping-ready.sh"
-elif ! diff -q "$HERMES_SCRIPTS/ping-ready.sh" "$(dirname "$0")/ping-ready.sh" >/dev/null 2>&1; then
-  say_missing "$HERMES_SCRIPTS/ping-ready.sh" "la copia del cron NO es identica a bin/ping-ready.sh: el cron corre codigo viejo"
+else
+  CRONS_FILE="$(cd "$(dirname "$0")" && pwd)/crons.txt"
+  if [ -f "$CRONS_FILE" ]; then
+    while IFS='|' read -r job schedule script node rest; do
+      case "$job" in ''|\#*) continue ;; esac
+      # The fields are padded for the eye: they have to be trimmed, or
+      # basename gets a name with spaces in it and the check looks for a
+      # file that does not exist.
+      job="$(printf '%s' "$job" | tr -d '[:space:]')"
+      script="$(printf '%s' "$script" | tr -d '[:space:]')"
+      [ -n "$script" ] || continue
+      base="$(basename "$script")"
+      if [ ! -f "$HERMES_SCRIPTS/$base" ]; then
+        say_missing "$HERMES_SCRIPTS/$base" "el cron $job corre esa copia, no el repo: sin ella el cron no hace nada"
+      elif [ -f "$script" ] && ! diff -q "$HERMES_SCRIPTS/$base" "$script" >/dev/null 2>&1; then
+        say_warn "$HERMES_SCRIPTS/$base" "la copia del cron $job NO es identica a $script: el cron corre codigo viejo"
+      fi
+    done < "$CRONS_FILE"
+  fi
+  if [ ! -f "$HERMES_SCRIPTS/ping-ready.sh" ]; then
+    say_missing "$HERMES_SCRIPTS/ping-ready.sh" "el cron solidcraft-ping-ready corre esa copia; tiene que ser identica a bin/ping-ready.sh"
+  elif ! diff -q "$HERMES_SCRIPTS/ping-ready.sh" "$(dirname "$0")/ping-ready.sh" >/dev/null 2>&1; then
+    say_missing "$HERMES_SCRIPTS/ping-ready.sh" "la copia del cron NO es identica a bin/ping-ready.sh: el cron corre codigo viejo"
+  fi
 fi
 
 # The checkout of SolidCraft: the gate runs there.
