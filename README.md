@@ -146,6 +146,27 @@ mkdir -p targets logs locks gates state reports briefs baseline
 cp bin/slot-target-dir.sh bin/ 2>/dev/null
 ```
 
+### ⚠ Falta la otra mitad: `$LOOP_DIR`
+
+Este repo es **la mitad ORCH**. La mitad **LOOP** —el publisher (`agent-issue.sh`), el
+árbitro del claim (`claim-race.sh`), el freno (`claim-brake.sh`), el rescate
+(`claim-salvage.sh`), el gate que compila (`gate-quick.sh`), el validador del body
+(`pr-defaults-line.sh`), el GC de disco y el supervisor— vive en `$LOOP_DIR` y **no está en
+git**.
+
+Sin él, este repo **no publica, no gatea y no arbitra**: `bin/gate.sh:53` sale con rc=2
+("the gate script is not there"). El inventario completo de esa mitad, qué la necesita y
+qué se rompe sin ella está en [`docs/la-otra-mitad.md`](docs/la-otra-mitad.md).
+
+Para comprobar qué falta en una máquina:
+
+```bash
+bash bin/preflight.sh
+```
+
+Los scripts que los crons ejecutan tienen que existir **antes** de que se cree el job
+(ver "Los scripts que los crons ejecutan", más abajo).
+
 Variables de entorno (el valor va en el entorno o en un .env que git ignora; **nunca en un archivo
 versionado**):
 
@@ -285,9 +306,18 @@ concreta, no codigo. El `state.json` se REGENERA desde `state/` con `bin/merge-s
 
 ## 6. Pruebas
 
-Las suites de `bin/test-*.sh` y `bin/test-rules.py` tienen que dar rc=0 antes de commitear cualquier
-cambio del orquestador. Las dos que viven en el loop:
-`/home/user/.local/share/solidcraft-loop/bin/test-gate-quick.sh` y `.../test-rules.py`.
+Las suites tienen que dar rc=0 antes de commitear cualquier cambio del orquestador. Se
+corren todas con un comando:
+
+```bash
+bash bin/test-all.sh          # todas
+bash bin/test-all.sh --fast   # solo las herméticas: las que corren en otra máquina
+```
+
+`bin/test-all.sh` reporta como **fallo** la suite que no pudo correr, no como un "skip": una
+suite que no se puede correr no es un verde. Las dos que viven en el loop —y que por eso no
+corren en otra máquina— son `/home/user/.local/share/solidcraft-loop/bin/test-gate-quick.sh`
+y `.../test-rules.py`.
 
 `bin/test-dup-scan.sh` mide el detector de duplicados por parche, con el contraste contra
 `claim-verify.sh`: el competidor que describe el fallo en prosa es invisible para el guard del
@@ -304,13 +334,18 @@ regla.
 ```
 bin/        los scripts (el grafo, la cola, el pipeline, los gates, los tests)
 briefs/     los briefs literales que se le dan a los agentes
+prompts/    el prompt que recibe el agente (wave-prompt.md)
 docs/       las reglas, los traps y las lecciones (copia de los references de la skill)
 reports/    las mediciones (paralelismo, tokens, imagenes, metricas de agentes)
 baseline/   el catalogo de fallos preexistentes medidos
-state/      el estado partido por concepto (una clave de primer nivel -> un archivo)
+rules-snapshot/  los hashes de las reglas de upstream que este repo cita (bin/rules-sync.sh)
 workflow.yaml   el grafo declarado del proceso
 RULES.md    las reglas del orquestador
+HANDOFF.md  el estado al empezar una sesion
 ```
+
+`state/`, `state.json`, `targets/`, `logs/`, `locks/` y `gates/` **no están en el repo**:
+son el estado de una máquina concreta y se regeneran en cada PC (ver §5).
 
 ## 8. Donde esta la fuente de verdad de cada cosa
 
