@@ -385,6 +385,35 @@ r = correr(
 check("the new comment is reported", "please rebase" in r[1]["out"], repr(r[1]["out"][:160]))
 check("the new comment is a task", len(pendientes(r[1]["orch"])) == 1, str(pendientes(r[1]["orch"])))
 
+print("10a. open_prs as a DICT does not kill the watcher")
+# The state was written both ways: a LIST of entries and a DICT of "PR
+# number" -> entry. The other consumer accepts both; if this one does not,
+# the watcher dies with an AttributeError on every pass - and the watcher
+# is a cron every fifteen minutes.
+r = correr(
+    "dict",
+    [
+        {
+            "fixtures": fx(comentarios=[comentario("C1", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+            "estado": {"state/prs.json": json.dumps({"open_prs": {"11205": {"pr": 11205, "issue": 7}}})},
+        },
+        {
+            "fixtures": fx(comentarios=[comentario("C2", "bherbruck", "please rebase onto main")]),
+            "confianza": "bherbruck",
+            "estado": {"state/prs.json": json.dumps({"open_prs": {"11205": {"pr": 11205, "issue": 7}}})},
+        },
+    ],
+)
+check("the watcher survives a dict of open_prs", r[1]["rc"] == 0, f"rc={r[1]['rc']} err={r[1]['err'][-300:]}")
+# The watcher has to FOLLOW the pull request of the dict: the stub records
+# what it was asked for. (The fixture only has comments for PR 42, so the
+# delta itself is empty here: what matters is that the watcher asked.)
+llamadas = ""
+with open(CALLS) as fh:
+    llamadas = fh.read()
+check("the watcher follows the pull request of the dict", "11205" in llamadas, llamadas[-300:])
+
 print("10b. the queue has a ceiling: a PR does not get five jobs")
 # The cost of attending is real (the repo measured $0.25 and sixteen hours
 # of agent per issue) and a maintainer who answers five times was not

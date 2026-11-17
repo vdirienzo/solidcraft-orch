@@ -292,16 +292,22 @@ def targets():
                 d = json.load(f)
         except (OSError, json.JSONDecodeError):
             d = {}
-        for p in d.get("open_prs", []) or []:
+        # open_prs is a LIST of entries, but it was also written as a DICT
+        # of "PR number" -> entry (the other consumer, bin/orch-state.sh,
+        # normalises both). Iterating a dict yields its KEYS, so the old
+        # code raised AttributeError and the watcher died on every pass -
+        # and the watcher is a cron now.
+        for clave, entrada in _entradas_open_prs(d.get("open_prs")):
             # The entry that carries the key "pr" instead of "number" was
-            # being lost: the pull request #11205 was counted as none. The
-            # other consumer of this key (bin/orch-state.sh) normalizes both.
-            n = p.get("number")
+            # being lost: the pull request #11205 was counted as none.
+            n = entrada.get("number")
             if not isinstance(n, int):
-                n = p.get("pr")
+                n = entrada.get("pr")
+            if not isinstance(n, int):
+                n = clave if isinstance(clave, int) else None
             if isinstance(n, int):
                 prs.add(n)
-            iss = p.get("issue")
+            iss = entrada.get("issue")
             if isinstance(iss, int):
                 issues.add(iss)
 
@@ -697,6 +703,22 @@ def formatear(c):
         f"  {marca}\n"
         f"  {texto[:TOPE_TERCERO]}"
     )
+
+
+def _entradas_open_prs(valor):
+    """(clave, entrada) de open_prs, sea lista o sea dict.
+
+    The state was written both ways: a LIST of entries (the current form)
+    and a DICT of "PR number" -> entry (an older form that really
+    happened). The other consumer of this key (bin/orch-state.sh) accepts
+    both; this one has to as well, or the watcher dies on a dict with an
+    AttributeError.
+    """
+    if isinstance(valor, dict):
+        return list(valor.items())
+    if isinstance(valor, list):
+        return [(None, e) for e in valor if isinstance(e, dict)]
+    return []
 
 
 def main():
