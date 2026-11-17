@@ -83,6 +83,62 @@ for repo in "${GATE_REPO:-}" "${SOLIDCRAFT_REPO:-$HOME/solidcraft}"; do
 done
 awk '{print $1}' "$TMP_KNOWN" | sed 's/^solidcraft-//' | grep -v '^$' | sort -u > "$TMP_LIST"
 
+# THE STALENESS OF OUR OWN BASELINE (2026-11-17).
+#
+# The upstream catalogue is refreshed with every merge; ours is measured by
+# hand, so it ages. Two consequences, in opposite directions:
+#   - a baseline that is behind can only MISS failures, and a missing failure
+#     is a false red;
+#   - a stale entry can MASK a regression that upstream already fixed: the
+#     failure is discounted as "preexisting" and it is not.
+# The second is the dangerous one, and it is bounded: upstream's CI is the
+# merge authority and its catalogue is fresh, so the cost of not seeing it
+# here is a red check, not a broken main. So the verdict stays permissive
+# and the staleness is made VISIBLE: it is warned about and it is written
+# into the effective verdict, where the report and the pipeline read it.
+BASE_MAX_AGE_DAYS="${BASE_MAX_AGE_DAYS:-14}"
+BASE_STALE=""
+BASE_AGE_DAYS=""
+if [ -f "$BASE" ]; then
+  base_date="$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$BASE" 2>/dev/null | head -1)"
+  if [ -n "$base_date" ]; then
+    base_epoch="$(date -d "$base_date" +%s 2>/dev/null || echo 0)"
+    if [ "$base_epoch" -gt 0 ]; then
+      now_epoch="$(date +%s)"
+      BASE_AGE_DAYS=$(( (now_epoch - base_epoch) / 86400 ))
+      if [ "$BASE_AGE_DAYS" -gt "$BASE_MAX_AGE_DAYS" ]; then
+        BASE_STALE="el baseline se midio hace ${BASE_AGE_DAYS} dias y el tope es ${BASE_MAX_AGE_DAYS}"
+      fi
+    fi
+  fi
+  # The upstream commit the baseline was measured against. If upstream moved
+  # since, the failures it already fixed may still be in our list.
+  base_sha="$(grep -oE '^# upstream [0-9a-f]{7,40}$' "$BASE" 2>/dev/null | head -1 | awk '{print $3}')"
+  if [ -n "$base_sha" ]; then
+    for repo in "${GATE_REPO:-}" "${SOLIDCRAFT_REPO:-$HOME/solidcraft}"; do
+      [ -n "$repo" ] && [ -d "$repo" ] || continue
+      head_sha="$(git -C "$repo" rev-parse origin/main 2>/dev/null || true)"
+      [ -n "$head_sha" ] || continue
+      case "$head_sha" in
+        "$base_sha"*) ;;
+        *)
+          if [ -n "$BASE_STALE" ]; then
+            BASE_STALE="$BASE_STALE; upstream movio desde $base_sha (esta en $head_sha)"
+          else
+            BASE_STALE="upstream movio desde $base_sha (esta en $head_sha)"
+          fi
+          ;;
+      esac
+      break
+    done
+  fi
+  if [ -n "$BASE_STALE" ]; then
+    echo "gate-baseline: ATENCION: $BASE_STALE" >&2
+    echo "  el baseline se usa igual (el CI de upstream es la autoridad del merge)," >&2
+    echo "  pero refrescalo: bash bin/baseline-refresh.sh --junit <reporte>" >&2
+  fi
+fi
+
 # THE LIST IS ONLY USEFUL IF IT IS JOINED: this block was lost while the
 # sources were being joined, and the catalogue was built and never read:
 # the failures that the upstream catalogues came out as NEW failures.
@@ -283,6 +339,8 @@ fi
   echo "SHA=$(grep -E '^SHA=' "$RAW" | head -1 | cut -d= -f2-)"
   echo "AT=$(date +%s)"
   echo "BASE=baseline/failures-origin-main.txt"
+  echo "BASE_AGE_DAYS=${BASE_AGE_DAYS:-unknown}"
+  echo "BASE_STALE=${BASE_STALE}"
 } > "$EFF.tmp" 2>/dev/null && mv -f "$EFF.tmp" "$EFF" 2>/dev/null || {
   rm -f "$EFF.tmp" 2>/dev/null || true
   echo "gate-baseline: el veredicto efectivo no se pudo escribir: $EFF" >&2

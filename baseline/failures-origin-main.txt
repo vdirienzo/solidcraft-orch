@@ -1,4 +1,5 @@
 # Fallos PREEXISTENTES de origin/main, medidos el 2026-11-03.
+# upstream ea772a043
 # Contexto: la migracion de upstream al kernel SMLib v1.1.0-alpha (#11351,
 # mergeada como ea772a043 / 147b4049c) dejo estos tests rotos en main.
 # Verificado en un worktree limpio de origin/main: 26 de 26 fallan con el
@@ -8,6 +9,16 @@
 # Formato: un test por linea, con el prefijo del crate (nextest lo usa asi).
 # Refrescar cuando upstream cambie: el reporte completo esta en
 # /home/user/.hermes/cache/scratch/verify-5857-origin-main-report.txt
+#
+# LA FECHA Y EL SHA DE ARRIBA IMPORTAN (2026-11-17): el catalogo de upstream se
+# refresca con cada merge; este se mide a mano y se queda viejo. Un baseline
+# viejo puede tapar una regresion que upstream ya arreglo (el fallo se descuenta
+# como "preexistente" y no lo es), asi que bin/gate-baseline.sh avisa cuando
+# pasa del tope (BASE_MAX_AGE_DAYS, 14 dias como la cuarentena de upstream) y
+# lo deja escrito en el veredicto efectivo. El veredicto sigue siendo
+# permisivo: el CI de upstream es la autoridad del merge y su catalogo esta
+# al dia, asi que el costo de que aqui no se ve es un check rojo, no un main
+# roto. Para refrescar: bash bin/baseline-refresh.sh --junit <reporte>
 solidcraft-cli::naming_corpus::corpus_designs_name_alike_every_build_and_fail_where_a_reference_is_gone
 engine::cmd::file::tests::each_format_has_an_export_command_of_its_own
 engine::cmd::sketch_project::tests::intersection_curve_of_picked_faces_spans_the_whole_surface
