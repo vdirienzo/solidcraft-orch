@@ -14,24 +14,26 @@ mas importante del archivo** y esta escrita con las lecciones que costaron horas
 Del issue al PR: buscar -> libre -> causa raiz -> test RED -> fix -> PR en draft -> gate -> ready.
 Cada paso es un proceso que puede morir y ser retomado; las aristas son condiciones sobre archivos.
 
-El grafo esta DECLARADO en `workflow.yaml` (12 nodos, 14 aristas, 7 senales), se valida con
+El grafo esta DECLARADO en `workflow.yaml` (15 nodos, 18 aristas, 8 senales), se valida con
 `bin/workflow-validate.py` y se ejecuta con `bin/workflow-runner.sh --list` (que dice que nodos
 serian elegibles ahora). El runner NUNCA ejecuta los nodos que compilan: esos los llevan los crons.
 
 | nodo | que hace | quien lo hace |
 |---|---|---|
 | buscar-issue | barre el pool por API y filtra (sin kernel, sin triage, con contenido) | un agente |
-| claim-verify | el issue esta libre? | `bin/claim-race.sh` |
+| claim-verify | el issue esta libre? | `bin/claim-verify.sh` |
 | causa-raiz | donde esta el defecto | un agente, con brief literal |
 | test-red | el test que falla antes del fix | un agente |
 | fix | la implementacion | un agente, con brief literal |
 | draft-pr | abre el PR en DRAFT | el agente, en el commit |
+| dup-scan | este PR es duplicado de otro abierto? | `bin/dup-scan.sh` |
+| comment-watch | lee los comentarios del maintainer | `bin/comment_watch.py` (cron 15 min) |
+| revisar-comentarios | atiende el pedido del maintainer | un agente |
 | pipeline | corrige bodies, encola gates, pasa a ready | `bin/pipeline.py` (cron 5 min) |
 | gate-queue | drena la cola de gates | `bin/gate-queue.sh` (cron 3 min) |
 | gate | compila y da el veredicto | `bin/gate.sh` |
 | gate-baseline | separa lo preexistente de lo nuevo | `bin/gate-baseline.sh` |
 | verify-pr | valida el PR listo | `bin/verify-pr.sh` |
-| dup-scan | este PR es duplicado de otro abierto? | `bin/dup-scan.sh` |
 | ci-upstream | espera al CI y al maintainer | el maintainer (la merge queue es suya) |
 
 ---
@@ -109,7 +111,9 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
     (`AGENTS.md:24`, issue #3226). No hay un check automatico que lo detecte: lo detecta el
     maintainer en la revision.
 18. **`Changes a default: no` es la forma EXACTA** que exige el parser del upstream
-    (`scripts/pr-checks/pr-checks.js`). "Changes to default: no" no sirve. Y la POSICION importa:
+    (`scripts/pr-checks/pr-checks.js`). "Changes to default: no" no sirve. Y la POSICION NO
+    importa: el parser de upstream es multilinea (`/…/im`), asi que la linea puede estar donde
+    sea; lo que lo rompe es un code fence, un comentario HTML o backticks.
     leé el parser, no supongas.
 
 ### Sobre git y el repo

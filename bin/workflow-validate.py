@@ -3,7 +3,7 @@
 workflow-validate.py - valida que el grafo declarado en workflow.yaml sea un grafo.
 
 POR QUE EXISTE (2026-11-04): el workflow.yaml es la DECLARACION del proceso de un
-issue (12 nodos, aristas, precondiciones, que hacer en cada fallo). Una declaracion
+issue (15 nodos, aristas, precondiciones, que hacer en cada fallo). Una declaracion
 que no se valida es un documento: el dia que un nodo se renombre, la arista que lo
 apunta queda rota en silencio y el runner propone un nodo que no existe.
 
@@ -33,7 +33,7 @@ import re
 import subprocess
 import sys
 
-# Los 12 nodos del proceso de un issue. No es una opinion: son los pasos que ya
+# Los 15 nodos del proceso de un issue. No es una opinion: son los pasos que ya
 # existen, cada uno con su script o con su agente.
 NODOS_OBLIGATORIOS = [
     "buscar-issue",
@@ -315,7 +315,7 @@ def validar(grafo, root, res):
             if args is not None and not isinstance(args, list):
                 res.error(f"{etiqueta}: 'args' tiene que ser una lista")
 
-    # --- los 12 nodos que tienen que estar ---------------------------------
+    # --- los 15 nodos que tienen que estar ---------------------------------
     for nid in NODOS_OBLIGATORIOS:
         if nid not in vistos:
             res.error(f"falta el nodo obligatorio '{nid}'")

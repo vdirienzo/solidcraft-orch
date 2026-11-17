@@ -4,7 +4,7 @@
 # manejaba el orquestador. 49 scripts y ningun mapa: nadie puede responder "que sigue"
 # ni "donde se trabo" sin reconstruir el estado a mano.
 #
-# QUE ES: la DECLARACION del proceso de un issue (12 nodos) con sus aristas, sus
+# QUE ES: la DECLARACION del proceso de un issue (15 nodos) con sus aristas, sus
 # precondiciones y que hacer en cada fallo.
 # QUE NO ES: un framework. Este archivo no ejecuta nada. Quien ejecuta es
 # bin/workflow-runner.sh (UN nodo elegible; NUNCA lo que compila Rust) y los crons
