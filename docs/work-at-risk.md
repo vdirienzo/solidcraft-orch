@@ -11,36 +11,67 @@ crece, algo anda mal.
 
 ---
 
-## 1. El fork de SolidCraft: dos ramas que solo existen en la laptop del mantenedor
+## 1. El fork de SolidCraft: una rama en riesgo, y una que se creia perdida
 
 La auditoria del propio repo (`reports/loop-codigo.md`, seccion 3.2, 2026-11-02) encontro
 **12 ramas locales con commits reales que no estaban en el fork**. De esas 12, **10 ya
 estan en el fork** (verificado hoy contra `vdirienzo/solidcraft`): el trabajo esta a
 salvo.
 
-Las dos que **no** estan:
+La version anterior de esta pagina decia que **dos** ramas estaban en riesgo. **Estaba
+mal en una de las dos**, y el error era del metodo, no de los datos:
 
 | Rama | Commit | Que es |
 |---|---|---|
 | `perf/issue-3892-browser-tree-hover` | `2211fd87a` | "perf(#3892): index the hidden joints and folders" — 1 commit |
 | `fix/issue-5505-sketch-constraint-dof` | `77665cb5b` | "fix(#5505): a zero dimension keeps constraining" — 3 commits |
 
-**Como recuperarlas** (desde la maquina del mantenedor, donde si existen):
+**Verificado el 2026-11-17 contra las 237 ramas de `vdirienzo/solidcraft`:**
+
+- **`fix/issue-5505-sketch-constraint-dof` NO esta en riesgo.** El commit `77665cb5b`
+  esta en el fork, bajo otro nombre: `wip/issue-5505-sketch-constraint-dof`. Lo que se
+  perdio fue el **nombre** de la rama, no el trabajo. Ademas el fix llego a upstream por
+  otro camino: el PR #6345 (el de esa rama) se **cerro** sin mergearse, y el trabajo
+  merged como **#10790** (`fix/issue-5505-length-dof`, MERGED). El issue #5505 esta
+  **cerrado como COMPLETED** en upstream.
+- **`perf/issue-3892-browser-tree-hover` SI esta en riesgo**, y no se puede recuperar
+  desde esta maquina: el commit `2211fd87a` no existe en ninguno de los 237 refs del
+  fork, ni en el checkout local. Es el **primer intento** del agente sobre #3892, que se
+  quedo sin iteraciones; el orquestador encontro la causa raiz y lo redespacho. El issue
+  #3892 esta **cerrado como COMPLETED** en upstream (por el PR #3894, de otro autor), asi
+  que no bloquea a nadie: lo que se pierde es un intento descartado, no un fix pendiente.
+
+**Como recuperarla** (desde la maquina del mantenedor, donde si existe):
 
 ```bash
 cd /ruta/al/solidcraft
-git push fork perf/issue-3892-browser-tree-hover fix/issue-5505-sketch-constraint-dof
+git push fork perf/issue-3892-browser-tree-hover
 ```
 
-**Que se pierde y que no:**
+### El gate, ahora ejecutable
 
-- `fix/issue-5505-sketch-constraint-dof` es el **mismo fix** que `wt/issue-5505-evidence`
-  (que si esta en el fork), y su trabajo **llego a upstream** por otro camino: el PR #10790
-  de #5505 fue mergeado por el mantenedor. Perder la rama no pierde trabajo de upstream;
-  pierde la rama y su historia.
-- `perf/issue-3892-browser-tree-hover` es el **primer intento** del agente sobre #3892, que
-  se quedo sin iteraciones; el orquestador encontro la causa raiz y lo redespacho. Si el
-  trabajo del primer intento tiene algo que el segundo no tiene, esa parte se pierde.
+La version anterior de esta pagina usaba este comando como gate:
+
+```bash
+git rev-list --count fork/main..<rama>
+```
+
+**Ese gate esta mal.** Responde "la punta NO es alcanzable desde `fork/main`", que no
+es lo mismo que "el commit no esta en GitHub": una rama mergeada bajo otro nombre (o
+alcanzable desde otra rama del fork) da un numero > 0 y NO esta en riesgo. Por eso esta
+pagina llamaba en riesgo a un commit que estaba en el fork.
+
+La pregunta correcta es: **el commit existe en algun ref del fork?** Y hay un script que
+la hace:
+
+```bash
+bash bin/branch-risk.sh          # la lista, y rc=1 si hay trabajo solo en este disco
+```
+
+Dice tres cosas, y no las confunde: **EN RIESGO** (el commit no esta en ningun ref del
+fork: existe solo en este disco), **SALVADA** (el commit esta en GitHub bajo otro
+nombre: el trabajo esta a salvo, el nombre no), y **mergeada** (ya esta en
+`fork/main`). Cada rama en riesgo sale con el comando exacto que la salva.
 
 **Ademas, el `main` del fork esta 415 commits atras del upstream.** Es la consecuencia de
 la estrategia de merge (`git merge tangency-labs:main`): el `main` del fork es un merge, no
@@ -74,9 +105,14 @@ esta en GitHub y no se sabe de que es, es ruido que esconde la que si importa.
 del fork se pushean, y las que tienen trabajo propio que no esta en ningun PR se anotan
 aca.
 
-El gate para saber si una rama tiene trabajo propio es que su punta **no** sea alcanzable
-desde `fork/main`:
+El gate para saber si una rama tiene trabajo propio **no** es "su punta no sea alcanzable
+desde `fork/main`" (esa pregunta da un numero > 0 para un commit que esta en el fork
+bajo otro nombre, y por eso esta pagina se equivoco una vez). El gate es: **el commit
+existe en algun ref del fork?**
 
 ```bash
-git rev-list --count fork/main..<rama>
+bash bin/branch-risk.sh    # rc=1 si hay trabajo que solo existe en este disco
 ```
+
+El `rc` es lo que importa: `0` es "no se perdio nada", `1` es "hay commits que muerecon
+el disco". La lista dice por que y como salvar cada uno.
