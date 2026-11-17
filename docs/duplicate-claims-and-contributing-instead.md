@@ -37,41 +37,6 @@ some PRs and a filter over the body then finds nothing.
 | a PR exists but its author is not moving it | wait for the takeover rule (an idle draft may be taken over), do not duplicate |
 | the bug is ALREADY FIXED in `origin/main` | stop the agent; open nothing; say in the report that upstream carries the fix |
 
-## 2a. The competitor that names the issue in PROSE: the guard cannot see it
-
-The claim check (`bin/claim-verify.sh`) and the upstream `Duplicate PR check` both look for the
-CLOSING VERB: `Fixes` / `Closes` / `Resolves` followed by `#N`. A competitor that describes the
-same failure in PROSE, without the verb, is invisible to BOTH. So our PR can be a byte-identical
-duplicate of someone else's and still look clean — while theirs has the LOWER number and wins.
-
-Measured on 2026-11-11: our #14822 was byte-identical to #14811 (DuBearte, opened 43 minutes
-earlier, carrying `approved-for-ci` + `ready to merge`). `claim-verify.sh` answered
-`VEREDICTO=OCUPADO el PR #14822 ya reclama #14801` — it pointed at OUR OWN PR as the competitor,
-because #14811 mentioned the issue in prose and not with a closing verb.
-
-Two ways to catch it:
-
-1. By the TEXT of the symptom. `gh pr list --search` indexes the title and the body, not the
-   diff, so search for the panic message or the test name:
-   `gh pr list --state open --search 'Dropped TexturesDelta'`. Searching `textures_delta` (the
-   identifier that only exists in the diff) found nothing.
-2. Mechanically, by the PATCH: `bin/dup-scan.sh <issue> <branch|sha>`. It compares the ADDED
-   lines of our change against the added lines of every open PR that touches the same files, and
-   excludes our own PR by number and by head sha. rc=1 means a confirmed duplicate.
-   `bin/publish-pr.sh` refuses to publish on rc=1; `bin/gate.sh` warns.
-
-The ratio guard: ours counts as a duplicate when our added lines are a SUBSET of theirs AND ours
-is at least 40% of their added lines. The ratio stops a large unrelated PR that happens to contain
-one of our lines from counting as a duplicate.
-
-When you close yours because of a duplicate, ask the author to add the closing keyword. #14811
-did not carry `Fixes #14801`, so without that request the issue stays open after the fix lands.
-And if the fix lands through the OTHER PR, the issue still does not close on its own: the bot only
-closes an issue when the merged PR carries a closing verb. After the merge, put the evidence on
-the issue (the merge sha, the line in the file) and say it can be closed; if you were the
-claimant, release it with `/unclaim` as a comment (the bot answers "Released. This one is free
-again" and drops the `in progress` label).
-
 ## 2b. The fix may already be in `main`, under a DIFFERENT issue number
 Before an agent writes a fix, run its RED test against a clean worktree of `origin/main`.
 If the RED PASSES there, the bug is fixed upstream: the fix landed with another issue's
@@ -100,6 +65,77 @@ opening a second one. A comment with the finished work is a complete contributio
 gets the fix and the issue gets closed once.
 
     gh pr comment <pr-number> --repo tangency-labs/solidcraft --body-file <file>
+
+### 3b. The five traps of a lost claim (measured on #9178, 2026-11-17)
+
+The empty-claim row above is the common case, and it has five edges that cost real work.
+
+**TRAP 1: there are TWO scripts and only one of them decides.** The ARBITER is
+`solidcraft-loop/bin/claim-race.sh` (`VERDICT=OK|TAKEN|LOST|RESOLVED|UNKNOWN`); the orchestrator's
+`bin/claim-verify.sh` is an ADAPTER over it, and there is a `claim-verify.sh.bak-20261031-claimrule`
+because the rule was duplicated once. Ask the ARBITER, always:
+
+    bash ~/solidcraft-loop/bin/claim-race.sh --issue N --mode selection|race|funnel
+
+`--mode selection` reads the RECORD of the issue (assignees and the bot's comments) and asks
+whether the issue is free to work on; `--mode race` is the upstream's rule (the lowest-numbered
+open PR wins). The adapter prints `VEREDICTO=OCUPADO` with a DIFFERENT vocabulary and its exit
+codes do not match the arbitrator's: two vocabularies answering "who holds the claim" is how
+four issues were lost.
+
+**TRAP 2: the brake REFUSES to publish and therefore NEVER writes the salvage.** The protocol
+says the work is never deleted, but `claim-brake.sh` aborts on TAKEN before it collects the
+patch. The salvage is therefore MANUAL, and it has to include:
+
+    logs/claims-lost/issue-N-claim-TAKEN.diff    # git diff origin/main...<branch>
+    logs/claims-lost/issue-N-claim-TAKEN.json    # verdict, holder, our branch, our commit
+    logs/claims-lost/issue-N-claim-TAKEN.md      # the story, in prose
+
+and the branch stays published on the fork and the worktree stays on disk. The state key that
+records it lives in `state/claims.json` under `claims_cedidos` (its OWN file: the manifest
+declares one file per key, and `merge-state.sh --force` refuses a key that is in another file).
+After moving it, `merge-state.sh --force` and then `--check` have to say IDENTICO.
+
+**TRAP 3: `Refs` is not a way around the claim.** With `Refs #N` the upstream duplicate check
+does NOT fail (it only looks for the closing verb), so the CI would be green — and the claim
+would STILL belong to the other author. That is skipping the protocol, not solving the
+problem. `Refs` is only honest when the fix is genuinely a different change AND the issue
+stays open for the other half: #9178 accepted BOTH halves ("Until then, the errors could name
+what is accepted"), so a diagnostic-only PR was a real option, but the claim holder had a
+lower number, so the offer went as a COMMENT instead.
+
+**TRAP 4: the duplicate check is about the VERB, so the real competition is invisible to it.**
+`gh pr list --search 9178` and `--search "fillet conic"` find nothing when the competitor names
+the issue only in prose. `bin/dup-scan.sh` reasons about the PATCH instead (the added lines),
+and it is what proves that the two fixes are COMPLEMENTARY rather than the same change:
+
+    bash bin/dup-scan.sh <issue> <branch>   # 0 = nobody replicates our patch
+
+That verdict is what makes the offer honest: "your PR does the geometry, mine does the
+diagnosis, nobody duplicates anybody".
+
+**TRAP 5: say which STRING both PRs touch.** When the other PR will change the same line of
+the same message, say so in the comment and say WHICH wording is true of which code. On #9178
+the refusal line reads "fillets work on lines and arcs" in the diagnostic-only branch and has
+to become "lines, arcs, conics and open splines" once the geometry lands, which is the
+wording the other PR's own description uses. Without that sentence the author applies the
+patch and finds the message wrong.
+
+### 3c. What the offer comment is worth publishing with
+
+The comment that carries the offer needs the same four things as section 3 (the rule in prose,
+the exact place, the branch to cherry-pick from, the measurement) plus the numbers that make it
+checkable by someone who cannot reproduce it:
+
+- the RED/GREEN counts, with the direction: `29 passed / 5 failed` on the branch WITHOUT the
+  change and `34 passed / 0 failed` with it;
+- the measured BEFORE/AFTER table, produced by the SAME binary built from the two heads, on the
+  reporter's own reproducer (not a paraphrase of it);
+- the gate: `cargo fmt --check` and `cargo clippy -D warnings`, both clean;
+- the branch, the SHA and `git merge-tree` rc=0 against `origin/main`.
+
+The BEFORE binary is worth building on purpose: a message that changed is a claim about
+behaviour, and only two builds of the same tree, one with the change and one without, prove it.
 
 ### What the comment must contain
 
