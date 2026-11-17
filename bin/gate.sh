@@ -21,11 +21,18 @@
 # checkout: the change it has to judge lives there.
 #
 # USAGE:
-#   bash bin/gate.sh <issue> <sha> [base]
+#   bash bin/gate.sh <issue> <sha> [base] [our_pr]
 #
 #   <issue>  the slot: the number of the issue (the branch and the lock)
 #   <sha>    the commit to check
 #   <base>   the base of the diff (default: origin/main)
+#
+# EXIT CODES:
+#   0   the gate ran and the gate script said what it had to say
+#   2   the usage is wrong, or the gate script of the loop is not there
+#   4   the claim of the issue is LOST: the gate did not run
+#   5   there is NO worktree of the slot: the gate did not run (2026-11-17)
+#   *   the exit code of the gate script of the loop
 #
 # IT DOES NOT RUN THE FULL `cargo xtask ci`: the CI of the upstream runs the
 # full suite when a maintainer adds the label approved-for-ci, and the merge
@@ -50,6 +57,9 @@ ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
+# SOLIDCRAFT_REPO is NOT the fallback of the gate anymore (2026-11-17): the
+# gate compiles the worktree of the slot or it does not run. It stays
+# exported because the children of the gate resolve their own paths with it.
 GATE_SCRIPT="$LOOP_DIR/bin/gate-quick.sh"
 # The gate and the baseline have to look at the SAME gates directory (the
 # one of this slot) and the SAME orchestrator: the paths are exported so the
@@ -76,6 +86,49 @@ if [ ! -x "$GATE_SCRIPT" ] && [ ! -f "$GATE_SCRIPT" ]; then
   echo "gate.sh: the gate script is not there: $GATE_SCRIPT" >&2
   exit 2
 fi
+
+# ---------------------------------------------------------------------------
+# THE WORKTREE OF THE SLOT (2026-11-17): no worktree, no gate.
+#
+# WHY: the gate compiles the change it has to judge, and the change lives in
+# the worktree of the slot. When the worktree was not there, the gate fell
+# back to the MAIN CHECKOUT: it compiled a tree WITHOUT the change, it wrote
+# the verdict of that tree, and bin/verify-pr.sh read that verdict as "the
+# gate of this pull request" and accepted it. A verdict that describes
+# another tree is WORSE than no verdict at all.
+#
+# So the gate FAILS when the worktree of the slot is not there, and the
+# message says WHERE it expected it (the path), not a generic phrase. The
+# same happens when the directory is there but it is not a checkout of git:
+# there is nothing to judge.
+#
+# THE CHECK IS BEFORE THE BUILD TOKEN: the token can wait 30 minutes for a
+# free slot, and there is no point in waiting for it when there is nothing
+# to compile.
+#
+# EXIT CODE 5: the worktree of the slot is not there (the gate did not run).
+# ---------------------------------------------------------------------------
+WORKTREE=""
+# The worktree of the slot lives in ONE of two places, and which one depends
+# on who made it: the orchestrator's own slots use $WORKTREES_DIR, and the
+# publisher (agent-issue.sh, in the loop) uses $LOOP_DIR/work. Before this
+# check, the gate fell back to the main checkout when it found neither - and
+# compiled a tree that did NOT contain the change, then wrote a verdict that
+# read as if it did.
+for candidate in "$WORKTREES_DIR/issue-$ISSUE" "$LOOP_DIR/work/issue-$ISSUE"; do
+  if [ -d "$candidate/.git" ] || [ -f "$candidate/.git" ]; then
+    WORKTREE="$candidate"
+    break
+  fi
+done
+if [ -z "$WORKTREE" ]; then
+  echo "gate.sh: no hay worktree del slot $ISSUE: se esperaba uno de estos dos" >&2
+  echo "gate.sh:   $WORKTREES_DIR/issue-$ISSUE" >&2
+  echo "gate.sh:   $LOOP_DIR/work/issue-$ISSUE" >&2
+  echo "gate.sh: el gate NO corre: un veredicto del checkout principal no describe este cambio." >&2
+  exit 5
+fi
+export REPO="$WORKTREE"
 
 # The target directory of the slot: THE SAME one the agent used. The gate
 # helper of the loop resolves the layout from GATE_QUICK_TARGET_DIR, so the
@@ -107,14 +160,8 @@ BUILD_TOKEN="$(bash "$ORCH_DIR/bin/build-slot.sh" --take --wait "${GATE_BUILD_SL
 # The token comes back with the gate, whatever happens.
 trap 'bash "$ORCH_DIR/bin/build-slot.sh" --release "$BUILD_TOKEN" >/dev/null 2>&1 || true' EXIT
 
-# The worktree of the slot: the change lives there.
-WORKTREE="$WORKTREES_DIR/issue-$ISSUE"
-if [ -d "$WORKTREE/.git" ] || [ -f "$WORKTREE/.git" ]; then
-  export REPO="$WORKTREE"
-else
-  export REPO="$SOLIDCRAFT_REPO"
-  echo "gate.sh: no hay worktree para el slot $ISSUE: el gate corre en el checkout principal" >&2
-fi
+# The worktree of the slot was resolved (and CHECKED) above: the gate runs in
+# the worktree of the slot, never in the main checkout.
 
 echo "gate.sh: target dir: $CARGO_TARGET_DIR" >&2
 echo "gate.sh: repo:       $REPO" >&2

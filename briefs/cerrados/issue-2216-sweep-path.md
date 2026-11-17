@@ -1,3 +1,7 @@
+> **Este brief esta retirado (2026-11-17): el issue #2216 esta CERRADO en upstream.**
+> Un brief de un issue cerrado hace que un agente gaste su presupuesto en un trabajo que
+> ya esta hecho. No se despacha.
+
 # Brief: #2216 - el sweep de superficie no deja elegir el path
 
 **Objetivo unico: que el sweep se pueda lanzar con el path que el usuario eligio.**

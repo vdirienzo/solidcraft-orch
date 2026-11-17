@@ -27,7 +27,7 @@ líneas, testear, commitear, pushear, gate, actualizar el body del PR.
    El motivo debe decir que el comando del engine todavía no está implementado
    (algo como `#[ignore = "the engine command is not implemented yet"]`).
    Usá el MISMO formato de `#[ignore = "..."]` que ya usa el repo (fijate en
-   `crates/engine/src/cmd/measure_surface_tests.rs`, que tiene tests ignorados con motivo).
+   `crates/engine/src/measure_surface_tests.rs`, que tiene tests ignorados con motivo).
 
 2. Verificá (target dir propio, el del slot 3599):
    ```

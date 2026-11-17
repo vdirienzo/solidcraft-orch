@@ -52,6 +52,88 @@ mkverdict(){ # $1 slot, $2 verdict, $3 new, $4 failed(csv), $5 deferred(opcional
 run(){ ORCH_DIR="$ORCH_DIR" LOOP_DIR="$LOOP_DIR" bash "$ORCH_DIR/bin/gate-baseline.sh" "$1" >/dev/null 2>&1; }
 field(){ grep -E "^$2=" "$LOOP_DIR/gates/$1/scope.effective.verdict" 2>/dev/null | head -1 | cut -d= -f2-; }
 
+# --- LA VIEJEZ DEL BASELINE (2026-11-17) ----------------------------------
+# El catalogo de upstream se refresca con cada merge; el nuestro se mide a
+# mano y envejece. Un baseline viejo puede tapar una regresion que upstream ya
+# arreglo: el fallo se descuenta como "preexistente" y no lo es. El veredicto
+# sigue siendo permisivo (el CI de upstream es la autoridad del merge), pero
+# la viejez se AVISA y se ESCRIBE en el veredicto efectivo.
+BASE_FILE="$ORCH_DIR/baseline/failures-origin-main.txt"
+hoy="$(date -u +%Y-%m-%d)"
+viejo="$(date -u -d '40 days ago' +%Y-%m-%d 2>/dev/null || date -u -d '40 days ago' +%Y-%m-%d)"
+
+# un baseline fresco: no se avisa
+cat > "$BASE_FILE" <<EOF
+# Fallos PREEXISTENTES de origin/main, medidos el $hoy.
+# upstream abc123456
+engine::old::one
+kernel::old::two
+EOF
+mkverdict v1 ROJO-SCOPE 2 "engine::old::one,kernel::old::two"
+run v1
+if [ -z "$(field v1 BASE_STALE)" ]; then
+  ok "un baseline fresco no avisa de vejez"
+else
+  no "un baseline fresco no avisa de vejez (dijo: $(field v1 BASE_STALE))"
+fi
+
+# un baseline viejo: avisa, y lo deja escrito en el veredicto
+cat > "$BASE_FILE" <<EOF
+# Fallos PREEXISTENTES de origin/main, medidos el $viejo.
+# upstream abc123456
+engine::old::one
+kernel::old::two
+EOF
+mkverdict v2 ROJO-SCOPE 2 "engine::old::one,kernel::old::two"
+run v2
+if [ -n "$(field v2 BASE_STALE)" ] && [ "$(field v2 BASE_AGE_DAYS)" -ge 40 ] 2>/dev/null; then
+  ok "un baseline de 40 dias avisa y dice cuantos dias tiene"
+else
+  no "un baseline de 40 dias avisa y dice cuantos dias tiene (stale=$(field v2 BASE_STALE) age=$(field v2 BASE_AGE_DAYS))"
+fi
+
+# la vejez NO cambia el veredicto: el veredicto sigue siendo el que era
+if [ "$(field v2 VERDICT)" = "VERDE-SCOPE" ]; then
+  ok "un baseline viejo no cambia el veredicto (el CI de upstream es la autoridad)"
+else
+  no "un baseline viejo no cambia el veredicto (quedo $(field v2 VERDICT))"
+fi
+
+# el tope se puede ajustar con la variable
+cat > "$BASE_FILE" <<EOF
+# Fallos PREEXISTENTES de origin/main, medidos el $viejo.
+# upstream abc123456
+engine::old::one
+kernel::old::two
+EOF
+mkverdict v3 ROJO-SCOPE 2 "engine::old::one,kernel::old::two"
+ORCH_DIR="$ORCH_DIR" LOOP_DIR="$LOOP_DIR" BASE_MAX_AGE_DAYS=90 bash "$ORCH_DIR/bin/gate-baseline.sh" v3 >/dev/null 2>&1
+if [ -z "$(field v3 BASE_STALE)" ]; then
+  ok "con BASE_MAX_AGE_DAYS=90 un baseline de 40 dias no avisa"
+else
+  no "con BASE_MAX_AGE_DAYS=90 un baseline de 40 dias no avisa (dijo: $(field v3 BASE_STALE))"
+fi
+
+# un baseline sin fecha: no se avisa de vejez (no se puede saber), pero no se rompe
+cat > "$BASE_FILE" <<EOF
+engine::old::one
+kernel::old::two
+EOF
+mkverdict v4 ROJO-SCOPE 2 "engine::old::one,kernel::old::two"
+run v4
+if [ "$(field v4 VERDICT)" = "VERDE-SCOPE" ]; then
+  ok "un baseline sin fecha no rompe el veredicto"
+else
+  no "un baseline sin fecha no rompe el veredicto (quedo $(field v4 VERDICT))"
+fi
+
+# el baseline vuelve al que el resto del suite usa
+cat > "$ORCH_DIR/baseline/failures-origin-main.txt" <<'EOF'
+# comment line
+engine::old::one
+kernel::old::two
+EOF
+
 # 1. every failure is preexisting -> green, and the raw verdict is not touched.
 printf 'engine::catalogued::three\n' > "$KNOWN_FAILING_TESTS"
 mkverdict a ROJO-SCOPE 2 "engine::old::one,kernel::old::two"

@@ -3,7 +3,7 @@
 workflow-validate.py - valida que el grafo declarado en workflow.yaml sea un grafo.
 
 POR QUE EXISTE (2026-11-04): el workflow.yaml es la DECLARACION del proceso de un
-issue (12 nodos, aristas, precondiciones, que hacer en cada fallo). Una declaracion
+issue (15 nodos, aristas, precondiciones, que hacer en cada fallo). Una declaracion
 que no se valida es un documento: el dia que un nodo se renombre, la arista que lo
 apunta queda rota en silencio y el runner propone un nodo que no existe.
 
@@ -33,7 +33,7 @@ import re
 import subprocess
 import sys
 
-# Los 12 nodos del proceso de un issue. No es una opinion: son los pasos que ya
+# Los 15 nodos del proceso de un issue. No es una opinion: son los pasos que ya
 # existen, cada uno con su script o con su agente.
 NODOS_OBLIGATORIOS = [
     "buscar-issue",
@@ -42,6 +42,9 @@ NODOS_OBLIGATORIOS = [
     "test-red",
     "fix",
     "draft-pr",
+    "dup-scan",
+    "comment-watch",
+    "revisar-comentarios",
     "pipeline",
     "gate-queue",
     "gate",
@@ -126,6 +129,103 @@ def chequear_script(res, etiqueta, script, root, interprete=None):
         return
     if interprete == "bash" and not os.access(ruta, os.X_OK):
         res.error(f"{etiqueta}: el script '{script}' no es ejecutable (se corre con bash)")
+
+
+def cargar_crons(ruta, res):
+    """El registro de los crones: bin/crons.txt es la fuente.
+
+    Cada linea: <job> | <schedule> | <script> | <node> | <que hace>.
+    Se devuelve un mapa {job: {schedule, script, nodo, que}}.
+    """
+    crons = {}
+    if not os.path.isfile(ruta):
+        res.error(f"no existe el registro de crones: {ruta}")
+        return crons
+    with open(ruta, encoding="utf-8") as fh:
+        for lineno, linea in enumerate(fh, 1):
+            linea = linea.strip()
+            if not linea or linea.startswith("#"):
+                continue
+            partes = [p.strip() for p in linea.split("|")]
+            if len(partes) < 4:
+                res.error(
+                    f"{os.path.basename(ruta)}:{lineno}: tiene que tener 4 campos "
+                    f"(<job> | <schedule> | <script> | <nodo> | <que hace>), tiene {len(partes)}"
+                )
+                continue
+            job, schedule, script, nodo = partes[:4]
+            if not job or not schedule or not script:
+                res.error(f"{os.path.basename(ruta)}:{lineno}: job, schedule y script no pueden estar vacios")
+                continue
+            if not RE_CRON.match(schedule.strip()):
+                res.error(
+                    f"{os.path.basename(ruta)}:{lineno}: schedule invalido: {schedule!r} "
+                    f"(expresion de 5 campos)"
+                )
+                continue
+            if job in crons:
+                res.error(f"{os.path.basename(ruta)}:{lineno}: el cron '{job}' esta repetido")
+                continue
+            crons[job] = {
+                "schedule": schedule.strip(),
+                "script": script,
+                "nodo": None if nodo == "-" else nodo,
+                "que": partes[4] if len(partes) > 4 else "",
+            }
+    return crons
+
+
+def chequear_crons(res, grafo, root, vistos, crons):
+    """El grafo declarado y los crones que corren tienen que ser lo mismo.
+
+    Sin esto hay dos grafos: el que workflow.yaml declara y el que el loop
+    ejecuta. Un cron puede correr todos los dias y no estar en ninguno de
+    los dos, y nadie se entera.
+    """
+    # 1. Todo cron_job de un nodo tiene que estar registrado.
+    for nid, nodo in vistos.items():
+        job = nodo.get("cron_job")
+        if job is None:
+            continue
+        if not isinstance(job, str) or not job.strip():
+            res.error(f"nodo '{nid}': 'cron_job' tiene que ser un nombre o null, no {job!r}")
+            continue
+        if job not in crons:
+            res.error(
+                f"nodo '{nid}': el cron_job '{job}' no esta en bin/crons.txt: "
+                f"el registro es la fuente de los crones"
+            )
+
+    # 2. Todo cron registrado tiene que existir en el disco.
+    for job, info in crons.items():
+        script = info["script"]
+        if not script.startswith("bin/"):
+            res.error(f"cron '{job}': el script '{script}' no esta en bin/")
+            continue
+        if not os.path.isfile(os.path.join(root, script)):
+            res.error(f"cron '{job}': el script '{script}' no existe en bin/")
+
+    # 3. Todo cron que pertenece a un nodo tiene que existir como nodo.
+    for job, info in crons.items():
+        nid = info["nodo"]
+        if nid is None:
+            continue
+        if nid not in vistos:
+            res.error(
+                f"cron '{job}': dice que pertenece al nodo '{nid}' y ese nodo no existe en workflow.yaml"
+            )
+            continue
+        declarado = vistos[nid].get("cron_job")
+        if declarado != job:
+            res.error(
+                f"cron '{job}': dice que pertenece al nodo '{nid}', pero ese nodo declara "
+                f"cron_job={declarado!r}. Los dos tienen que decir lo mismo."
+            )
+
+    # 4. Todo nodo con cron_job tiene que tener tambien el 'cron' (la expresion).
+    for nid, nodo in vistos.items():
+        if nodo.get("cron_job") and not nodo.get("cron"):
+            res.error(f"nodo '{nid}': tiene 'cron_job' pero no 'cron' (la expresion de cada cuanto corre)")
 
 
 def validar(grafo, root, res):
@@ -215,7 +315,7 @@ def validar(grafo, root, res):
             if args is not None and not isinstance(args, list):
                 res.error(f"{etiqueta}: 'args' tiene que ser una lista")
 
-    # --- los 12 nodos que tienen que estar ---------------------------------
+    # --- los 15 nodos que tienen que estar ---------------------------------
     for nid in NODOS_OBLIGATORIOS:
         if nid not in vistos:
             res.error(f"falta el nodo obligatorio '{nid}'")
@@ -255,6 +355,12 @@ def validar(grafo, root, res):
             res.error(f"aristas[{k}]: falta la condicion 'si'")
         if "si_no" not in arista:
             res.aviso(f"aristas[{k}] ({arista.get('de')} -> {arista.get('a')}): no dice que pasa si no se cumple")
+
+    # --- el registro de los crones -----------------------------------------
+    # El grafo declarado y los crones que corren tienen que ser lo mismo:
+    # sin esto hay dos grafos, el que se declara y el que se ejecuta.
+    crons = cargar_crons(os.path.join(root, "bin", "crons.txt"), res)
+    chequear_crons(res, grafo, root, vistos, crons)
 
 
 def elegir_python():

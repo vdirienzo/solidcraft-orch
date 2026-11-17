@@ -1,3 +1,6 @@
+> **Este brief esta retirado (2026-11-17): el trabajo ya esta en upstream.** El
+> texto `ui.dependents_select_first` esta en los catalogos y el modulo de los
+> tests es `crates/ui-egui/src/timeline_dependents_tests.rs`.
 # Brief: cerrar el fix del botón "Dependents" (commit, push, gate)
 
 **Tarea mecánica: 5 comandos.** El código YA está escrito, testeado y verificado. No lo toques.

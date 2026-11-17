@@ -16,12 +16,17 @@ Salida: un resumen corto para el celu.
 """
 import json
 import os
+import shlex
 import subprocess
 import sqlite3
 import datetime
+import sys
 
 ORCH_DIR = os.environ.get("ORCH_DIR", os.path.expanduser("~/.local/share/solidcraft-orch"))
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+# The gh binary: the tests point it at a stub OUTSIDE the PATH, so the tests
+# never touch GitHub.
+GH_BIN = os.environ.get("GH_BIN") or "gh"
 LOCKS = f"{ORCH_DIR}/locks"
 STATE = f"{ORCH_DIR}/state.json"
 DB = f"{HERMES_HOME}/state.db"
@@ -34,11 +39,16 @@ def now_ar():
 
 
 def sh(cmd, timeout=120):
+    """Run a command and return (rc, stdout).
+
+    A command that failed is NOT an empty answer: the caller has to be able
+    to say "I do not know" instead of "there is nothing".
+    """
     try:
         p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=timeout)
-        return p.stdout if p.returncode == 0 else ""
     except Exception:
-        return ""
+        return 1, ""
+    return p.returncode, p.stdout
 
 
 def locks():
@@ -70,8 +80,16 @@ def locks():
 
 
 def agents():
-    """Los subagentes vivos: de verdad, leyendo la base."""
+    """Los subagentes vivos: de verdad, leyendo la base.
+
+    A database that can NOT be read is NOT a live agent. Counting the failure
+    as one said "Agentes vivos: 1" and hid the branch that says the loop is
+    stopped: the report has to say what it does NOT know (D5).
+
+    Returns (agents, error): the error is None when the database was read.
+    """
     out = []
+    error = None
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
         c.row_factory = sqlite3.Row
@@ -89,8 +107,8 @@ def agents():
             )
         c.close()
     except Exception as e:
-        out.append({"id": "?", "title": f"no se pudo leer la base: {e}", "parent": "", "age": 0})
-    return out
+        error = f"{type(e).__name__}: {e}"
+    return out, error
 
 
 def slots():
@@ -137,16 +155,21 @@ def gates():
 
 
 def prs():
-    """Los PRs abiertos del fork, con su estado de CI."""
-    out = sh(
-        "gh pr list --repo tangency-labs/solidcraft --author vdirienzo "
-        "--state open --limit 20 --json number,title,mergeable,statusCheckRollup 2>/dev/null",
+    """Los PRs abiertos del fork, con su estado de CI.
+
+    Returns (rows, error): a failed query is NOT "there are no PRs".
+    """
+    rc, out = sh(
+        f"{shlex.quote(GH_BIN)} pr list --repo tangency-labs/solidcraft --author vdirienzo "
+        "--state open --limit 20 --json number,title,mergeable,statusCheckRollup",
         timeout=90,
     )
+    if rc != 0:
+        return [], f"rc={rc}"
     try:
         data = json.loads(out or "[]")
-    except Exception:
-        return []
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
     rows = []
     for p in data:
         checks = p.get("statusCheckRollup") or []
@@ -155,22 +178,27 @@ def prs():
             bad = [c for c in checks if str(c.get("conclusion") or "").upper() not in ("SUCCESS", "NEUTRAL", "SKIPPED")]
             state = "VERDE" if not bad else f"ROJO({len(bad)})"
         rows.append((p.get("number"), str(p.get("title", ""))[:52], p.get("mergeable"), state))
-    return rows
+    return rows, None
 
 
 def main():
     ahora = now_ar().strftime("%H:%M")
     ls = locks()
-    ag = agents()
+    ag, ag_error = agents()
     sl = slots()
     gt = gates()
-    pp = prs()
+    pp, prs_error = prs()
 
     lineas = []
     lineas.append(f"SolidCraft - estado del loop ({ahora})")
 
     # 1. Lo que esta trabajando ahora
-    if ag:
+    if ag_error:
+        # The database could NOT be read: the number of live agents is
+        # UNKNOWN. It is not 0 and it is not 1 (D5).
+        lineas.append("")
+        lineas.append(f"Agentes vivos: ? (no se pudo leer la base: {ag_error})")
+    elif ag:
         lineas.append("")
         lineas.append(f"Agentes vivos: {len(ag)}")
         for a in ag:
@@ -207,14 +235,22 @@ def main():
         for name, ver in gt:
             lineas.append(f"  · {name}: {ver}")
 
-    if pp:
+    if prs_error:
+        lineas.append("")
+        lineas.append(f"PRs abiertos: ? (no se pudo leer la lista: {prs_error})")
+    elif pp:
         lineas.append("")
         lineas.append(f"PRs abiertos: {len(pp)}")
         for num, title, mergeable, state in pp:
             mm = "" if mergeable == "MERGEABLE" else f" [{mergeable}]"
             lineas.append(f"  · #{num}{mm} {state} - {title}")
 
-    if not ag and not sl:
+    if ag_error:
+        # Without the database we do not know if the loop is running: saying
+        # "it is stopped" would be a guess, and this is read as a verdict.
+        lineas.append("")
+        lineas.append("No se puede afirmar si el loop esta parado: no se pudo leer la base.")
+    elif not ag and not sl:
         lineas.append("")
         lineas.append("Para arrancar el loop: escribile al bot desde Telegram.")
         lineas.append("'activá el orquestador para los fixes de SolidCraft'.")
@@ -225,6 +261,13 @@ def main():
 
     print("\n".join(lineas))
 
+    # The verdict reaches the exit code: a report that could not be collected
+    # is NOT a clean report (RULES.md).
+    if ag_error or prs_error:
+        print(f"fallo: {ag_error or prs_error}", file=sys.stderr)
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

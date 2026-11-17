@@ -1,3 +1,8 @@
+> **Este brief esta retirado (2026-11-17): el trabajo ya esta en upstream.** El
+> boton de dependientes esta implementado (`timeline.dependents` en
+> `crates/ui-egui/src/timeline.rs`), el texto `ui.dependents_select_first` esta
+> en los catalogos, y el test real es `crates/ui-egui/src/timeline_dependents_tests.rs`.
+> El probe que este brief decia convertir ya no existe.
 # Brief: el botón "Dependents" de INSPECT > HISTORY (timeline.dependents)
 
 Contexto: repo en `/home/user/solidcraft`, worktrees en `/home/user/solidcraft-wt/issue-<n>`,

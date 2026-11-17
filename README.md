@@ -14,24 +14,26 @@ mas importante del archivo** y esta escrita con las lecciones que costaron horas
 Del issue al PR: buscar -> libre -> causa raiz -> test RED -> fix -> PR en draft -> gate -> ready.
 Cada paso es un proceso que puede morir y ser retomado; las aristas son condiciones sobre archivos.
 
-El grafo esta DECLARADO en `workflow.yaml` (12 nodos, 14 aristas, 7 senales), se valida con
+El grafo esta DECLARADO en `workflow.yaml` (15 nodos, 18 aristas, 8 senales), se valida con
 `bin/workflow-validate.py` y se ejecuta con `bin/workflow-runner.sh --list` (que dice que nodos
 serian elegibles ahora). El runner NUNCA ejecuta los nodos que compilan: esos los llevan los crons.
 
 | nodo | que hace | quien lo hace |
 |---|---|---|
 | buscar-issue | barre el pool por API y filtra (sin kernel, sin triage, con contenido) | un agente |
-| claim-verify | el issue esta libre? | `bin/claim-race.sh` |
+| claim-verify | el issue esta libre? | `bin/claim-verify.sh` |
 | causa-raiz | donde esta el defecto | un agente, con brief literal |
 | test-red | el test que falla antes del fix | un agente |
 | fix | la implementacion | un agente, con brief literal |
 | draft-pr | abre el PR en DRAFT | el agente, en el commit |
+| dup-scan | este PR es duplicado de otro abierto? | `bin/dup-scan.sh` |
+| comment-watch | lee los comentarios del maintainer | `bin/comment_watch.py` (cron 15 min) |
+| revisar-comentarios | atiende el pedido del maintainer | un agente |
 | pipeline | corrige bodies, encola gates, pasa a ready | `bin/pipeline.py` (cron 5 min) |
 | gate-queue | drena la cola de gates | `bin/gate-queue.sh` (cron 3 min) |
 | gate | compila y da el veredicto | `bin/gate.sh` |
 | gate-baseline | separa lo preexistente de lo nuevo | `bin/gate-baseline.sh` |
 | verify-pr | valida el PR listo | `bin/verify-pr.sh` |
-| dup-scan | este PR es duplicado de otro abierto? | `bin/dup-scan.sh` |
 | ci-upstream | espera al CI y al maintainer | el maintainer (la merge queue es suya) |
 
 ---
@@ -79,13 +81,20 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
 10. **Gatea el mismo set de features que upstream.** El scope tiene que incluir `solidcraft-cli`:
     sin el, la feature `smlib` no esta activada y salen 1321 fallos falsos ("this build has no
     SMLib").
-11. **Verifica los hechos contra el codigo, no de memoria.** Por ejemplo, la regla de los 72 h del
-    repo no es "el claim vence a las 72 h": es "un draft SIN PUSHES por 72 h puede ser tomado".
+11. **Verifica los hechos contra el codigo, no de memoria.** Por ejemplo, los plazos del repo
+    no son uno: son dos, y no son el mismo. En `scripts/claim/claim.js`: `CLAIM_HOURS = 72`
+    (el `/claim` del bot vence a las 72 h de haberlo escrito) y `PR_IDLE_DAYS = 14` (un
+    draft **sin pushes** puede ser tomado a los **14 dias**). La regla del CONTRIBUTING
+    ("a draft with no pushes for 72 hours may be taken over") mezcla los dos: el 72 h es del
+    comment, y el draft va por 14 dias.
 
 ### Sobre el trabajo
 
 12. **El PR en DRAFT es el claim.** La regla del repo: *"A draft with no pushes for 72 hours may be
-    taken over"*. Por eso el draft se abre en el COMMIT, no despues del gate: el gate puede tardar
+    taken over"* — pero el codigo del bot tiene DOS plazos y el texto los mezcla: el `/claim`
+    vence a las 72 h (`CLAIM_HOURS`) y el draft sin pushes se puede tomar a los **14 dias**
+    (`PR_IDLE_DAYS`, `scripts/claim/claim.js:9`). El que cuenta para un draft es el de 14 dias.
+    Por eso el draft se abre en el COMMIT, no despues del gate: el gate puede tardar
     40 minutos o colgarse, y el issue no se pierde igual. Tope de trabajo en vuelo: **6**.
 13. **El test RED va antes del fix.** El entregable minimo de quien investiga es el test RED
     commiteado y pusheado. Con RED, el fix es un brief literal de una hora; sin RED, el agente se
@@ -102,7 +111,9 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
     (`AGENTS.md:24`, issue #3226). No hay un check automatico que lo detecte: lo detecta el
     maintainer en la revision.
 18. **`Changes a default: no` es la forma EXACTA** que exige el parser del upstream
-    (`scripts/pr-checks/pr-checks.js`). "Changes to default: no" no sirve. Y la POSICION importa:
+    (`scripts/pr-checks/pr-checks.js`). "Changes to default: no" no sirve. Y la POSICION NO
+    importa: el parser de upstream es multilinea (`/…/im`), asi que la linea puede estar donde
+    sea; lo que lo rompe es un code fence, un comentario HTML o backticks.
     leé el parser, no supongas.
 
 ### Sobre git y el repo
@@ -146,6 +157,27 @@ mkdir -p targets logs locks gates state reports briefs baseline
 cp bin/slot-target-dir.sh bin/ 2>/dev/null
 ```
 
+### ⚠ Falta la otra mitad: `$LOOP_DIR`
+
+Este repo es **la mitad ORCH**. La mitad **LOOP** —el publisher (`agent-issue.sh`), el
+árbitro del claim (`claim-race.sh`), el freno (`claim-brake.sh`), el rescate
+(`claim-salvage.sh`), el gate que compila (`gate-quick.sh`), el validador del body
+(`pr-defaults-line.sh`), el GC de disco y el supervisor— vive en `$LOOP_DIR` y **no está en
+git**.
+
+Sin él, este repo **no publica, no gatea y no arbitra**: `bin/gate.sh:53` sale con rc=2
+("the gate script is not there"). El inventario completo de esa mitad, qué la necesita y
+qué se rompe sin ella está en [`docs/la-otra-mitad.md`](docs/la-otra-mitad.md).
+
+Para comprobar qué falta en una máquina:
+
+```bash
+bash bin/preflight.sh
+```
+
+Los scripts que los crons ejecutan tienen que existir **antes** de que se cree el job
+(ver "Los scripts que los crons ejecutan", más abajo).
+
 Variables de entorno (el valor va en el entorno o en un .env que git ignora; **nunca en un archivo
 versionado**):
 
@@ -176,9 +208,17 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 |---|---|---|---|
 | solidcraft-gate-queue | 3 min | gate-queue.sh | drena la cola de gates (2 a la vez) |
 | solidcraft-pipeline | 5 min | pipeline.py | corrige bodies, encola gates, pasa a ready |
+| solidcraft-comment-watch | 15 min | comment_watch.py | lee los comentarios del maintainer y arma la cola de tareas |
 | solidcraft-nice-compilations | 2 min | nice-compilations.sh | baja la prioridad de las compilaciones nuevas |
 | solidcraft-ping-ready | 30 min | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
 | solidcraft-reporte-diario | 10 y 22 | daily-report.py | el reporte, sin LLM |
+
+**`bin/crons.txt` es la fuente de esta tabla.** El grafo dice a qué nodo pertenece cada
+cron y `bin/workflow-validate.py` comprueba que los dos digan lo mismo: un cron que
+corre y no está en el registro no existe, y un cron del registro que no está en esta
+tabla es un error del suite (`bin/test-workflow.sh`, casos 11a-11f). Antes había dos
+grafos — el que `workflow.yaml` declaraba (2 crons) y el que el loop ejecutaba (5) — y
+nadie lo comprobaba.
 
 ```bash
 hermes cron create --name solidcraft-gate-queue --schedule '*/3 * * * *' \
@@ -273,13 +313,24 @@ con el `success` del nuevo y muestra rojo un PR que esta verde.
 
 `targets/ logs/ locks/ gates/ state/ state.json history.jsonl` son el estado de una maquina
 concreta, no codigo. El `state.json` se REGENERA desde `state/` con `bin/merge-state.sh`; el
-`--check` tiene que dar IDENTICO o hay que correr `--split` para adoptar la edicion manual.
+`--check` tiene que dar IDENTICO o hay que correr `--split --prefer-artifact` para adoptar la
+edicion manual del `state.json`. Sin `--prefer-artifact` gana `state/` (la fuente) y el
+`--split` muestra el diff antes de escribir: se ve que se descarta.
 
 ## 6. Pruebas
 
-Las suites de `bin/test-*.sh` y `bin/test-rules.py` tienen que dar rc=0 antes de commitear cualquier
-cambio del orquestador. Las dos que viven en el loop:
-`/home/user/.local/share/solidcraft-loop/bin/test-gate-quick.sh` y `.../test-rules.py`.
+Las suites tienen que dar rc=0 antes de commitear cualquier cambio del orquestador. Se
+corren todas con un comando:
+
+```bash
+bash bin/test-all.sh          # todas
+bash bin/test-all.sh --fast   # solo las herméticas: las que corren en otra máquina
+```
+
+`bin/test-all.sh` reporta como **fallo** la suite que no pudo correr, no como un "skip": una
+suite que no se puede correr no es un verde. Las dos que viven en el loop —y que por eso no
+corren en otra máquina— son `/home/user/.local/share/solidcraft-loop/bin/test-gate-quick.sh`
+y `.../test-rules.py`.
 
 `bin/test-dup-scan.sh` mide el detector de duplicados por parche, con el contraste contra
 `claim-verify.sh`: el competidor que describe el fallo en prosa es invisible para el guard del
@@ -296,13 +347,18 @@ regla.
 ```
 bin/        los scripts (el grafo, la cola, el pipeline, los gates, los tests)
 briefs/     los briefs literales que se le dan a los agentes
+prompts/    el prompt que recibe el agente (wave-prompt.md)
 docs/       las reglas, los traps y las lecciones (copia de los references de la skill)
 reports/    las mediciones (paralelismo, tokens, imagenes, metricas de agentes)
 baseline/   el catalogo de fallos preexistentes medidos
-state/      el estado partido por concepto (una clave de primer nivel -> un archivo)
+rules-snapshot/  los hashes de las reglas de upstream que este repo cita (bin/rules-sync.sh)
 workflow.yaml   el grafo declarado del proceso
 RULES.md    las reglas del orquestador
+HANDOFF.md  el estado al empezar una sesion
 ```
+
+`state/`, `state.json`, `targets/`, `logs/`, `locks/` y `gates/` **no están en el repo**:
+son el estado de una máquina concreta y se regeneran en cada PC (ver §5).
 
 ## 8. Donde esta la fuente de verdad de cada cosa
 

@@ -23,7 +23,10 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HERE/merge-state.sh"
+# El script bajo prueba. Se puede apuntar a otro (MERGE_STATE_SH) para
+# medir el defecto contra la version vieja, como hacen test-gate-claim.sh
+# (GATE_SH) y test-verify-pr.sh (VERIFY_PR).
+SRC="${MERGE_STATE_SH:-$HERE/merge-state.sh}"
 ORCH="${ORCH_DIR:-$(dirname "$HERE")}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -99,9 +102,26 @@ fi
 # Se trabaja sobre una COPIA: el state.json real no se toca.
 WORK="$TMP/orch"
 mkdir -p "$WORK"
-cp "$REAL_STATE" "$WORK/state.json"
-cp -r "$REAL_DIR" "$WORK/state"
 cp "$SRC" "$WORK/merge-state.sh"
+
+# copia_estado: deja en $WORK un state.json y un state/ limpios, con el
+# published.sha256 que CORRESPONDE al state.json copiado. El merge se niega a
+# escribir un state.json cuyo hash no coincide con el publicado (o si el
+# published.sha256 no existe), asi que la copia tiene que ser coherente: si
+# no, los casos de aca medirian el estado del HOST y no la regla.
+copia_estado() {
+  cp "$REAL_STATE" "$WORK/state.json"
+  rm -rf "$WORK/state"
+  cp -r "$REAL_DIR" "$WORK/state"
+  python3 - "$WORK/state.json" "$WORK/state/published.sha256" <<'PY'
+import hashlib, sys
+with open(sys.argv[1], "rb") as fh:
+    h = hashlib.sha256(fh.read()).hexdigest()
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    fh.write(h + "\n")
+PY
+}
+copia_estado
 
 manchas() { # mete una clave nueva de primer nivel en el state.json de la copia
   python3 - "$WORK/state.json" <<'PY'
@@ -147,9 +167,7 @@ fi
 # Se prueban las DOS direcciones, porque son dos defectos distintos:
 #   a) una clave en state/ que el state.json no tiene
 #   b) un VALOR distinto entre state/ y state.json
-cp "$REAL_STATE" "$WORK/state.json"
-rm -rf "$WORK/state"
-cp -r "$REAL_DIR" "$WORK/state"
+copia_estado
 
 # (a) se edita state/: la clave queda solo ahi
 python3 - "$WORK/state/notes.json" <<'PY'
@@ -172,9 +190,7 @@ fi
 # (b) se edita state/ con un VALOR distinto: el state.json y el state/ se
 # contradicen sobre el MISMO dato. Este es el defecto que un --check que
 # compara solo el conjunto de claves (y no los valores) no veria.
-cp "$REAL_STATE" "$WORK/state.json"
-rm -rf "$WORK/state"
-cp -r "$REAL_DIR" "$WORK/state"
+copia_estado
 python3 - "$WORK/state/notes.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -218,6 +234,13 @@ else
 fi
 
 # --- 3. el merge de verdad reconstruye y deja el archivo igual -------------
+# El state/ se vuelve a copiar del real: el caso anterior (2b) dejo en el
+# state/ de la copia el valor editado a mano, y el --split lo CONSERVA (ya no
+# lo pisa con el valor viejo del state.json: ese es el defecto que se
+# corrijo). Este caso compara la reconstruccion con el state.json real, asi
+# que necesita un state/ limpio. El state.json se borra: el merge tiene que
+# construirlo desde cero.
+copia_estado
 rm -f "$WORK/state.json"
 out5="$(ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" 2>&1)"; rc5=$?
 if [ "$rc5" -eq 0 ] && [ -f "$WORK/state.json" ]; then
@@ -234,9 +257,7 @@ fi
 
 # --- 4. la particion es de ida y vuelta ------------------------------------
 # split -> merge -> split sobre la copia: el estado tiene que quedar igual.
-cp "$REAL_STATE" "$WORK/state.json"
-rm -rf "$WORK/state"
-cp -r "$REAL_DIR" "$WORK/state"
+copia_estado
 ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" --split >/dev/null 2>&1
 ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" >/dev/null 2>&1
 ORCH_DIR="$WORK" bash "$WORK/merge-state.sh" --split >/dev/null 2>&1
@@ -247,9 +268,7 @@ else
 fi
 
 # --- 4b. el split NO borra una clave escrita a mano en state/ ---------------
-cp "$REAL_STATE" "$WORK/state.json"
-rm -rf "$WORK/state"
-cp -r "$REAL_DIR" "$WORK/state"
+copia_estado
 python3 - "$WORK/state/prs.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -275,9 +294,7 @@ else
 fi
 
 # --- 4c. una clave nueva en state/ se adopta en su grupo --------------------
-cp "$REAL_STATE" "$WORK/state.json"
-rm -rf "$WORK/state"
-cp -r "$REAL_DIR" "$WORK/state"
+copia_estado
 python3 - "$WORK/state/gates.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -326,6 +343,284 @@ if ORCH_DIR="$ORCH" bash "$ORCH/bin/orch-state.sh" keys >/dev/null 2>&1; then
   ok "bin/orch-state.sh keys lee el state.json sin error"
 else
   no "bin/orch-state.sh keys lee el state.json sin error"
+fi
+
+# ===================================================================
+# 8. LOS CASOS CON FIXTURES: un ORCH_DIR de mentira, armado desde cero.
+#
+# Los casos de arriba necesitan el estado REAL de la maquina (state.json y
+# state/): en una maquina sin estado de host no se pueden correr. Los casos
+# de abajo NO necesitan nada de eso: arman un state/ de mentira en un
+# directorio temporal, derivan el state.json con el propio script y escriben
+# ahi. Son los casos que ACLARAN las reglas del merge y del split.
+#
+# El fixture tiene 7 grupos por concepto (como el estado real) y un
+# state.json que es el artefacto de ese state/.
+# ===================================================================
+FIX="$TMP/fixtures"
+mkdir -p "$FIX"
+
+# fixture NOMBRE: deja un ORCH_DIR de mentira en $FIX/NOMBRE, con state/ y
+# el state.json (y el published.sha256) generados por el propio script.
+fixture() {
+  FIXTURE="$FIX/$1"
+  rm -rf "$FIXTURE"
+  mkdir -p "$FIXTURE/state"
+  python3 - "$FIXTURE" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+st = os.path.join(d, "state")
+grupos = {
+    "meta":   {"updated_at": "2026-11-17T00:00:00Z"},
+    "prs":    {"pr_100": {"numero": 100, "estado": "draft"}},
+    "slots":  {"slot_1": {"issue": 101, "estado": "libre"}},
+    "gates":  {"gate_7": {"issue": 102, "veredicto": "VERDE"}},
+    "claims": {"claim_3": {"issue": 103, "pr": 3}},
+    "policy": {"max_slots": 4},
+    "notes":  {"nota_1": {"texto": "VALOR-VIEJO"}},
+}
+manifiesto = {"version": 1, "generated_at": "2026-11-17T00:00:00Z",
+              "order": [], "groups": {}}
+for g, claves in grupos.items():
+    with open(os.path.join(st, g + ".json"), "w", encoding="utf-8") as fh:
+        json.dump(claves, fh, indent=2, ensure_ascii=False)
+    manifiesto["groups"][g] = list(claves)
+    manifiesto["order"] += list(claves)
+with open(os.path.join(st, "manifest.json"), "w", encoding="utf-8") as fh:
+    json.dump(manifiesto, fh, indent=2, ensure_ascii=False)
+PY
+  # el state.json (el artefacto) y el published.sha256 los genera el script
+  ORCH_DIR="$FIXTURE" bash "$SRC" >/dev/null 2>&1
+}
+
+# set_key ARCHIVO CLAVE VALOR_JSON: pone una clave de primer nivel.
+set_key() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json, sys
+p, k, v = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+with open(p, encoding="utf-8") as fh:
+    d = json.load(fh)
+d[k] = v
+with open(p, "w", encoding="utf-8") as fh:
+    json.dump(d, fh, indent=2, ensure_ascii=False)
+PY
+}
+
+# get_val ARCHIVO CLAVE: imprime el valor de una clave (JSON) o "AUSENTE".
+get_val() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    d = json.load(fh)
+if sys.argv[2] not in d:
+    print("AUSENTE")
+else:
+    print(json.dumps(d[sys.argv[2]], ensure_ascii=False))
+PY
+}
+
+# --- 8.1 H1: el --split NO puede perder la edicion mas nueva de state/ ------
+# El valor editado esta en state/notes.json (la FUENTE) y el state.json tiene
+# el valor viejo. Con el --split, ese valor nuevo tiene que SOBREVIVIR: el
+# state.json es un artefacto que se regenera desde state/.
+fixture h1
+D="$FIXTURE"
+set_key "$D/state/notes.json" "nota_1" '{"texto": "VALOR-NUEVO-EN-STATE"}'
+out="$(ORCH_DIR="$D" bash "$SRC" --split 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(get_val "$D/state.json" nota_1)" = '{"texto": "VALOR-NUEVO-EN-STATE"}' ]; then
+  ok "el --split conserva el valor mas nuevo de state/ (no lo pierde)"
+else
+  no "el --split conserva el valor mas nuevo de state/ (no lo pierde) (rc=$rc, valor en state.json: $(get_val "$D/state.json" nota_1))"
+  printf '%s\n' "$out" | sed 's/^/       | /'
+fi
+if [ "$(get_val "$D/state/notes.json" nota_1)" = '{"texto": "VALOR-NUEVO-EN-STATE"}' ]; then
+  ok "el --split no pisa el archivo de concepto con el valor viejo del state.json"
+else
+  no "el --split no pisa el archivo de concepto con el valor viejo del state.json (quedo: $(get_val "$D/state/notes.json" nota_1))"
+fi
+# Y antes de escribir tiene que MOSTRAR el diff: el operador tiene que ver
+# que valor se descarta y por que.
+case "$out" in
+  *nota_1*) ok "el --split nombra la clave en conflicto en el diff" ;;
+  *)        no "el --split nombra la clave en conflicto en el diff" ;;
+esac
+case "$out" in
+  *VALOR-NUEVO-EN-STATE*VALOR-VIEJO*|*VALOR-VIEJO*VALOR-NUEVO-EN-STATE*)
+    ok "el diff del --split muestra los dos valores en conflicto" ;;
+  *)
+    no "el diff del --split muestra los dos valores en conflicto" ;;
+esac
+
+# --- 8.2 H1: con --prefer-artifact gana el state.json ----------------------
+fixture h1b
+D="$FIXTURE"
+set_key "$D/state/notes.json" "nota_1" '{"texto": "VALOR-NUEVO-EN-STATE"}'
+out="$(ORCH_DIR="$D" bash "$SRC" --split --prefer-artifact 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  ok "el --split --prefer-artifact sale con rc=0"
+else
+  no "el --split --prefer-artifact sale con rc=0 (rc=$rc)"
+  printf '%s\n' "$out" | sed 's/^/       | /'
+fi
+if [ "$(get_val "$D/state.json" nota_1)" = '{"texto": "VALOR-VIEJO"}' ]; then
+  ok "con --prefer-artifact gana el valor del state.json"
+else
+  no "con --prefer-artifact gana el valor del state.json (quedo: $(get_val "$D/state.json" nota_1))"
+fi
+if [ "$(get_val "$D/state/notes.json" nota_1)" = '{"texto": "VALOR-VIEJO"}' ]; then
+  ok "con --prefer-artifact el archivo de concepto toma el valor del state.json"
+else
+  no "con --prefer-artifact el archivo de concepto toma el valor del state.json (quedo: $(get_val "$D/state/notes.json" nota_1))"
+fi
+
+# --- 8.3 H2: sin published.sha256 el merge NO pisa el state.json ------------
+fixture h2
+D="$FIXTURE"
+rm -f "$D/state/published.sha256"
+set_key "$D/state.json" "nota_1" '{"texto": "EDITADO-A-MANO"}'
+before="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+out="$(ORCH_DIR="$D" bash "$SRC" 2>&1)"; rc=$?
+after="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+if [ "$rc" -ne 0 ] && [ "$before" = "$after" ]; then
+  ok "sin published.sha256 el merge rechaza y no pisa el state.json (rc=$rc)"
+else
+  no "sin published.sha256 el merge rechaza y no pisa el state.json (rc=$rc, hash antes=$before despues=$after)"
+  printf '%s\n' "$out" | sed 's/^/       | /'
+fi
+case "$out" in
+  *published.sha256*) ok "el merge sin published.sha256 dice que falta el archivo" ;;
+  *)                  no "el merge sin published.sha256 dice que falta el archivo" ;;
+esac
+case "$out" in
+  *--force*) ok "el merge sin published.sha256 dice como regenerarlo" ;;
+  *)         no "el merge sin published.sha256 dice como regenerarlo" ;;
+esac
+
+# --- 8.4 H2: published.sha256 desactualizado -> el merge rechaza -----------
+fixture h2b
+D="$FIXTURE"
+printf '%s\n' "0000000000000000000000000000000000000000000000000000000000000000" \
+  > "$D/state/published.sha256"
+set_key "$D/state.json" "nota_1" '{"texto": "EDITADO-A-MANO"}'
+before="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+out="$(ORCH_DIR="$D" bash "$SRC" 2>&1)"; rc=$?
+after="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+if [ "$rc" -ne 0 ] && [ "$before" = "$after" ]; then
+  ok "con published.sha256 desactualizado el merge rechaza y no pisa el state.json (rc=$rc)"
+else
+  no "con published.sha256 desactualizado el merge rechaza y no pisa el state.json (rc=$rc, hash antes=$before despues=$after)"
+  printf '%s\n' "$out" | sed 's/^/       | /'
+fi
+
+# --- 8.5 H2: con published.sha256 al dia el merge escribe y actualiza el hash
+fixture h2c
+D="$FIXTURE"
+set_key "$D/state/notes.json" "nota_1" '{"texto": "VALOR-NUEVO-EN-STATE"}'
+out="$(ORCH_DIR="$D" bash "$SRC" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then
+  ok "con published.sha256 al dia el merge escribe (rc=0)"
+else
+  no "con published.sha256 al dia el merge escribe (rc=$rc)"
+  printf '%s\n' "$out" | sed 's/^/       | /'
+fi
+if [ "$(get_val "$D/state.json" nota_1)" = '{"texto": "VALOR-NUEVO-EN-STATE"}' ]; then
+  ok "el merge lleva el valor de state/ al state.json"
+else
+  no "el merge lleva el valor de state/ al state.json (quedo: $(get_val "$D/state.json" nota_1))"
+fi
+nuevo="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+if [ "$nuevo" = "$(tr -d '[:space:]' < "$D/state/published.sha256")" ]; then
+  ok "el merge actualiza published.sha256 con el hash del state.json nuevo"
+else
+  no "el merge actualiza published.sha256 con el hash del state.json nuevo"
+fi
+
+# --- 8.6 el --split adopta una clave NUEVA de primer nivel -----------------
+fixture h3
+D="$FIXTURE"
+set_key "$D/state.json" "clave_nueva" '{"inventada": true}'
+ORCH_DIR="$D" bash "$SRC" --split >/dev/null 2>&1
+if [ "$(get_val "$D/state/notes.json" clave_nueva)" = '{"inventada": true}' ]; then
+  ok "el --split manda una clave nueva de primer nivel a notes.json"
+else
+  no "el --split manda una clave nueva de primer nivel a notes.json"
+fi
+if ORCH_DIR="$D" bash "$SRC" --check >/dev/null 2>&1; then
+  ok "despues de adoptar la clave nueva el --check da IDENTICO (rc=0)"
+else
+  no "despues de adoptar la clave nueva el --check da IDENTICO (rc!=0)"
+fi
+# Y con --assign la clave va al grupo que se le dice.
+fixture h3b
+D="$FIXTURE"
+set_key "$D/state.json" "clave_nueva" '{"inventada": true}'
+ORCH_DIR="$D" bash "$SRC" --split --assign clave_nueva=policy >/dev/null 2>&1
+if [ "$(get_val "$D/state/policy.json" clave_nueva)" = '{"inventada": true}' ]; then
+  ok "el --split con --assign manda la clave nueva al grupo pedido"
+else
+  no "el --split con --assign manda la clave nueva al grupo pedido"
+fi
+
+# --- 8.7 el --split conserva una clave que existe SOLO en state/ -----------
+fixture h4
+D="$FIXTURE"
+set_key "$D/state/notes.json" "clave_solo_en_state" '{"nota": "escrita a mano en state/"}'
+ORCH_DIR="$D" bash "$SRC" --split >/dev/null 2>&1
+if [ "$(get_val "$D/state/notes.json" clave_solo_en_state)" = '{"nota": "escrita a mano en state/"}' ]; then
+  ok "el --split conserva una clave que solo esta en state/"
+else
+  no "el --split conserva una clave que solo esta en state/"
+fi
+if [ "$(get_val "$D/state.json" clave_solo_en_state)" = '{"nota": "escrita a mano en state/"}' ]; then
+  ok "la clave que solo esta en state/ llega al state.json"
+else
+  no "la clave que solo esta en state/ llega al state.json"
+fi
+
+# --- 8.8 el --split no deja temporales ni estado a medias ------------------
+fixture h5
+D="$FIXTURE"
+set_key "$D/state/notes.json" "nota_1" '{"texto": "VALOR-NUEVO-EN-STATE"}'
+ORCH_DIR="$D" bash "$SRC" --split >/dev/null 2>&1
+basura="$(find "$D" -name '.merge-state-*' -o -name '*.tmp' -o -name '*.partial' | wc -l)"
+if [ "$basura" -eq 0 ]; then
+  ok "el --split no deja archivos temporales ni parciales"
+else
+  no "el --split no deja archivos temporales ni parciales ($basura)"
+fi
+if ORCH_DIR="$D" bash "$SRC" --check >/dev/null 2>&1; then
+  ok "despues del --split state/ y state.json son consistentes (--check rc=0)"
+else
+  no "despues del --split state/ y state.json son consistentes (--check rc!=0)"
+fi
+
+# --- 8.9 H3: un --split que no puede escribir no deja el estado a medias ---
+# El --split escribe TODO a temporales y recien ahi los mueve: si la
+# escritura falla, no se movio nada y el estado real sigue entero.
+# Se cierra el directorio del state.json (el ULTIMO que se escribe): los
+# archivos de concepto SI se pueden escribir, asi que un --split que
+# escribe de a uno deja el estado a medias (state/ nuevo, state.json viejo).
+fixture h6
+D="$FIXTURE"
+set_key "$D/state/notes.json" "nota_1" '{"texto": "VALOR-NUEVO-EN-STATE"}'
+antes_json="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+antes_notes="$(sha256sum "$D/state/notes.json" | cut -d' ' -f1)"
+chmod 555 "$D"
+out="$(ORCH_DIR="$D" bash "$SRC" --split 2>&1)"; rc=$?
+chmod 755 "$D"
+despues_json="$(sha256sum "$D/state.json" | cut -d' ' -f1)"
+despues_notes="$(sha256sum "$D/state/notes.json" | cut -d' ' -f1)"
+if [ "$rc" -ne 0 ] && [ "$antes_json" = "$despues_json" ] && [ "$antes_notes" = "$despues_notes" ]; then
+  ok "un --split que no puede escribir no deja el estado a medias (rc=$rc, nada se movio)"
+else
+  no "un --split que no puede escribir no deja el estado a medias (rc=$rc)"
+  printf '%s\n' "$out" | sed 's/^/       | /'
+fi
+basura="$(find "$D" -name '.merge-state-*' | wc -l)"
+if [ "$basura" -eq 0 ]; then
+  ok "el --split que falla no deja temporales tirados"
+else
+  no "el --split que falla no deja temporales tirados ($basura)"
 fi
 
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"

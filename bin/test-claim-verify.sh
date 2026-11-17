@@ -17,6 +17,28 @@
 # number, exactly as the upstream's own parser does it
 # (scripts/pr-checks/pr-checks.js, parseClosing).
 #
+# THE RULE IS NOW THE UNION OF THE TWO RULES OF THE UPSTREAM (they do not
+# agree with each other, and the upstream's own bot applies BOTH):
+#
+#   * the TITLE of the pull request names the issue ("... (#361)")
+#     (upstream scripts/claim/claim.js, referencedIssues), OR
+#   * the BODY of the pull request has a closing verb followed by the issue
+#     (upstream scripts/claim/claim.js and scripts/pr-checks/pr-checks.js).
+#     The '#' is REQUIRED there: it is what tells an issue reference from
+#     prose with a number ("This fix 3 problems." is NOT a claim).
+#
+# With the old rule the verifier was BLIND to 193 rival pull requests that
+# name the issue in the TITLE (measured over the 836 open pull requests of
+# 2026-11-17, reports/loop-codigo.md B6): the PR #1608 "Correct mouse and
+# trackpad navigation presets (#361)" held #361 and the guard said the issue
+# was free.
+#
+# And it did not apply the rule of the upstream of "the same author"
+# (scripts/claim/claim.js: a pull request does not compete with an older
+# pull request of the same author): with two of OUR pull requests open on the
+# same issue, the higher-numbered one was told it LOST and was CLOSED. That
+# is real work thrown away.
+#
 # The tests are hermetic: a stub of `gh` answers from a fixture and GitHub is
 # never contacted.
 set -uo pipefail
@@ -37,12 +59,23 @@ mkdir -p "$TESTDIR/bin"
 cat >"$TESTDIR/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 # Answers `gh pr list` from the fixture in $GH_FIXTURE (one JSON object per
-# line with number, title and body) and records the call.
+# line with number, title, body and author) and records the call.
 #
 # It applies the `--jq` filter itself, the way the real gh does: the filter
 # is what decides which pull requests mention the issue, and a stub that
 # ignored it would answer "every pull request is a claim".
+#
+# GH_FAIL=1 makes every call fail: that is the case of "GitHub could not be
+# read", which is NOT a green.
 printf '%s\n' "$*" >>"${GH_LOG:-/dev/null}"
+if [ -n "${GH_FAIL:-}" ]; then
+  echo "gh: could not connect to github.com" >&2
+  exit 1
+fi
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+  printf '%s\n' "${GH_LOGIN:-}"
+  exit 0
+fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   jq_filter=""
   prev=""
@@ -68,6 +101,10 @@ export GH_FIXTURE="$TESTDIR/fixture.json"
 # test measures the upstream instead of the fixture.
 export PATH="$TESTDIR/bin:$PATH"
 
+# WHO WE ARE: the login of the author of OUR pull requests. The verifier
+# reads it from the same variable the publisher uses (FORK_OWNER).
+export FORK_OWNER="ourfork"
+
 # --- the helper ------------------------------------------------------------
 # claim_verify <issue> [our_pr] -> writes the output to $OUT and the rc to $RC
 claim_verify() {
@@ -76,7 +113,10 @@ claim_verify() {
 }
 
 write_fixture() {
-  # Each argument: number|title|body.
+  # Each argument: number|title|body[|author].
+  #
+  # The author is the login of the author of the pull request. Without it
+  # the pull request is of ANOTHER author (a rival).
   #
   # The fixture is built with jq, not with printf: a body that contains
   # quotes has to be escaped, and a hand-written JSON line with those quotes
@@ -84,15 +124,18 @@ write_fixture() {
   # /dev/null and the pull request list comes back EMPTY — which reads as
   # "nobody claims this issue" and hides a real competitor.
   local arr="[]"
-  local spec n rest t b
+  local spec n rest t b a
   for spec in "$@"; do
     n="${spec%%|*}"
     rest="${spec#*|}"
     t="${rest%%|*}"
-    b="${rest#*|}"
-    arr="$(jq -n --argjson number "$n" --arg title "$t" --arg body "$b" \
+    rest="${rest#*|}"
+    b="${rest%%|*}"
+    a="${rest#*|}"
+    [ "$a" = "$b" ] && a="rival"
+    arr="$(jq -n --argjson number "$n" --arg title "$t" --arg body "$b" --arg author "$a" \
              --argjson arr "$arr" \
-             '$arr + [{"number":$number,"title":$title,"body":$body}]')"
+             '$arr + [{"number":$number,"title":$title,"body":$body,"author":{"login":$author}}]')"
   done
   printf '%s\n' "$arr" >"$TESTDIR/fixture.json"
 }
@@ -187,7 +230,7 @@ fi
 echo
 echo "== nuestro propio pull request no es un competidor =="
 
-write_fixture '4242|Nuestro|Fixes #7058'
+write_fixture '4242|Nuestro|Fixes #7058|ourfork'
 claim_verify 7058 4242
 if [ "$RC" -eq 0 ]; then
   ok "nuestro propio PR no nos quita el reclamo (rc=0)"
@@ -228,6 +271,278 @@ if [ "$RC" -eq 2 ]; then
   ok "un issue que no es numero es un error de uso (rc=2)"
 else
   bad "un issue que no es numero es un error de uso" "rc=$RC"
+fi
+
+# ============================================================================
+# THE UNION OF THE TWO RULES OF THE UPSTREAM (the 193 invisible rivals)
+# ============================================================================
+echo
+echo "== la regla es la union de las dos reglas del upstream =="
+
+# The case of the 193: the rival names the issue in the TITLE and the body
+# does not mention it. The upstream's bot counts it (scripts/claim/claim.js
+# reads the title); the old verifier did NOT and said the issue was free.
+write_fixture '1608|Correct mouse and trackpad navigation presets (#361)|the body says nothing about the issue'
+claim_verify 361
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'OCUPADO el PR #1608 ya reclama #361'; then
+  ok "el rival que nombra el issue en el TITULO lo reclama (rc=1)"
+else
+  bad "el rival que nombra el issue en el TITULO lo reclama" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# The same rival, with the issue in the body as well.
+write_fixture '1608|Correct mouse and trackpad navigation presets (#361)|Fixes #361'
+claim_verify 361
+if [ "$RC" -eq 1 ]; then
+  ok "el rival con el issue en el titulo y en el body lo reclama (rc=1)"
+else
+  bad "el rival con el issue en el titulo y en el body lo reclama" "rc=$RC"
+fi
+
+# THE THREE CASES THAT MADE THE ARBITER SAY "TAKEN" FOR A FREE ISSUE
+# (2026-11-17). The three of them come from upstream's own parser:
+#   - the noise: upstream strips the HTML comments and the code blocks
+#     before it parses (stripNoise, pr-checks.js:25-31), so a "Fixes #N"
+#     INSIDE A CODE BLOCK is an example, not a claim;
+#   - another repository: upstream skips "owner/repo#N" when the repo is
+#     not ours (parseClosing);
+#   - our own pull request does not claim its own number (claim.js:297).
+# Each of them costs a whole slot of the machine when it goes wrong.
+# The bodies with real newlines: the write_fixture takes the body as one
+# argument, and a literal "\n" would be two characters, not a line break.
+CUERPO_EN_BLOQUE=$'```\nFixes #361\n```'
+CUERPO_CON_RUIDO=$'antes\n```\nFixes #362\n```\ndespues\nFixes #361'
+write_fixture "1700|un titulo sin issue|$CUERPO_EN_BLOQUE"
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "un 'Fixes #361' dentro de un bloque de codigo NO lo reclama (el upstream saca el ruido)"
+else
+  bad "un 'Fixes #361' dentro de un bloque de codigo NO lo reclama" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+write_fixture '1701|otro titulo|Fixes other/repo#361'
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "una referencia a OTRO repositorio no lo reclama"
+else
+  bad "una referencia a OTRO repositorio no lo reclama" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+write_fixture '361|propio|Fixes #361'
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "un PR no se reclama a si mismo (claim.js:297)"
+else
+  bad "un PR no se reclama a si mismo (claim.js:297)" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# And the real claim, with the noise around it, IS a claim.
+write_fixture "1702|otro titulo mas|$CUERPO_CON_RUIDO"
+claim_verify 361
+if [ "$RC" -eq 1 ]; then
+  ok "el cierre real sigue reclamando aunque el cuerpo tenga ruido (rc=1)"
+else
+  bad "el cierre real sigue reclamando aunque el cuerpo tenga ruido" "rc=$RC"
+fi
+
+# The issue in the body with a closing verb: the rule of pr-checks.js.
+write_fixture '10826|Fix|Fixes #361'
+claim_verify 361
+if [ "$RC" -eq 1 ]; then
+  ok "el verbo de cierre en el body lo reclama (rc=1)"
+else
+  bad "el verbo de cierre en el body lo reclama" "rc=$RC"
+fi
+
+# A claim in PROSE ("Claim for #743.") is NOT a claim: the upstream needs a
+# closing verb (pr-checks.js:37). It only counts when the TITLE names it.
+write_fixture '7978|Claim for the issue|Claim for #743.'
+claim_verify 743
+if [ "$RC" -eq 0 ]; then
+  ok "un reclamo en prosa NO es un reclamo (rc=0)"
+else
+  bad "un reclamo en prosa NO es un reclamo" \
+      "rc=$RC $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
+fi
+
+write_fixture '7978|Claim for the issue (#743)|Claim for #743.'
+claim_verify 743
+if [ "$RC" -eq 1 ]; then
+  ok "el mismo reclamo en prosa, con el issue en el TITULO, SI lo reclama (rc=1)"
+else
+  bad "el mismo reclamo en prosa, con el issue en el TITULO, SI lo reclama" "rc=$RC"
+fi
+
+# The '#' is what tells an issue reference from prose with a number.
+write_fixture '500|Improve the thing|This fix 3 problems.'
+claim_verify 3
+if [ "$RC" -eq 0 ]; then
+  ok "una prosa con un numero NO es un reclamo (rc=0)"
+else
+  bad "una prosa con un numero NO es un reclamo" \
+      "rc=$RC $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
+fi
+
+# A LIST of issues in the body: two UNIQUE issues, not one.
+write_fixture '500|Fix|Fixes #10181, #10182'
+claim_verify 10181
+RC1=$RC
+OUT1="$OUT"
+claim_verify 10182
+if [ "$RC1" -eq 1 ] && [ "$RC" -eq 1 ]; then
+  ok "una lista de issues en el body reclama los DOS issues (rc=1 y rc=1)"
+else
+  bad "una lista de issues en el body reclama los DOS issues" \
+      "rc=$RC1 y rc=$RC $(printf '%s' "$OUT1" | head -2 | tr '\n' ' ')"
+fi
+
+# The same issue in the title AND in the body is ONE issue, not two.
+write_fixture '1608|Correct mouse and trackpad navigation presets (#361)|Fixes #361'
+claim_verify 361
+LIST="$(printf '%s\n' "$OUT" | sed -n 's/.*PRs que lo mencionan: \(.*\)(gana el.*/\1/p')"
+COUNT="$(printf '%s' "$LIST" | wc -w | tr -d ' ')"
+if [ "$RC" -eq 1 ] && [ "$COUNT" -eq 1 ]; then
+  ok "el mismo issue en el titulo y en el body cuenta UN issue (rc=1)"
+else
+  bad "el mismo issue en el titulo y en el body cuenta UN issue" \
+      "rc=$RC issues listados: $COUNT"
+fi
+
+# The issue of the list must not swallow a longer number.
+write_fixture '500|Fix|Fixes #3610'
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "un numero mas largo NO es este issue (rc=0)"
+else
+  bad "un numero mas largo NO es este issue" "rc=$RC"
+fi
+
+# ============================================================================
+# THE RULE OF THE SAME AUTHOR (our own pull requests do not compete with us)
+# ============================================================================
+echo
+echo "== un pull request nuestro no compite con nosotros =="
+
+# The case of B7: two of OUR pull requests on the same issue. The
+# higher-numbered one was told it LOST and was closed: real work thrown away.
+write_fixture '9843|Nuestro|Fixes #361|ourfork' '11205|Nuestro stacked|Fixes #361|ourfork'
+claim_verify 361 --our-pr 11205
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'PERDIDO'; then
+  ok "dos PRs nuestros: el #11205 NO pierde (rc=0)"
+else
+  bad "dos PRs nuestros: el #11205 NO pierde" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+write_fixture '9843|Nuestro|Fixes #361|ourfork' '11205|Nuestro stacked|Fixes #361|ourfork'
+claim_verify 361 --our-pr 9843
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'PERDIDO'; then
+  ok "dos PRs nuestros: el #9843 NO pierde (rc=0)"
+else
+  bad "dos PRs nuestros: el #9843 NO pierde" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# The same, with the number of our pull request as the second argument.
+write_fixture '9843|Nuestro|Fixes #361|ourfork' '11205|Nuestro stacked|Fixes #361|ourfork'
+claim_verify 361 11205
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'PERDIDO'; then
+  ok "dos PRs nuestros, con el numero como segundo argumento: NO pierde (rc=0)"
+else
+  bad "dos PRs nuestros, con el numero como segundo argumento: NO pierde" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# The other way around: a RIVAL with a lower number takes the claim.
+write_fixture '9843|Un rival|Fixes #361|rival' '11205|Nuestro|Fixes #361|ourfork'
+claim_verify 361 --our-pr 11205
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'perdio contra el #9843'; then
+  ok "un rival con numero menor gana: el #11205 pierde (rc=1)"
+else
+  bad "un rival con numero menor gana: el #11205 pierde" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# The rival with a HIGHER number does not take the claim from us.
+write_fixture '9843|Nuestro|Fixes #361|ourfork' '11205|Un rival|Fixes #361|rival'
+claim_verify 361 --our-pr 9843
+if [ "$RC" -eq 0 ]; then
+  ok "un rival con numero MAYOR no nos quita el reclamo (rc=0)"
+else
+  bad "un rival con numero MAYOR no nos quita el reclamo" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# Our pull request that does NOT claim the issue, while another of ours
+# holds it: the claim is OURS and nobody has to be closed.
+write_fixture '9843|Nuestro|Fixes #361|ourfork' '11205|Nuestro otro|documentacion|ourfork'
+claim_verify 361 --our-pr 11205
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'PERDIDO'; then
+  ok "otro PR nuestro tiene el reclamo: el nuestro NO pierde (rc=0)"
+else
+  bad "otro PR nuestro tiene el reclamo: el nuestro NO pierde" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# --- the exit codes: the contract with bin/gate.sh -------------------------
+echo
+echo "== los exit codes (el contrato con el gate) =="
+
+# --our-pr without a number is a usage error.
+claim_verify 361 --our-pr
+if [ "$RC" -eq 2 ]; then
+  ok "--our-pr sin numero es un error de uso (rc=2)"
+else
+  bad "--our-pr sin numero es un error de uso" "rc=$RC"
+fi
+
+claim_verify 361 --our-pr abc
+if [ "$RC" -eq 2 ]; then
+  ok "--our-pr que no es numero es un error de uso (rc=2)"
+else
+  bad "--our-pr que no es numero es un error de uso" "rc=$RC"
+fi
+
+# 0 = the claim is ours, 1 = it is lost, 2 = it could not be verified.
+write_fixture '500|Fix|Fixes #7058|rival'
+claim_verify 7058
+if [ "$RC" -eq 1 ]; then
+  ok "un issue reclamado por otro es OCUPADO (rc=1)"
+else
+  bad "un issue reclamado por otro es OCUPADO" "rc=$RC"
+fi
+
+write_fixture '500|Fix|nothing about the issue|rival'
+claim_verify 7058
+if [ "$RC" -eq 0 ]; then
+  ok "un issue que nadie reclama esta libre (rc=0)"
+else
+  bad "un issue que nadie reclama esta libre" "rc=$RC"
+fi
+
+# GitHub could not be read: UNKNOWN, never "no" (the rule of the verdict).
+write_fixture '500|Fix|Fixes #7058|rival'
+GH_FAIL=1 claim_verify 7058
+if [ "$RC" -eq 2 ]; then
+  ok "si GitHub no se puede leer, el veredicto es UNKNOWN (rc=2)"
+else
+  bad "si GitHub no se puede leer, el veredicto es UNKNOWN" "rc=$RC"
+fi
+unset GH_FAIL
+
+# The texts of the verdict are the contract with bin/gate.sh and
+# bin/publish-pr.sh: they do not change.
+write_fixture '500|Fix|Fixes #7058|rival'
+claim_verify 7058 900
+if printf '%s' "$OUT" | grep -q 'VEREDICTO=PERDIDO el PR #900 perdio contra el #500'; then
+  ok "el texto de VEREDICTO=PERDIDO es el de siempre"
+else
+  bad "el texto de VEREDICTO=PERDIDO es el de siempre" \
+      "$(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
 fi
 
 # --- the summary -------------------------------------------------------------

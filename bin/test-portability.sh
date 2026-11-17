@@ -104,16 +104,22 @@ for v in $VARS; do
     [ -z "$f" ] && continue
     [ "$f" = "test-portability.sh" ] && continue
     # Does the script USE the variable?
+    # An ASSIGNMENT (os.environ["X"] = ...) is a definition, not a use: a
+    # test that sets ORCH_DIR to a tmpdir does not need a default for it,
+    # it needs the opposite. Only a READ counts as a use.
     uses=0
     grep -qE "\\\$\{?$v([^A-Za-z0-9_]|$)" "$BIN/$f" 2>/dev/null && uses=1
     grep -q "os.environ.get(\"$v\"" "$BIN/$f" 2>/dev/null && uses=1
-    grep -q "os.environ\[\"$v\"\]" "$BIN/$f" 2>/dev/null && uses=1
+    grep -qE "os.environ\[\"$v\"\][^=]" "$BIN/$f" 2>/dev/null && uses=1
     [ "$uses" = "0" ] && continue
     # Does it DEFINE it with a default?
     def=0
-    grep -qE "^[[:space:]]*(export[[:space:]]+)?$v[[:space:]]*=" "$BIN/$f" 2>/dev/null && def=1
+    # An assignment anywhere in the line counts: `FOO=1 cmd` sets the
+    # environment of that command, and it is a value, not an empty path.
+    grep -qE "(^|[^A-Za-z0-9_])(export[[:space:]]+)?$v[[:space:]]*=" "$BIN/$f" 2>/dev/null && def=1
     grep -qE "\\\$\{$v:-" "$BIN/$f" 2>/dev/null && def=1
     grep -q "os.environ.get(\"$v\"" "$BIN/$f" 2>/dev/null && def=1
+    grep -qE "os.environ\[\"$v\"\][[:space:]]*=" "$BIN/$f" 2>/dev/null && def=1
     [ "$def" = "0" ] && MISSING="$MISSING$f "
   done < <(scripts)
 
