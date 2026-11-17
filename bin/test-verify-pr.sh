@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# test-verify-pr.sh - the tests of the exemption of the docs-only pull
-# requests in bin/verify-pr.sh.
+# test-verify-pr.sh - the tests of bin/verify-pr.sh.
 #
 # WHY THE TESTS EXIST: a pull request that closes no issue AND changes only
 # documentation has no code to compile, so it has no slot and no gate. The
@@ -11,8 +10,13 @@
 # isDocsOnly): every file of the pull request matches the DOC_FILE pattern
 # (docs/, a .md, LICENSE, the templates of the issues).
 #
+# The SECOND reason the tests exist (2026-11-17): the verifier answered "todo
+# en orden" about pull requests whose CI it never read, and it derived the
+# SLOT of the gate from a sentence of prose ("This fix 3 problems." -> the
+# slot 3 -> a FAIL that nobody could fix).
+#
 # WHAT IS TESTED (the cases are the rules, not the source):
-#   a) a docs-only pull request with no issue and no slot in the branch is a
+#   a) a docs-only pull request with no issue and no slot is a
 #      NOTE, not a FAIL: the verdict says that there is nothing to fix;
 #   b) a pull request WITH CODE, with no issue and no slot, is still a FAIL:
 #      the exemption does not leak;
@@ -26,13 +30,31 @@
 #      documentation, crates/engine/src/lib.rs is NOT, and a pull request with
 #      one documentation file and one file of code is NOT docs-only;
 #   g) a malformed "Changes a default:" line still FAILS the validator of the
-#      upstream (the change did not break it).
+#      upstream (the change did not break it);
+#   h) the number given can be the ISSUE's, not the pull request's;
+#   i) a pull request that can NOT be read is a FAIL, not a green;
+#   j) the CI is decided by the STATE of each check, not by its name:
+#      j1) a `gh pr checks` that FAILS is an UNKNOWN (exit code 6), never a
+#           green;
+#      j2) a red check of ANY name ("Native Linux tests") BLOCKS;
+#      j3) a red check of the EXEMPT list does not block;
+#      j4) a check whose NAME contains "fail" but that is GREEN does not
+#           block;
+#   k) the closing phrases follow the UPSTREAM's parser
+#      (scripts/pr-checks/pr-checks.js:35-47): the '#' is REQUIRED and the
+#      ISSUES are counted, not the lines:
+#      k1) "This fix 3 problems." is prose: it closes nothing and it does
+#           not derive the slot 3;
+#      k2) "Closes 5 open bugs." is prose too: it does not derive the slot 5;
+#      k3) "Fixes #10181, #10182" closes TWO issues;
+#      k4) two lines, two issues: "Fixes #123" and "Fixes #124" close TWO;
+#      k5) the SAME issue twice closes ONE.
 #
 # THE TESTS ARE HERMETIC: GitHub is NEVER contacted.
-#   * a `gh` of the tests, FIRST in the PATH: the answers come from the
-#     fixtures of the test (a directory per pull request: its body, its
-#     branch, its files and the JSON that `gh pr view` answers);
-#   * a `git` of the tests: the fork is never asked either;
+#   * the `gh` of the tests, OUTSIDE the PATH (the verifier reads GH_BIN):
+#     the answers come from the fixtures of the test (a directory per pull
+#     request: its body, its branch, its files, the rollup of its checks and
+#     the JSON that `gh pr view` answers);
 #   * their own LOOP_DIR: their own gates/<slot>/scope.verdict and their own
 #     bin/pr-defaults-line.sh (the validator of the upstream, mirrored);
 #   * their own HOME and their own SOLIDCRAFT_REPO: the checkout of the
@@ -59,6 +81,11 @@ bad() {
   return 0
 }
 
+# jq is needed: the stub of `gh` applies the --json of `pr checks` FOR REAL
+# (the model is the stub of bin/test-ci-status.sh: a stub that ignores the
+# filter measures the stub, not the rule).
+command -v jq >/dev/null || { printf 'FAIL no hay jq (el stub lo necesita)\n'; exit 1; }
+
 # --- the fixtures -----------------------------------------------------------
 # The slot (the issue) of the cases with an issue. It is a FIXTURE: a rule
 # that names a real issue stops being general the day that issue is closed.
@@ -81,15 +108,25 @@ mkdir -p "$STUB_FIXTURES"
 
 # The `gh` of the tests: the answers come from the FIXTURES of the test and
 # GitHub is NEVER contacted. The fixture of a pull request is a directory
-# with its body, its branch, its files and the JSON that `gh pr view`
-# answers. The stub is PURE BASH on purpose: the suite runs the verifier
-# thirty times and a python startup per call made it twenty times slower
-# than it has to be.
+# with its body, its branch, its files, the rollup of its checks and the JSON
+# that `gh pr view` answers.
+#
+# THE --json IS APPLIED FOR REAL (the model is the stub of bin/test-ci-status.sh:
+# a stub that ignores the filter measures the stub, not the rule): the
+# fixture of the checks is the RAW rollup and the stub answers only the
+# fields that were asked for. And the closing phrases of `gh pr list` use the
+# REGEX OF THE UPSTREAM (scripts/pr-checks/pr-checks.js:35-47), not a regex
+# of the test's own: the '#' is required and a list counts every issue of it.
 cat > "$STUBBIN/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_GH_LOG:-/dev/null}"
 cmd="${1:-}"; sub="${2:-}"; num="${3:-}"
 FIX="${STUB_FIXTURES:?the fixtures of the test are needed}"
+
+# The regex of the upstream (scripts/pr-checks/pr-checks.js:35-47): the '#'
+# is REQUIRED ("This fix 3 problems." closes nothing) and a LIST of issues
+# counts every one of them ("Fixes #1, #2" closes two).
+CLOSING_RE='\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b:?[[:blank:]]+(([[:alnum:]_.-]+/[[:alnum:]_.-]+)?#[0-9]+([[:blank:]]*(,|and|&)[[:blank:]]*)?)+'
 
 case "$cmd $sub" in
   "pr view")
@@ -106,13 +143,37 @@ case "$cmd $sub" in
     fi
     ;;
   "pr checks")
-    if [ -d "$FIX/$num" ] && [ -s "$FIX/$num/checks" ]; then
-      cat "$FIX/$num/checks"
+    # The fields that were asked for.
+    fields=""
+    prev=""
+    for a in "$@"; do
+      [ "$prev" = "--json" ] && fields="$a"
+      prev="$a"
+    done
+    # The exit code of the fixture: a `gh` that failed (auth, network, "no
+    # checks reported") is a case the verifier has to survive.
+    rc=0
+    [ -s "$FIX/$num/checks_rc" ] && rc="$(cat "$FIX/$num/checks_rc")"
+    if [ -s "$FIX/$num/checks_err" ]; then
+      cat "$FIX/$num/checks_err" >&2
     fi
+    if [ -s "$FIX/$num/checks" ]; then
+      if [ -n "$fields" ]; then
+        # THE FILTER IS APPLIED: like the real gh, the --json projects the
+        # rollup onto the fields that were asked for.
+        sel="$(printf '%s\n' "$fields" | tr ',' '\n' | jq -R . | jq -s -c .)"
+        jq -c --argjson f "$sel" \
+          '[.[] | with_entries(select(.key as $k | $f | index($k)))]' \
+          < "$FIX/$num/checks" || exit 1
+      else
+        cat "$FIX/$num/checks"
+      fi
+    fi
+    exit "$rc"
     ;;
   "pr list")
     # The lookup of the pull request that CLOSES an issue: the numbers of the
-    # pull requests whose body closes it.
+    # pull requests whose body closes it, with the regex of the upstream.
     issue=""
     prev=""
     for a in "$@"; do
@@ -135,7 +196,8 @@ case "$cmd $sub" in
           break
         fi
         n="$(basename "$d")"
-        if [ -s "$d/body" ] && grep -qiE "(fixes|closes|resolve)[[:space:]]*#$issue([^0-9]|$)" "$d/body"; then
+        if [ -s "$d/body" ] \
+           && grep -oiE "$CLOSING_RE" "$d/body" | grep -qE "#$issue([^0-9]|$)"; then
           printf '%s\n' "$n"
           n_found=$(( n_found + 1 ))
         fi
@@ -146,18 +208,6 @@ esac
 exit 0
 STUB
 chmod 755 "$STUBBIN/gh"
-
-# The `git` of the tests: the fork is never asked. `ls-remote` answers
-# nothing, which the verifier reads as "the branch is not in the fork" (a
-# note, never a failure).
-cat > "$STUBBIN/git" <<'STUB'
-#!/usr/bin/env bash
-for a in "$@"; do
-  [ "$a" = "ls-remote" ] && exit 0
-done
-exit 0
-STUB
-chmod 755 "$STUBBIN/git"
 
 # The validator of the upstream, mirrored: it reads the body of a file and
 # answers with the verdict of the line "Changes a default:". The REAL
@@ -204,6 +254,8 @@ printf 'UPSTREAM=%s\nFORK_OWNER=testowner\n' "$TEST_REPO" > "$TESTDIR/loop/confi
 # The fixture of a pull request of the tests: a directory with its body, its
 # branch, its files and the JSON that `gh pr view` answers. The JSON is
 # rendered ONCE per fixture (a python startup per fixture, not per call).
+# The rollup of the checks is JSON too: the stub of `gh` applies the --json
+# of the verifier for real, so the fixture has the states of the checks.
 fixture() {
   python3 - "$@" <<'PY'
 import json, os, sys
@@ -219,7 +271,10 @@ with open(os.path.join(d, "files"), "w", encoding="utf-8") as fh:
     if files:
         fh.write("\n")
 with open(os.path.join(d, "checks"), "w", encoding="utf-8") as fh:
-    fh.write("ci pass 12s https://example.invalid/ci/1\n")
+    fh.write(json.dumps([
+        {"name": "Defaults line check", "state": "SUCCESS", "bucket": "pass"},
+        {"name": "Duplicate PR check", "state": "SUCCESS", "bucket": "pass"},
+    ]))
 with open(os.path.join(d, "json"), "w", encoding="utf-8") as fh:
     fh.write(json.dumps({
         "number": int(num),
@@ -233,6 +288,18 @@ with open(os.path.join(d, "json"), "w", encoding="utf-8") as fh:
         "body": body,
     }))
 PY
+}
+
+# The rollup of the checks of a pull request: the RAW one (the stub of `gh`
+# applies the --json for real). $1 = the number, $2 = the JSON.
+set_checks() {
+  printf '%s\n' "$2" > "$STUB_FIXTURES/$1/checks"
+}
+# The `gh pr checks` that FAILS: $1 = the number, $2 = the exit code,
+# $3 = what it writes in stderr.
+set_checks_failing() {
+  printf '%s\n' "$2" > "$STUB_FIXTURES/$1/checks_rc"
+  printf '%s\n' "$3" > "$STUB_FIXTURES/$1/checks_err"
 }
 
 # The verdict of the gate of a slot, in the scratch LOOP_DIR.
@@ -256,8 +323,10 @@ OUT=""
 RC=0
 run_verify() {
   local pr="$1"; shift
+  # The stub of `gh` is OUTSIDE the PATH (the verifier reads GH_BIN): a fake
+  # `gh` in the PATH would answer to `gh pr create` too.
   OUT="$(env HOME="$TESTDIR/home" \
-              PATH="$STUBBIN:$PATH" \
+              GH_BIN="$STUBBIN/gh" \
               LOOP_DIR="$TESTDIR/loop" \
               ORCH_DIR="$TESTDIR/orch" \
               SOLIDCRAFT_REPO="$TESTDIR/repo" \
@@ -570,6 +639,280 @@ else
   ok "i) the verdict of an unreadable pull request is NOT 'todo en orden'"
 fi
 
+# --- j) the CI: the STATE of the check, not its NAME ------------------------
+# The CI of a pull request used to be read with a grep over the NAMES of the
+# checks: a check whose name contains "fail" counted as a failure, the
+# checks whose name says nothing were not counted at all (the three that
+# decide if a pull request is mergeable were among them), and the exit code
+# of `gh pr checks` was thrown away: a `gh` that failed left the text of its
+# error in the output, that text does not contain "fail", and the verifier
+# said "todo en orden" about a pull request whose CI it never read.
+
+# j1) a `gh pr checks` that FAILS: the CI could not be read. That is NOT a
+#     red (a check that could not run is not a red) but it is also NOT a
+#     green: nobody knows. The exit code is 6 (UNKNOWN), never 0.
+run_pr 4301 \
+  $'Fixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+set_checks_failing 4301 1 "gh: could not resolve to a PullRequest"
+run_verify 4301
+if [ "$RC" -eq 6 ]; then
+  ok "j1) a 'gh pr checks' that fails is an UNKNOWN (rc=6), not a green"
+else
+  bad "j1) a 'gh pr checks' that fails is an UNKNOWN (rc=6), not a green" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+if printf '%s' "$OUT" | grep -q 'VEREDICTO: todo en orden'; then
+  bad "j1) the verdict of a pull request whose CI could not be read is NOT 'todo en orden'"
+else
+  ok "j1) the verdict of a pull request whose CI could not be read is NOT 'todo en orden'"
+fi
+if printf '%s' "$OUT" | grep -qi 'UNKNOWN'; then
+  ok "j1) the verifier says that the CI could not be read"
+else
+  bad "j1) the verifier says that the CI could not be read" \
+      "$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+if [ "$(fails_in "$OUT")" = "0" ]; then
+  ok "j1) a CI that could not be read is NOT a FAIL (it is a 'nobody knows')"
+else
+  bad "j1) a CI that could not be read is NOT a FAIL (it is a 'nobody knows')" \
+      "fails=$(fails_in "$OUT")"
+fi
+
+# j2) a red check of ANY name blocks: "Native Linux tests" is one of the
+#     three that decide if a pull request is mergeable, and the old filter
+#     never looked at it.
+run_pr 4302 \
+  $'Fixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+set_checks 4302 '[
+  {"name": "Defaults line check", "state": "SUCCESS", "bucket": "pass"},
+  {"name": "Native Linux tests", "state": "FAILURE", "bucket": "fail"}
+]'
+run_verify 4302
+if [ "$RC" -eq 1 ]; then
+  ok "j2) a red check of any name blocks the pull request"
+else
+  bad "j2) a red check of any name blocks the pull request" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+if printf '%s' "$OUT" | grep -q 'Native Linux tests'; then
+  ok "j2) the verifier names the check that is red"
+else
+  bad "j2) the verifier names the check that is red" \
+      "$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# j3) a red check of the EXEMPT list does not block (but it is reported).
+run_pr 4303 \
+  $'Fixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+set_checks 4303 '[
+  {"name": "Defaults line check", "state": "SUCCESS", "bucket": "pass"},
+  {"name": "Claim bot", "state": "FAILURE", "bucket": "fail"}
+]'
+run_verify 4303
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'VEREDICTO: todo en orden'; then
+  ok "j3) a red check of the exempt list does not block the pull request"
+else
+  bad "j3) a red check of the exempt list does not block the pull request" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+if printf '%s' "$OUT" | grep -q 'Claim bot'; then
+  ok "j3) the red check that does not block is still reported"
+else
+  bad "j3) the red check that does not block is still reported" \
+      "$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# j4) a check whose NAME contains "fail" but that is GREEN does not block.
+run_pr 4304 \
+  $'Fixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+set_checks 4304 '[
+  {"name": "failing to provision the runner", "state": "SUCCESS", "bucket": "pass"},
+  {"name": "Defaults line check", "state": "SUCCESS", "bucket": "pass"}
+]'
+run_verify 4304
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'VEREDICTO: todo en orden'; then
+  ok "j4) a green check whose name contains 'fail' does not block"
+else
+  bad "j4) a green check whose name contains 'fail' does not block" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# j5) a check that is PENDING is not a red and not a green: the CI is still
+#     running, which is a state the verifier knows (it does not block, and it
+#     is not the "nobody knows" of an unreadable CI).
+run_pr 4305 \
+  $'Fixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+set_checks 4305 '[
+  {"name": "Defaults line check", "state": "SUCCESS", "bucket": "pass"},
+  {"name": "Native Linux tests", "state": "IN_PROGRESS", "bucket": "pending"}
+]'
+set_checks_failing 4305 8 ""
+run_verify 4305
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'VEREDICTO: todo en orden'; then
+  ok "j5) a check that is pending does not block the pull request"
+else
+  bad "j5) a check that is pending does not block the pull request" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# --- k) the closing phrases: the UPSTREAM's parser -------------------------
+# The authority is scripts/pr-checks/pr-checks.js:35-47 (parseClosing): the
+# '#' is REQUIRED (it is what tells a reference to an issue from prose that
+# has a number in it) and the ISSUES are counted, not the lines.
+#
+# k1) "This fix 3 problems." is prose. The old regex matched "fix 3", took
+#     the 3 as the SLOT of the gate and failed a perfectly valid pull
+#     request looking for the gate of the slot 3.
+run_pr 4310 \
+  $'This fix 3 problems.\n\nno issue: this pull request is a cleanup of the loop.\n\nChanges a default: no\n' \
+  "chore/cleanup-the-loop" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+run_verify 4310 "$SLOT"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'VEREDICTO: todo en orden'; then
+  ok "k1) a prose sentence does not break a valid pull request"
+else
+  bad "k1) a prose sentence does not break a valid pull request" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+if printf '%s' "$OUT" | grep -q 'slot 3'; then
+  bad "k1) the number of a prose sentence does NOT become the slot" \
+      "$(printf '%s' "$OUT" | grep 'slot 3' | head -1)"
+else
+  ok "k1) the number of a prose sentence does NOT become the slot"
+fi
+if printf '%s' "$OUT" | grep -q "gate local (slot $SLOT"; then
+  ok "k1) the gate of the slot that was asked for is the one that is verified"
+else
+  bad "k1) the gate of the slot that was asked for is the one that is verified" \
+      "$(printf '%s' "$OUT" | tail -5 | tr '\n' ' ')"
+fi
+# The same body WITHOUT the "no issue" line: the pull request has to say
+# which issue it closes, but it must not be the "3" of the prose.
+run_pr 4311 \
+  $'This fix 3 problems.\n\nChanges a default: no\n' \
+  "chore/cleanup-the-loop" \
+  "crates/engine/src/lib.rs"
+run_verify 4311 "$SLOT"
+if printf '%s' "$OUT" | grep -q 'slot 3'; then
+  bad "k1) a prose sentence is not a closing phrase (no slot 3)" \
+      "$(printf '%s' "$OUT" | grep 'slot 3' | head -1)"
+else
+  ok "k1) a prose sentence is not a closing phrase (no slot 3)"
+fi
+if printf '%s' "$OUT" | grep -q 'ninguna frase de cierre'; then
+  ok "k1) a body with no closing phrase is asked for one (and not for the gate of a slot made of prose)"
+else
+  bad "k1) a body with no closing phrase is asked for one (and not for the gate of a slot made of prose)" \
+      "$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# k2) "Closes 5 open bugs." is prose too: it does not derive the slot 5.
+run_pr 4312 \
+  $'Closes 5 open bugs.\n\nno issue: this pull request is a cleanup of the loop.\n\nChanges a default: no\n' \
+  "chore/cleanup-the-loop" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+run_verify 4312 "$SLOT"
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'slot 5'; then
+  ok "k2) 'Closes 5 open bugs.' does not derive the slot 5"
+else
+  bad "k2) 'Closes 5 open bugs.' does not derive the slot 5" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# k3) a LIST closes more than one issue: "Fixes #10181, #10182" closes TWO.
+run_pr 4313 \
+  $'Fixes #10181, #10182\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/two-issues-at-once" \
+  "crates/engine/src/lib.rs"
+run_verify 4313
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'cierra 2 issues'; then
+  ok "k3) a list of issues closes more than one issue and FAILS"
+else
+  bad "k3) a list of issues closes more than one issue and FAILS" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# k4) two lines, two issues: "Fixes #123" and "Fixes #124" close TWO.
+run_pr 4314 \
+  $'Fixes #123\n\nFixes #124\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/two-issues-in-two-lines" \
+  "crates/engine/src/lib.rs"
+run_verify 4314
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'cierra 2 issues'; then
+  ok "k4) two closing phrases in two lines close two issues and FAIL"
+else
+  bad "k4) two closing phrases in two lines close two issues and FAIL" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# k5) the SAME issue twice closes ONE (the upstream counts issues, not
+#     lines): it is not the "closes more than one issue" failure.
+run_pr 4315 \
+  $'Fixes #7058\n\nFixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+run_verify 4315
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'VEREDICTO: todo en orden'; then
+  ok "k5) the same issue twice closes ONE issue"
+else
+  bad "k5) the same issue twice closes ONE issue" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# k6) a reference to ANOTHER repository closes nothing of ours (the rule of
+#     the upstream: "Fixes other/repo#5" does not close an issue of ours).
+run_pr 4316 \
+  $'Fixes acme/other#123\n\nno issue: this pull request is a cleanup of the loop.\n\nChanges a default: no\n' \
+  "chore/cleanup-the-loop" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+run_verify 4316 "$SLOT"
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'slot 123'; then
+  ok "k6) a reference to another repository does not close an issue of ours"
+else
+  bad "k6) a reference to another repository does not close an issue of ours" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+# k7) the same reference, but to OUR repository: it closes the issue.
+run_pr 4317 \
+  $'Fixes acme/one#123\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-123-the-engine" \
+  "crates/engine/src/lib.rs"
+run_verify 4317
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'falta el veredicto del gate del slot 123'; then
+  ok "k7) a reference to OUR repository closes the issue (the slot is that one)"
+else
+  bad "k7) a reference to OUR repository closes the issue (the slot is that one)" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+# And it is the BODY that says it (not the name of the branch).
+if printf '%s' "$OUT" | grep -q 'de el body (cierra el issue #123)'; then
+  ok "k7) the closing phrase of the body is the one that names the slot"
+else
+  bad "k7) the closing phrase of the body is the one that names the slot" \
+      "$(printf '%s' "$OUT" | grep -E 'slot 123' | head -1)"
+fi
+
 # --- the control: the stub answered and GitHub was never contacted -----------
 if [ -s "$TESTDIR/gh.log" ] && grep -q 'pr view 4201' "$TESTDIR/gh.log" \
    && grep -q -- '--json files' "$TESTDIR/gh.log"; then
@@ -577,6 +920,13 @@ if [ -s "$TESTDIR/gh.log" ] && grep -q 'pr view 4201' "$TESTDIR/gh.log" \
 else
   bad "the gh of the tests answered (GitHub was never contacted)" \
       "$(head -3 "$TESTDIR/gh.log" 2>/dev/null | tr '\n' ' ')"
+fi
+# The verifier asks for the checks WITH their state (not for a text to grep).
+if grep -q -- 'pr checks 4302 .*--json name,state,bucket' "$TESTDIR/gh.log"; then
+  ok "the verifier asks the gh for the STATE of the checks"
+else
+  bad "the verifier asks the gh for the STATE of the checks" \
+      "$(grep 'pr checks' "$TESTDIR/gh.log" 2>/dev/null | head -2 | tr '\n' ' ')"
 fi
 
 TOTAL=$(( PASS + FAIL ))
