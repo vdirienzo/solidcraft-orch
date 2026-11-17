@@ -289,7 +289,12 @@ def targets():
         except (OSError, json.JSONDecodeError):
             d = {}
         for p in d.get("open_prs", []) or []:
+            # The entry that carries the key "pr" instead of "number" was
+            # being lost: the pull request #11205 was counted as none. The
+            # other consumer of this key (bin/orch-state.sh) normalizes both.
             n = p.get("number")
+            if not isinstance(n, int):
+                n = p.get("pr")
             if isinstance(n, int):
                 prs.add(n)
             iss = p.get("issue")

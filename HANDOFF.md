@@ -29,7 +29,7 @@ sesión**: el contexto se comprime y se pierde, el disco no.
 | Archivo | Qué es | Cómo se lee |
 |---|---|---|
 | `state.json` | el estado canónico: slots, PRs, gates, capacidad | **con `bin/orch-state.sh`**, nunca entero |
-| `state/` | el estado **partido por concepto** (`meta`, `prs`, `slots`, `gates`, `claims`, `policy`, `notes`) | `state.json` se **genera** desde acá con `bin/merge-state.sh`; ver `state/README.md` |
+| `state/` | el estado **partido por concepto** (`meta`, `prs`, `slots`, `gates`, `claims`, `policy`, `notes`) | `state.json` se **genera** desde acá con `bin/merge-state.sh`; el concepto se lee con `bin/orch-state.sh <concepto>` |
 | `history.jsonl` | el registro append-only de lo que se hizo (una entrada por línea) | `bin/orch-state.sh history 10` |
 | `RULES.md` | el resumen de AGENTS.md + skills + CONTRIBUTING.md | entero (es corto) |
 | `bin/` | las herramientas | ver abajo |
@@ -48,7 +48,8 @@ bash bin/orch-state.sh keys         # las claves y su tamano
 bash bin/orch-state.sh history 10   # las ultimas 10 acciones
 
 # verificar un PR en UNA llamada (head vs fork, keywords, defaults, rutas locales, draft, checks, gate)
-bash bin/verify-pr.sh 9843          # exit 0 = todo en orden
+bash bin/verify-pr.sh 9843          # exit 0 = todo en orden, 1 = hay un fallo, 6 = NO SE SABE
+                                  # (el CI no se pudo leer: no es un "no", es un "no se")
 
 # los slots
 bash bin/slots.sh report            # cores, RAM, implement_slots, free_slots, gate_may_start

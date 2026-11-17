@@ -34,7 +34,7 @@ ello.
 | `claim-brake.sh` | **El freno.** Actúa sobre ese veredicto. Sus exit codes **son** el veredicto: 0 OK, 10 TAKEN/LOST, 11 RESOLVED, 12 UNKNOWN. Nunca se traducen. | el publisher, antes de que arranque el modelo y otra vez en el push |
 | `claim-salvage.sh` | **El rescate.** Cuando el claim se pierde, escribe el diff de la rama contra su base, la lista de commits, una nota y lo mismo en JSON en `logs/claims-lost/`. La rama y el worktree **no** se borran. | el publisher, cuando el freno dice que el claim se perdió |
 | `gate-quick.sh` | **El gate que compila.** Las fases (`fmt`, `layers`, `clippy`, `check`, `nextest`), el veredicto `scope.verdict` y el efectivo `scope.effective.verdict`. | `bin/gate.sh:53` — sin él el gate sale con rc=2 |
-| `pr-defaults-line.sh` | **El validador del body.** Decide si el body lleva la línea `Changes a default:` bien formada. | `bin/publish-pr.sh:254`, `bin/verify-pr.sh:117` |
+| `pr-defaults-line.sh` | **El validador del body.** Decide si el body lleva la línea `Changes a default:` bien formada. | `bin/publish-pr.sh`, `bin/verify-pr.sh` |
 | `gc-disk.sh` | **El GC de disco.** Aplica el tope de GB de `targets/`. | el supervisor; el cap nunca se aplicaba porque su único llamador no estaba en ningún cron |
 | `supervisor.sh` | **El supervisor.** Levanta y baja los corredores. | los crons |
 | `test-gate-quick.sh` | Suite del LOOP. | el gate |

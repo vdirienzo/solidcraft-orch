@@ -79,13 +79,20 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
 10. **Gatea el mismo set de features que upstream.** El scope tiene que incluir `solidcraft-cli`:
     sin el, la feature `smlib` no esta activada y salen 1321 fallos falsos ("this build has no
     SMLib").
-11. **Verifica los hechos contra el codigo, no de memoria.** Por ejemplo, la regla de los 72 h del
-    repo no es "el claim vence a las 72 h": es "un draft SIN PUSHES por 72 h puede ser tomado".
+11. **Verifica los hechos contra el codigo, no de memoria.** Por ejemplo, los plazos del repo
+    no son uno: son dos, y no son el mismo. En `scripts/claim/claim.js`: `CLAIM_HOURS = 72`
+    (el `/claim` del bot vence a las 72 h de haberlo escrito) y `PR_IDLE_DAYS = 14` (un
+    draft **sin pushes** puede ser tomado a los **14 dias**). La regla del CONTRIBUTING
+    ("a draft with no pushes for 72 hours may be taken over") mezcla los dos: el 72 h es del
+    comment, y el draft va por 14 dias.
 
 ### Sobre el trabajo
 
 12. **El PR en DRAFT es el claim.** La regla del repo: *"A draft with no pushes for 72 hours may be
-    taken over"*. Por eso el draft se abre en el COMMIT, no despues del gate: el gate puede tardar
+    taken over"* — pero el codigo del bot tiene DOS plazos y el texto los mezcla: el `/claim`
+    vence a las 72 h (`CLAIM_HOURS`) y el draft sin pushes se puede tomar a los **14 dias**
+    (`PR_IDLE_DAYS`, `scripts/claim/claim.js:9`). El que cuenta para un draft es el de 14 dias.
+    Por eso el draft se abre en el COMMIT, no despues del gate: el gate puede tardar
     40 minutos o colgarse, y el issue no se pierde igual. Tope de trabajo en vuelo: **6**.
 13. **El test RED va antes del fix.** El entregable minimo de quien investiga es el test RED
     commiteado y pusheado. Con RED, el fix es un brief literal de una hora; sin RED, el agente se
@@ -302,7 +309,9 @@ con el `success` del nuevo y muestra rojo un PR que esta verde.
 
 `targets/ logs/ locks/ gates/ state/ state.json history.jsonl` son el estado de una maquina
 concreta, no codigo. El `state.json` se REGENERA desde `state/` con `bin/merge-state.sh`; el
-`--check` tiene que dar IDENTICO o hay que correr `--split` para adoptar la edicion manual.
+`--check` tiene que dar IDENTICO o hay que correr `--split --prefer-artifact` para adoptar la
+edicion manual del `state.json`. Sin `--prefer-artifact` gana `state/` (la fuente) y el
+`--split` muestra el diff antes de escribir: se ve que se descarta.
 
 ## 6. Pruebas
 

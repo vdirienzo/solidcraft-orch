@@ -140,8 +140,10 @@ SOBRE ESTA MAQUINA:
 - state.json es la memoria del sistema: leelo al empezar y ACTUALIZALO al terminar (slots, open_prs,
   abandoned, y una entrada de history por cada accion, con timestamp).
 - El estado partido vive en state/ (una clave -> un archivo). Si editas state.json a mano, corre
-  bash /home/user/.local/share/solidcraft-orch/bin/merge-state.sh --split para adoptarlo, y despues
-  --check tiene que dar IDENTICO.
+  bash /home/user/.local/share/solidcraft-orch/bin/merge-state.sh --split --prefer-artifact para
+  adoptarla, y despues --check tiene que dar IDENTICO. Sin --prefer-artifact gana state/ (la
+  fuente), y tu edicion manual se pierde: el split muestra el diff antes de escribir, asi que
+  vas a ver que se descarta.
 
 LOS COMENTARIOS DE GITHUB (el watcher, no tu memoria):
 - Al empezar la wave y en cada checkpoint, corre:

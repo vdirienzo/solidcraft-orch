@@ -62,7 +62,7 @@ for entry in \
   "claim-brake.sh|el freno: convierte el veredicto del claim en exit codes|el publisher lo llama antes de publicar y en el push" \
   "claim-salvage.sh|el rescate del trabajo de un claim perdido|el publisher lo llama cuando el claim se perdio" \
   "gate-quick.sh|el gate que compila y escribe el verdict|bin/gate.sh:53 sale con rc=2 sin el" \
-  "pr-defaults-line.sh|el validador del body del PR|bin/publish-pr.sh:254 y bin/verify-pr.sh:117 lo necesitan" \
+  "pr-defaults-line.sh|el validador del body del PR|bin/publish-pr.sh y bin/verify-pr.sh lo necesitan" \
   ; do
   file="${entry%%|*}"
   rest="${entry#*|}"
