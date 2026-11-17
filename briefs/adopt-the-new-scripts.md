@@ -21,11 +21,16 @@ que solo esta maquina tiene**.
 
 ## 2. Que hay en GitHub
 
-El repo `vdirienzo/solidcraft-orch` tiene una rama con 27 commits de correccion:
+El repo `vdirienzo/solidcraft-orch` tiene **los cambios en `main`**: el PR #1
+("The orchestrator stops lying about what it knows") esta mergeado, con 30 commits
+y el CI en verde.
 
 ```
-origin/fix/orchestrator-truthfulness   (27 commits sobre origin/main)
+origin/main   (todo lo de abajo ya esta ahi)
 ```
+
+La rama `origin/fix/orchestrator-truthfulness` es el origen de esos commits. **No la
+borres ni te pongas en ella**: esta mergeada y no cambia nada.
 
 Trae, entre otras cosas:
 
@@ -136,11 +141,11 @@ estaban en el remoto (alguien los pusheo), el merge los trae solo.
 ```bash
 cd "$HOME/.local/share/solidcraft-orch"
 git fetch origin
-git log --oneline origin/main..origin/fix/orchestrator-truthfulness | head -30
+git log --oneline -5 origin/main
 
 # El merge va a main: esta maquina corre desde main.
 git checkout main
-git merge --no-ff origin/fix/orchestrator-truthfulness
+git merge --no-ff origin/main
 ```
 
 **Si el merge dice que hay conflictos**, la regla es una sola, y es la del repo:
