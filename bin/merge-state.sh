@@ -25,6 +25,7 @@
 #                                        compara contra FILE (por ejemplo
 #                                        logs/state.json.pre-split.bak)
 #   bash bin/merge-state.sh --split [--assign CLAVE=GRUPO]
+#                                        [--prefer-source|--prefer-artifact]
 #                                        reparte state.json de vuelta en
 #                                        state/<concepto>.json (adopta cambios
 #                                        hechos a mano) y actualiza el manifiesto.
@@ -32,6 +33,9 @@
 #                                        archivo de concepto queda una clave
 #                                        NUEVA de primer nivel (si no se dice,
 #                                        va a notes.json).
+#                                        --prefer-source (el default) gana la
+#                                        fuente (state/); --prefer-artifact
+#                                        gana el state.json.
 #   bash bin/merge-state.sh --list       los grupos y cuantas claves tiene cada uno
 #
 # REGLAS:
@@ -39,7 +43,16 @@
 #     lector concurrente ve el estado viejo COMPLETO o el nuevo COMPLETO.
 #   - El merge se NIEGA a pisar un state.json que cambio desde el ultimo merge
 #     (state/published.sha256 no coincide): eso seria perder una edicion a
-#     mano. La salida es `bash bin/merge-state.sh --split`, que la adopta.
+#     mano. La salida es `bash bin/merge-state.sh --split --prefer-artifact`,
+#     que la adopta.
+#   - state/published.sha256 es OBLIGATORIO: sin el, el merge no puede saber
+#     si el state.json fue editado a mano desde el ultimo merge, asi que se
+#     niega a escribirlo. `--force` lo permite (y lo vuelve a generar).
+#   - En un --split, cuando los dos lados dicen cosas distintas, GANA LA
+#     FUENTE (state/<concepto>.json): el state.json es un artefacto que se
+#     regenera desde state/, y su valor puede ser el viejo. Con
+#     --prefer-artifact gana el state.json. Antes de escribir, el --split
+#     muestra el diff de lo que va a cambiar.
 #   - La variable ORCH_DIR manda (los tests la usan para trabajar en un
 #     directorio de mentira).
 # ------------------------------------------------------------------
@@ -61,6 +74,9 @@ MANIFEST = os.path.join(STATE_DIR, "manifest.json")
 PUBLISHED = os.path.join(STATE_DIR, "published.sha256")
 MANIFEST_NAME = "manifest.json"
 DEFAULT_GROUP = "notes"
+# Que lado gana cuando los dos lados dicen cosas distintas.
+PREFER_SOURCE = "source"      # la fuente: state/<concepto>.json
+PREFER_ARTIFACT = "artifact"  # el artefacto: state.json
 
 
 def die(msg, code=2):
@@ -139,6 +155,64 @@ def write_atomic(path, text):
         pass
 
 
+def stage_files(entradas):
+    """Escribe TODO a temporales y devuelve la lista de movimientos.
+
+    entradas: [(ruta_definitiva, texto), ...]
+
+    Nada se toca en el lugar definitivo hasta que TODOS los temporales estan
+    escritos: si algo falla (disco lleno, un valor que no se puede
+    serializar), el estado real queda como estaba, ENTERO. Los movimientos
+    son renombres (os.replace): un lector concurrente nunca ve un archivo a
+    medio escribir.
+    """
+    movs = []
+    try:
+        for dst, texto in entradas:
+            d = os.path.dirname(dst) or "."
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=".merge-state-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(texto)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.chmod(tmp, 0o644)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+            movs.append((tmp, dst))
+    except BaseException:
+        for tmp, _ in movs:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        raise
+    return movs
+
+
+def aplicar_movimientos(movs):
+    """Mueve los temporales a su lugar (renombres) y sincroniza los
+    directorios. Los movimientos son rapidos: la ventana en la que el
+    estado esta a medias es la de los renombres, no la de las escrituras."""
+    dirs = set()
+    for tmp, dst in movs:
+        os.replace(tmp, dst)
+        dirs.add(os.path.dirname(dst) or ".")
+    for d in dirs:
+        try:
+            dfd = os.open(d, os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+
+
 def concept_files():
     if not os.path.isdir(STATE_DIR):
         die(f"no existe el directorio de estado: {STATE_DIR}")
@@ -163,8 +237,8 @@ def is_concept_file(fname):
     return isinstance(obj, dict)
 
 
-def load_manifest():
-    m = load_json(MANIFEST)
+def parse_manifest(m):
+    """Valida un manifiesto y devuelve (manifiesto, grupos, clave->grupo)."""
     groups = m.get("groups")
     if not isinstance(groups, dict) or not groups:
         die("el manifiesto no tiene 'groups'")
@@ -179,24 +253,45 @@ def load_manifest():
     return m, groups, key2group
 
 
-def rebuild():
+def load_manifest():
+    return parse_manifest(load_json(MANIFEST))
+
+
+def rebuild(overrides=None, manifest=None):
     """state/*.json -> dict. Devuelve (datos, avisos).
 
     El archivo fisico manda: una clave escrita a mano en state/prs.json que no
     esta en el manifiesto se ADOPTA en ese grupo (con aviso). Lo que si es un
     error es el conflicto: la clave esta en el manifiesto pero en OTRO grupo
     que el archivo donde esta.
+
+    overrides: {archivo_de_concepto: objeto}. El contenido que TENDRIA ese
+    archivo, todavia no escrito en el disco. Lo usa el --split para calcular
+    y VERIFICAR el estado que quedara antes de mover nada.
+    manifest: el manifiesto que se va a usar (por defecto, el del disco).
     """
-    m, groups, key2group = load_manifest()
+    if manifest is None:
+        m, groups, key2group = load_manifest()
+    else:
+        m, groups, key2group = parse_manifest(manifest)
     data = {}
     avisos = []
     files = [f for f in concept_files() if is_concept_file(f)]
+    if overrides:
+        # los archivos que el plan va a CREAR todavia no estan en el disco
+        for fname in overrides:
+            if fname != MANIFEST_NAME and fname not in files:
+                files.append(fname)
+        files.sort()
     sin_grupo = [f for f in files if f[:-5] not in groups]
     if sin_grupo:
         die("archivo de concepto sin grupo en el manifiesto: " + ", ".join(sin_grupo))
     for fname in files:
         grupo = fname[:-5]
-        obj = load_json(os.path.join(STATE_DIR, fname))
+        if overrides is not None and fname in overrides:
+            obj = overrides[fname]
+        else:
+            obj = load_json(os.path.join(STATE_DIR, fname))
         if not isinstance(obj, dict):
             die(f"{fname} no es un objeto JSON")
         for k, v in obj.items():
@@ -255,11 +350,18 @@ def check(args):
     rebuilt, avisos = rebuild()
     for a in avisos:
         print(f"merge-state: aviso: {a}")
+    if published_hash() is None:
+        print("merge-state: aviso: no existe state/published.sha256: el merge "
+              "normal se va a negar a escribir hasta que se regenere")
     ref = load_json(ref_path)
     d = diff(rebuilt, ref)
     print(f"merge-state: {len(rebuilt)} claves de primer nivel reconstruidas "
           f"desde {len(concept_files())} archivo(s) de state/")
     if d:
+        solo_ref = sorted(set(ref) - set(rebuilt))
+        solo_rebuilt = sorted(set(rebuilt) - set(ref))
+        distintos = sorted(k for k in set(rebuilt) & set(ref)
+                            if canon(rebuilt[k]) != canon(ref[k]))
         print(f"merge-state: NO es identico a {ref_path}:")
         for line in d:
             print(line)
@@ -268,9 +370,25 @@ def check(args):
         # arreglarlo con un --split o si hay que tocar un archivo de state/.
         print(f"merge-state: el state.json NO se puede reconstruir desde state/ "
               f"({len(d)} diferencia(s)).")
-        print("merge-state: para adoptar la edicion a mano: "
-              "`bash bin/merge-state.sh --split`")
-        print("merge-state: si la edicion a mano es lo que se quiere perder, "
+        if solo_ref:
+            print("merge-state: estas claves estan SOLO en el state.json (un "
+                  "merge las perderia): " + ", ".join(solo_ref))
+        if solo_rebuilt:
+            print("merge-state: estas claves estan SOLO en state/ (un merge las "
+                  "agrega al state.json: no se pierde nada): "
+                  + ", ".join(solo_rebuilt))
+        if distintos:
+            print("merge-state: estos VALORES difieren entre state/ y el "
+                  "state.json (no se puede saber cual es el nuevo): "
+                  + ", ".join(distintos))
+        print("merge-state: para reconciliar, hay que elegir de que lado queda "
+              "el valor:")
+        print("merge-state:   si manda state/ (el default del --split): "
+              "`bash bin/merge-state.sh --split` (muestra el diff antes de "
+              "escribir)")
+        print("merge-state:   si manda el state.json: `bash bin/merge-state.sh "
+              "--split --prefer-artifact`")
+        print("merge-state:   si lo que se quiere es perder la edicion a mano: "
               "`bash bin/merge-state.sh --force` lo pisa con state/.")
         return 1
     with open(ref_path, "rb") as fh:
@@ -282,34 +400,57 @@ def check(args):
     return 0
 
 
+def fmt_val(v, limite=200):
+    """Un valor JSON en una linea, para el diff."""
+    s = json.dumps(v, ensure_ascii=False, sort_keys=True)
+    if len(s) > limite:
+        s = s[:limite] + "..."
+    return s
+
+
 def split(args):
-    """state.json -> state/<concepto>.json (adopta lo editado a mano).
+    """state.json <-> state/<concepto>.json (reconcilia los dos lados).
 
-    DIRECCION: el state.json manda para las claves que estan en los dos lados
-    (por eso se llama split: uno edito state.json a mano y pide que se adopte).
-    Las claves que solo estan en state/ NO se borran: se conservan y se
-    avisa. Perder una clave escrita a mano en un archivo de concepto seria
-    peor que el problema que este comando viene a resolver.
+    DIRECCION: por defecto GANA LA FUENTE (state/<concepto>.json). El
+    state.json es un ARTEFACTO: se regenera desde state/. Cuando los dos
+    lados dicen cosas distintas, el valor del state.json puede ser el VIEJO
+    (alguien edito state/ y todavia no se regenero el artefacto): escribirlo
+    encima del archivo de concepto pierde la edicion mas nueva. Con
+    --prefer-artifact gana el state.json (esa es la forma de adoptar una
+    edicion a mano del artefacto). Los dos modos se ven: antes de escribir
+    se imprime el diff de lo que va a cambiar.
 
-    Una clave NUEVA de primer nivel (una que no estaba en el manifiesto) se
-    adopta con --assign CLAVE=GRUPO: asi el que edito sabe en que archivo de
-    concepto queda, en vez de que caiga en notes por defecto.
+    Lo que NO se pierde en ningun modo:
+      - una clave NUEVA de primer nivel (que no esta en el manifiesto) se
+        adopta: va a notes.json, o al grupo que diga --assign CLAVE=GRUPO.
+      - una clave que existe SOLO en state/ se conserva en su grupo.
     """
     state = load_json(STATE_JSON)
     m, groups, key2group = load_manifest()
     # --assign CLAVE=GRUPO: donde va una clave nueva de primer nivel.
     asigna = {}
+    # Que lado gana en un conflicto (None = el default: la fuente).
+    prefer = None
     i = 0
     while i < len(args):
-        if args[i] == "--assign":
+        opt = args[i]
+        if opt in ("--prefer-source", "--prefer-artifact"):
+            nuevo = PREFER_SOURCE if opt == "--prefer-source" else PREFER_ARTIFACT
+            if prefer is not None and prefer != nuevo:
+                die("--prefer-source y --prefer-artifact se contradicen: "
+                    "decidi uno")
+            prefer = nuevo
+            i += 1
+            continue
+        if opt == "--assign":
             i += 1
             if i >= len(args):
                 die("--assign necesita CLAVE=GRUPO")
             spec = args[i]
-        elif args[i].startswith("--assign="):
-            spec = args[i].split("=", 1)[1]
+        elif opt.startswith("--assign="):
+            spec = opt.split("=", 1)[1]
         else:
-            die(f"opcion desconocida para --split: {args[i]}")
+            die(f"opcion desconocida para --split: {opt}")
         if "=" not in spec:
             die(f"--assign necesita CLAVE=GRUPO, no '{spec}'")
         k, g = spec.split("=", 1)
@@ -320,6 +461,8 @@ def split(args):
             die(f"--assign: la clave '{k}' no esta en state.json")
         asigna[k] = g
         i += 1
+    if prefer is None:
+        prefer = PREFER_SOURCE
     grupos = dict(groups)
     archivos_en_disco = {f[:-5] for f in concept_files() if is_concept_file(f)}
     huerfanas = [k for k in state if k not in key2group]
@@ -343,9 +486,11 @@ def split(args):
     groups = grupos
     # lo que ya esta escrito en state/ y NO esta en el state.json: se conserva
     conservadas = {}
+    claves_fuente = set()
     for fname in [f for f in concept_files() if is_concept_file(f)]:
         grupo = fname[:-5]
         obj = load_json(os.path.join(STATE_DIR, fname))
+        claves_fuente.update(obj.keys())
         extra = [k for k in obj if k not in state]
         if extra:
             conservadas[grupo] = extra
@@ -364,19 +509,60 @@ def split(args):
         # rebuild se muere con "archivo de concepto sin grupo".
         if claves or grupo in archivos_en_disco:
             nuevos[grupo] = claves
-    for grupo, claves in sorted(nuevos.items()):
+    # Que valor gana en cada clave. Solo hay CONFLICTO cuando la clave esta
+    # en los dos lados y los valores son distintos.
+    conflictos = []
+    planes = {}
+    for grupo in sorted(nuevos):
         ruta = os.path.join(STATE_DIR, f"{grupo}.json")
         previo = {}
         if os.path.isfile(ruta):
             previo = load_json(ruta)
+            if not isinstance(previo, dict):
+                die(f"state/{grupo}.json no es un objeto JSON: no se puede "
+                    f"partir (seria una escritura a ciegas)")
         obj = {}
-        for k in claves:
-            if k in state:
-                obj[k] = state[k]        # el state.json manda
+        for k in nuevos[grupo]:
+            if k in state and k in previo:
+                if canon(state[k]) == canon(previo[k]):
+                    obj[k] = state[k]      # los dos dicen lo mismo
+                    continue
+                # CONFLICTO: el state.json puede tener el valor viejo.
+                if prefer == PREFER_ARTIFACT:
+                    obj[k] = state[k]      # el state.json manda
+                    lado = PREFER_ARTIFACT
+                else:
+                    obj[k] = previo[k]     # la fuente manda (el default)
+                    lado = PREFER_SOURCE
+                conflictos.append((grupo, k, previo[k], state[k], lado))
+            elif k in state:
+                obj[k] = state[k]          # clave nueva en este grupo
             elif k in previo:
-                obj[k] = previo[k]      # se conserva lo que estaba
-        write_atomic(ruta, dump(obj))
-        print(f"merge-state: state/{grupo}.json <- {len(obj)} claves")
+                obj[k] = previo[k]         # se conserva lo que estaba
+        planes[grupo] = obj
+    # EL DIFF, ANTES DE ESCRIBIR: el operador tiene que ver que valor se
+    # descarta y por que. Un remedio que destruye el dato en silencio no es
+    # un remedio.
+    if conflictos:
+        gana = ("el state.json (--prefer-artifact)" if prefer == PREFER_ARTIFACT
+                else "state/ (--prefer-source, el default)")
+        print(f"merge-state: {len(conflictos)} clave(s) difieren entre state/ y "
+              f"el state.json. GANA {gana}:")
+        for grupo, k, v_fuente, v_artefacto, lado in conflictos:
+            print(f"  state/{grupo}.json: '{k}'")
+            print(f"      state/ (fuente)      : {fmt_val(v_fuente)}")
+            print(f"      state.json (artefacto): {fmt_val(v_artefacto)}")
+            if lado == PREFER_SOURCE:
+                print(f"      -> SE CONSERVA el valor de state/{grupo}.json; el "
+                      f"del state.json SE DESCARTA (con --prefer-artifact seria "
+                      f"al reves)")
+            else:
+                print(f"      -> SE ADOPTA el valor del state.json; el de "
+                      f"state/{grupo}.json SE DESCARTA (con --prefer-source "
+                      f"seria al reves)")
+    else:
+        print("merge-state: sin conflictos: state/ y el state.json dicen lo "
+              "mismo")
     # el orden: primero el del state.json, y al final las claves que solo
     # estan en state/ (las conservadas), para que el merge las reconstruya
     # en el mismo lugar.
@@ -391,24 +577,52 @@ def split(args):
         "order": orden,
         "groups": {g: ks for g, ks in nuevos.items()},
     }
-    write_atomic(MANIFEST, dump(manifest))
-    # lo que se acaba de adoptar es ahora el estado publicado: se REGENERA
-    # el state.json desde state/ (reemplazo atomico) y se publica su hash.
-    # Asi, despues de un --split, el --check da IDENTICO y el merge no se
-    # niega a escribir (state/published.sha256 coincide con el archivo).
-    # Lo que se regenera es lo que quedo en state/, que ya contiene TODOS los
-    # valores del state.json adoptado (el state.json mandaba al escribir los
-    # archivos de concepto): no se pierde nada de la edicion a mano.
-    rebuilt, avisos = rebuild()
+    # VERIFICACION, ANTES DE MOVER NADA: el estado que QUEDARA se calcula
+    # sobre el plan (sin tocar el disco). Si el plan pierde una clave, no se
+    # escribe nada: el estado real sigue entero.
+    plan = {f"{grupo}.json": planes[grupo] for grupo in planes}
+    esperado, avisos = rebuild(overrides=plan, manifest=manifest)
     for a in avisos:
         print(f"merge-state: aviso: {a}")
-    texto = dump(rebuilt)
-    write_atomic(STATE_JSON, texto)
-    publish_hash(sha256_bytes(texto.encode("utf-8")))
+    perdidas = sorted(k for k in state if k not in esperado)
+    if perdidas:
+        die("el --split perderia estas claves del state.json: "
+            + ", ".join(perdidas))
+    perdidas_fuente = sorted(k for k in claves_fuente if k not in esperado)
+    if perdidas_fuente:
+        die("el --split perderia estas claves de state/: "
+            + ", ".join(perdidas_fuente))
+    # El state.json que quedara es el que se reconstruye desde el plan (con
+    # el manifiesto nuevo): se calcula ANTES de escribir, asi que se puede
+    # stagear junto con los archivos de concepto.
+    texto = dump(esperado)
+    # TODO a temporales, y recien ahi los movimientos: un crash mientras se
+    # escribe no deja el estado a medias (queda el viejo, completo).
+    entradas = [(os.path.join(STATE_DIR, f), dump(obj))
+                for f, obj in sorted(plan.items())]
+    entradas.append((MANIFEST, dump(manifest)))
+    entradas.append((STATE_JSON, texto))
+    entradas.append((PUBLISHED, sha256_bytes(texto.encode("utf-8")) + "\n"))
+    try:
+        movs = stage_files(entradas)
+    except OSError as e:
+        die(f"no se pudo preparar la escritura (no se movio nada): {e}")
+    aplicar_movimientos(movs)
+    for grupo in sorted(planes):
+        print(f"merge-state: state/{grupo}.json <- {len(planes[grupo])} claves")
     print(f"merge-state: manifest actualizado ({len(nuevos)} grupos, "
           f"{len(state)} claves)")
-    print(f"merge-state: state.json regenerado desde state/: {len(rebuilt)} "
+    print(f"merge-state: state.json regenerado desde state/: {len(esperado)} "
           f"claves, {len(texto.encode('utf-8')):,} bytes (reemplazo atomico)")
+    if conflictos:
+        descartadas = sorted(k for (_g, k, _vf, _va, lado) in conflictos
+                             if lado == PREFER_SOURCE)
+        if descartadas:
+            print(f"merge-state: ATENCION: se descarto el valor del state.json de "
+                  f"{len(descartadas)} clave(s): " + ", ".join(descartadas) +
+                  ". Si esa edicion a mano era la buena: `bash bin/merge-state.sh "
+                  "--split --prefer-artifact` la adopta (y muestra el diff antes "
+                  "de escribir).")
     return 0
 
 
@@ -422,20 +636,34 @@ def write_state(force):
         if huerfanas and not force:
             print("merge-state: state.json tiene claves que NO estan en state/: "
                   + ", ".join(sorted(huerfanas)))
-            print("merge-state: no lo piso (se perderian). Corré "
-                  "`bash bin/merge-state.sh --split` para adoptar esos cambios, "
-                  "o `--force` para pisar de todos modos.")
+            print("merge-state: no lo piso (se perderian). Para adoptarlas: "
+                  "`bash bin/merge-state.sh --split` (la clave nueva va a "
+                  "notes.json); si lo que se quiere es perderlas, `--force` lo "
+                  "pisa con state/.")
             return 3
         # si state.json cambio desde el ultimo merge, algo lo edito a mano:
         # el merge no pisa eso en silencio.
         pub = published_hash()
         actual = sha256_file(STATE_JSON)
+        if pub is None and not force:
+            # SIN EL HASH NO HAY GUARDA: sin published.sha256 no se puede
+            # saber si el state.json fue editado a mano desde el ultimo
+            # merge. La guarda "no pises una edicion a mano" estaria apagada,
+            # asi que el merge se niega (y no pisa nada).
+            print("merge-state: no existe state/published.sha256: no puedo saber "
+                  "si el state.json fue editado a mano desde el ultimo merge, "
+                  "asi que NO lo piso.")
+            print("merge-state: para regenerarlo: `bash bin/merge-state.sh "
+                  "--force` (pisa el state.json con state/ y vuelve a escribir "
+                  "el hash) o `bash bin/merge-state.sh --split --prefer-artifact` "
+                  "(adopta la edicion a mano y publica el hash nuevo).")
+            return 3
         if pub and actual and pub != actual and not force:
             print("merge-state: state.json cambio desde el ultimo merge (el "
                   "hash no coincide con state/published.sha256): no lo piso.")
-            print("merge-state: si la edicion a mano es la buena, corré "
-                  "`bash bin/merge-state.sh --split` para adoptarla; si lo que "
-                  "manda es state/, corré con `--force`.")
+            print("merge-state: si la edicion a mano es la buena: `bash bin/"
+                  "merge-state.sh --split --prefer-artifact` la adopta; si lo que "
+                  "manda es state/, `bash bin/merge-state.sh --force` lo pisa.")
             return 3
         cambiado = [k for k in cur if k in rebuilt and cur[k] != rebuilt[k]]
         if cambiado:
@@ -446,6 +674,7 @@ def write_state(force):
     publish_hash(sha256_bytes(texto.encode("utf-8")))
     print(f"merge-state: state.json reescrito desde state/: {len(rebuilt)} "
           f"claves, {len(texto.encode('utf-8')):,} bytes (reemplazo atomico)")
+    print("merge-state: state/published.sha256 actualizado")
     return 0
 
 
@@ -460,12 +689,17 @@ def list_groups():
     return 0
 
 
-USAGE = ("merge-state.sh [--check [--vs FILE]] [--split [--assign CLAVE=GRUPO]] "
-         "[--list] [--force]\n"
+USAGE = ("merge-state.sh [--check [--vs FILE]] "
+         "[--split [--assign CLAVE=GRUPO] "
+         "[--prefer-source|--prefer-artifact]] [--list] [--force]\n"
          "  (sin opcion) reconstruye state.json desde state/ (reemplazo atomico)\n"
          "  --check sale 0 SOLO si el state.json se reconstruye identico desde "
          "state/;\n"
-         "         si difiere sale distinto de 0 y dice que --split lo adopte")
+         "         si difiere sale distinto de 0 y dice que --split lo adopte\n"
+         "  --split reparte el state.json de vuelta en state/<concepto>.json\n"
+         "         --prefer-source (default) gana state/ (la fuente)\n"
+         "         --prefer-artifact gana el state.json (el artefacto)\n"
+         "         antes de escribir muestra el diff de lo que va a cambiar")
 
 args = sys.argv[1:]
 comando = "write"
