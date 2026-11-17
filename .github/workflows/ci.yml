@@ -63,7 +63,11 @@ jobs:
           python3 -c "import yaml"
 
       - name: The suites
-        run: bash bin/test-all.sh --fast
+        run: |
+          # pipefail: sin esto, `algo | tee` devuelve el rc del tee y un
+          # suite que falla pasa como verde.
+          set -o pipefail
+          bash bin/test-all.sh --fast | tee "$RUNNER_TEMP/suites.log"
 
       # The four heavy suites need the orchestrator's machine (its deployed
       # copy, its worktrees, its loop scripts) and cannot pass anywhere
@@ -78,7 +82,7 @@ jobs:
             echo "worktrees and the loop scripts. A green CI certifies the rest."
             echo ""
             echo '```'
-            bash bin/test-all.sh --fast 2>&1 | grep '^SKIP-' || echo "(none)"
+            grep '^SKIP-' "$RUNNER_TEMP/suites.log" || echo "(none)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -86,33 +90,30 @@ jobs:
     name: the upstream rules did not age
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # IT INFORMS, IT DOES NOT BLOCK. The snapshot is a hash manifest of the
-    # upstream's rules, and the upstream changes them constantly ("81
-    # commits in five hours"). A job that fails every time upstream moves
-    # is an alarm that people learn to ignore. The hard failure belongs in
-    # the LOCAL gate, where the person who has to act sees it.
-    continue-on-error: true
+
     steps:
       - uses: actions/checkout@v4
 
       # The upstream checkout is needed to compare the snapshot against.
       # It is read-only here and shallow: the check only hashes files.
-      - name: The upstream rules
+      # The whole tree, shallow. The briefs test checks that every path a
+      # brief mentions EXISTS in the upstream: with a sparse checkout the
+      # paths were all missing, and the test failed for every file.
+      - name: The upstream tree
         uses: actions/checkout@v4
         with:
           repository: tangency-labs/solidcraft
           ref: main
           path: upstream
-          sparse-checkout: |
-            AGENTS.md
-            CONTRIBUTING.md
-            CLAUDE.md
-            skills/
-            scripts/pr-checks/
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
 
       - name: The snapshot is current
+        # IT INFORMS, IT DOES NOT BLOCK. The snapshot is a hash manifest of
+        # the upstream's rules, and the upstream changes them constantly ("81
+        # commits in five hours"). A check that fails every time upstream
+        # moves is an alarm that people learn to ignore. The hard failure
+        # belongs in the LOCAL gate, where the person who has to act sees it.
+        continue-on-error: true
         env:
           # The value goes through the environment, never into the
           # script body: a path from the event context is untrusted.
