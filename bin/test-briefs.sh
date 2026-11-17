@@ -25,9 +25,8 @@
 #   3. ningun brief puede mandar a una area con el kernel en pausa
 #      sin decirlo (RULES.md: el kernel esta en pausa)
 #
-# NECESITA el checkout de upstream: SOLIDCRAFT_REPO (por defecto
-# /home/user/solidcraft). Sin el, sale con rc=2 (UNKNOWN: no se pudo
-# medir, no es un verde).
+# NECESITA el checkout de upstream: SOLIDCRAFT_REPO. Sin el, sale con
+# rc=2 (UNKNOWN: no se pudo medir, no es un verde).
 #
 # Run:  bash bin/test-briefs.sh
 # ------------------------------------------------------------------
