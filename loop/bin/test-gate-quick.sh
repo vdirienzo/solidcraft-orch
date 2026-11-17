@@ -45,7 +45,11 @@
 #  29. the deferral NAMES the slot and the directory it waits for
 #  30. the lock of the slot: two runs of the same slot do not run at the
 #      same time, and two DIFFERENT slots do
-#  31. the layout works without the helper deployed (the fallback)
+# 31. the layout works without the helper deployed (the fallback)
+#
+# The case of the DESCRIPTORS of the lock:
+# 33. the children of the gate do NOT inherit the descriptors of the lock: an
+#     orphan does not keep the lock taken (a slot that never gates again)
 #
 # The exit code is 1 when a case fails.
 # ---------------------------------------------------------------------------
@@ -756,7 +760,13 @@ unset STUB_ENV_LOG
 #
 #     The kill is checked HERE with the functions of the gate: they are
 #     extracted and RUN (the case asks the module, not its source).
-awk '/^cgroup_pids\(\) \{$/{on=1} /^kill_scope_leftovers\(\) \{$/{on=0} on{print}' "$GATE" > "$TMP_TEST/leftovers.sh"
+#     The snippet needs the wrapper of the children (run_child) too: the
+#     functions of the gate call it, and a snippet without it would fail for
+#     a reason that has nothing to do with the orphans.
+{
+  awk '/^run_child\(\) \{/{on=1} on{print} /^\}$/{if(on){on=0}}' "$GATE"
+  awk '/^cgroup_pids\(\) \{/{on=1} /^kill_scope_leftovers\(\) \{/{on=0} on{print}' "$GATE"
+} > "$TMP_TEST/leftovers.sh"
 if [ ! -s "$TMP_TEST/leftovers.sh" ]; then
   echo "FALLO - caso 21 (las funciones de los restos no estan en el gate)"
   FAILURES=$((FAILURES + 1))
@@ -1137,6 +1147,82 @@ if grep -q "BORRARÍA $ORCH_BASE_TEST (" "$TMP_TEST/gc-32.txt"; then
   FAILURES=$((FAILURES + 1))
 else
   echo "ok   - caso 32 (la base del arbol no es candidata)"
+fi
+
+# 33. the descriptors of the lock are NOT inherited by the children of the
+#     gate. The lock of the slot (fd 8) and the global one (fd 9) are OPEN
+#     in the gate, and a child INHERITS them: a child that outlives the gate
+#     keeps the lock taken, and the NEXT gate of that slot can not take it:
+#     it is DEFERRED, and it is deferred FOREVER (the slot never gates
+#     again, with no error anywhere).
+#
+#     The fixture: the parser of the log (gate-check.sh) is replaced by one
+#     that leaves an ORPHAN behind (a sleep that lives 30 s) and answers the
+#     verdict of a green run. After the gate exits, the lock of the slot and
+#     the global one must be FREE: `flock -n -x` takes them at once.
+#
+#     The belt is OFF in this case (GATE_QUICK_CGROUP=0): without a scope
+#     nothing kills the leftovers of the run, so an orphan that outlives the
+#     gate is the real case (the same thing happens when the gate is killed
+#     and its cleanup never runs).
+#
+#     WITHOUT the fix the orphan holds the two locks and this case FAILS.
+SHA_FD="$(commit_change crates/alpha/src/lib.rs "pub fn alpha() { /* fd */ }")"
+BASE_FD="$(git -C "$REPO_TEST" rev-parse "$SHA_FD^")"
+cat > "$TMP_TEST/gate-check-orphan.sh" <<'ORPHAN'
+#!/usr/bin/env bash
+# A parser of the log that leaves an orphan behind: the sleep outlives the
+# gate (nobody waits for it and nobody kills it).
+# The output of the orphan goes to /dev/null: the parser is launched inside a
+# substitution, and an orphan that holds the pipe of the substitution would
+# keep the GATE waiting for it (that is another bug, not this one).
+sleep 30 >/dev/null 2>&1 &
+printf '%s\n' "$!" > "$ORPHAN_PID_FILE"
+printf 'VERDICT=VERDE\n'
+printf 'NEW_FAILURES=0\n'
+printf 'GATE_STATUS=finished\n'
+exit 0
+ORPHAN
+chmod +x "$TMP_TEST/gate-check-orphan.sh"
+lock_free() {
+  # lock_free <file> : 0 when the lock can be taken at once (exclusive)
+  local file="$1"
+  [ -f "$file" ] || return 1
+  ( exec 8>"$file" 2>/dev/null && flock -n -x 8 ) 2>/dev/null
+}
+export GATE_CHECK="$TMP_TEST/gate-check-orphan.sh"
+ORPHAN_PID="$TMP_TEST/orphan.pid"
+export ORPHAN_PID_FILE="$ORPHAN_PID"
+# The belt is off: nothing kills the leftovers of the run, so the orphan of
+# the parser outlives the gate (the case of a gate that is killed).
+export GATE_QUICK_CGROUP=0
+rm -f "$ORPHAN_PID"
+run_gate "$BASE_FD" "$SHA_FD" "sfd"
+unset GATE_CHECK ORPHAN_PID_FILE GATE_QUICK_CGROUP
+check_equal "caso 33 (el gate responde bien)" "$GATE_RC" "0"
+if [ -f "$ORPHAN_PID" ]; then
+  echo "ok   - caso 33 (el parser dejo un huerfano vivo)"
+else
+  echo "FALLO - caso 33 (el parser no dejo huerfano: el caso no prueba nada)"
+  FAILURES=$((FAILURES + 1))
+fi
+if lock_free "$LOOP_TEST/gates/sfd/scope.lock"; then
+  echo "ok   - caso 33 (el huerfano no deja tomado el lock del slot)"
+else
+  echo "FALLO - caso 33 (el huerfano deja tomado el lock del slot):" \
+    "el slot no gatearia nunca mas"
+  FAILURES=$((FAILURES + 1))
+fi
+if lock_free "$LOOP_TEST/gates/scope.lock"; then
+  echo "ok   - caso 33 (el huerfano no deja tomado el lock global)"
+else
+  echo "FALLO - caso 33 (el huerfano deja tomado el lock global)"
+  FAILURES=$((FAILURES + 1))
+fi
+# The orphan dies with the case: it must not keep the lock of the slot for
+# the cases that come after.
+if [ -f "$ORPHAN_PID" ]; then
+  kill -KILL "$(cat "$ORPHAN_PID")" 2>/dev/null || true
 fi
 
 # --- the verdict ----------------------------------------------------------

@@ -110,7 +110,49 @@ FAKE_GH = """#!/usr/bin/env bash
 # list of the PRs is the list of the tests. GitHub is never contacted.
 case "$1 $2" in
   "pr view") printf '%s\\n' "$LOOP_TEST_PR_HEAD"; exit 0 ;;
-  "pr list") printf '%s\\n' "$LOOP_TEST_PRS"; exit 0 ;;
+  "pr list")
+    # WHY THE --jq IS HONORED (2026-11-17): the arbitrator of the claim
+    # (bin/claim-verify.sh) filters the list SERVER-SIDE, with
+    # `gh pr list --jq`. A stub that ignores --jq returns the raw JSON,
+    # the arbitrator parses it as if it were the filtered list, and every
+    # line of the JSON becomes a false competitor. The stub has to
+    # behave like the real `gh`: apply the --jq filter to the fixture.
+    jq_filter=""
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "--jq" ]; then jq_filter="$a"; fi
+      case "$a" in --jq=*) jq_filter="${a#--jq=}" ;; esac
+      prev="$a"
+    done
+    if [ -z "$jq_filter" ]; then
+      printf '%s\\n' "$LOOP_TEST_PRS"; exit 0
+    fi
+    printf '%s' "$LOOP_TEST_PRS" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(data, list):
+    sys.exit(0)
+for item in data:
+    out = []
+    for part in sys.argv[1].split("."):
+        if part == "":
+            continue
+        if isinstance(item, list):
+            item = item[int(part)] if len(item) > int(part) else None
+        elif isinstance(item, dict):
+            item = item.get(part)
+        else:
+            item = None
+        if item is None:
+            break
+        out.append(item)
+    print(out[-1] if out else "")
+' "$jq_filter"
+    exit 0
+    ;;
 esac
 exit 1
 """

@@ -491,8 +491,15 @@ scope_lock_busy() {
   [ -f "$lock" ] || return 1
   # The lock is free when it can be taken: a held lock cannot be taken and
   # the probe answers "busy".
+  #
+  # WHY A SHARED PROBE AND NOT AN EXCLUSIVE ONE (2026-11-17): `flock -n -x`
+  # TAKES the lock. The probe of the GC was asking "is the lock free?" by
+  # taking it for a moment, and that moment is enough for a gate that was
+  # about to take it to lose the race: the gate gets deferred and the GC
+  # wins it. A shared probe (`-s`) asks the same question WITHOUT taking
+  # the lock: it succeeds only when nobody holds it exclusively.
   exec 8>>"$lock" 2>/dev/null || return 1
-  if flock -n -x 8 2>/dev/null; then
+  if flock -n -s 8 2>/dev/null; then
     exec 8>&- 2>/dev/null || true
     return 1
   fi

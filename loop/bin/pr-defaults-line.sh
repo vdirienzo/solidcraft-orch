@@ -55,7 +55,7 @@ PR_CHECKS_JS="${PR_CHECKS_JS:-}"
 if [ -z "$PR_CHECKS_JS" ]; then
   for _cand in \
     "${REPO_ROOT:-}/scripts/pr-checks/pr-checks.js" \
-    "/home/user/solidcraft/scripts/pr-checks/pr-checks.js"; do
+    "${SOLIDCRAFT_REPO:-${REPO_ROOT:-/home/user/solidcraft}}/scripts/pr-checks/pr-checks.js"; do
     if [ -n "$_cand" ] && [ -f "$_cand" ]; then PR_CHECKS_JS="$_cand"; break; fi
   done
 fi

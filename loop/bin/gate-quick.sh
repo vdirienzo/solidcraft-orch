@@ -90,7 +90,7 @@ if [ -n "${SC_QUICK_SCOPE_MARKER:-}" ]; then
   : > "$SC_QUICK_SCOPE_MARKER" 2>/dev/null || true
 fi
 
-REPO="${REPO:-/home/user/solidcraft}"
+REPO="${SOLIDCRAFT_REPO:-${REPO:-/home/user/solidcraft}}"
 LOOP_DIR="${LOOP_DIR:-$HOME/.local/share/solidcraft-loop}"
 BASELINE="${BASELINE_FAILURES:-$LOOP_DIR/baseline-failures.txt}"
 # The parser of the loop reads the known failures from the same place.
@@ -118,14 +118,14 @@ TIMEOUT_MIN="${GATE_QUICK_TIMEOUT_MIN:-60}"
 gate_share_threads() {
   [ "${GATE_SHARE_THREADS:-auto}" = "auto" ] || return 0
   local _other=0 _p _cwd _args
-  for _p in $(pgrep -f "cargo nextest run" 2>/dev/null); do
-    _cwd="$(readlink "/proc/$_p/cwd" 2>/dev/null || true)"
+  for _p in $(run_child pgrep -f "cargo nextest run" 2>/dev/null); do
+    _cwd="$(run_child readlink "/proc/$_p/cwd" 2>/dev/null || true)"
     # the nextest of THIS gate is not another gate: it is the one this
     # script is about to launch, and it runs from the worktree of this slot
     case "$_cwd" in
       "$REPO"|"$REPO"/*) continue ;;
     esac
-    _args="$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null || true)"
+    _args="$(run_child tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null || true)"
     case "$_cwd$_args" in
       *solidcraft-orch/targets*|*solidcraft-wt*) _other=$(( _other + 1 )) ;;
     esac
@@ -254,7 +254,7 @@ gpu_stack_warning() {
     echo "the GPU stack: the ICD $icd is not readable: there will be no adapter"
     return 0
   fi
-  lib="$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$icd" | head -1)"
+  lib="$(run_child sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$icd" | run_child head -1)"
   if [ -z "$lib" ]; then
     echo "the GPU stack: the ICD $icd does not name a library"
     return 0
@@ -295,7 +295,7 @@ DEADLINE=$(( $(date +%s) + BUDGET ))
 #
 # They are read with the default of the shell: an unbound variable must
 # never abort the gate (this script runs `set -uo pipefail`, without -e).
-GATE_QUICK_TARGET_DIR="${GATE_QUICK_TARGET_DIR:-/home/user/solidcraft-gate-quick/target}"
+GATE_QUICK_TARGET_DIR="${GATE_QUICK_TARGET_DIR:-${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}/targets/gate-quick}"
 # The memory of the scope. MEASURED (01-11-2026): the peak of a gate is
 # 23.7 GB. The high is 26G so that TWO gates at the same time fit in the 62
 # GB of the box (2 x 26 = 52 GB of high, and 2 x 23.7 = 47.4 GB of real
@@ -530,7 +530,7 @@ scope_cgroup_dir() {
 cgroup_file_value() {
   local dir="$1" name="$2" value=""
   if [ -n "$dir" ] && [ -r "$dir/$name" ]; then
-    value="$(head -n 1 "$dir/$name" 2>/dev/null || true)"
+    value="$(run_child head -n 1 "$dir/$name" 2>/dev/null || true)"
   fi
   [ -n "$value" ] || value="unavailable"
   printf '%s' "$value"
@@ -555,7 +555,7 @@ cgroup_pair_value() {
 # of a scope has a file in the cgroup (io.weight, oom.policy).
 unit_property() {
   local unit="$1" name="$2" value=""
-  value="$(systemctl --user show "$unit" -p "$name" --value 2>/dev/null | head -n 1 || true)"
+  value="$(run_child systemctl --user show "$unit" -p "$name" --value 2>/dev/null | run_child head -n 1 || true)"
   [ -n "$value" ] || value="unavailable"
   printf '%s' "$value"
 }
@@ -567,7 +567,7 @@ scope_unit_of_cgroup() {
   local dir
   dir="$(scope_cgroup_dir 2>/dev/null || true)"
   [ -n "$dir" ] || return 1
-  basename "$dir"
+  run_child basename "$dir"
 }
 
 # A transient scope of a previous run of the same unit can stay LOADED for a
@@ -590,14 +590,14 @@ scope_wait_free() {
 cgroup_pids() {
   local dir="$1"
   [ -n "$dir" ] && [ -r "$dir/cgroup.procs" ] || return 1
-  cat "$dir/cgroup.procs" 2>/dev/null || true
+  run_child cat "$dir/cgroup.procs" 2>/dev/null || true
 }
 
 # The command line of a process, with its arguments separated by spaces.
 pid_cmdline() {
   local pid="$1"
   [ -r "/proc/$pid/cmdline" ] || return 1
-  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
+  run_child tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true
 }
 
 # The state of a process: R (running), S (sleeping), Z (zombie)...
@@ -606,8 +606,8 @@ pid_state() {
   [ -r "/proc/$pid/stat" ] || return 1
   # The command name of a process can have spaces and parentheses, so the
   # line is cut at the LAST parenthesis before the fields are read.
-  rest="$(sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null)" || return 1
-  state="$(printf '%s' "$rest" | awk '{print $1}')"
+  rest="$(run_child sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null)" || return 1
+  state="$(printf '%s' "$rest" | run_child awk '{print $1}')"
   [ -n "$state" ] || return 1
   printf '%s' "$state"
 }
@@ -616,8 +616,8 @@ pid_state() {
 ppid_of() {
   local pid="$1" rest="" parent=""
   [ -r "/proc/$pid/stat" ] || return 1
-  rest="$(sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null)" || return 1
-  parent="$(printf '%s' "$rest" | awk '{print $2}')"
+  rest="$(run_child sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null)" || return 1
+  parent="$(printf '%s' "$rest" | run_child awk '{print $2}')"
   [ -n "$parent" ] || return 1
   printf '%s' "$parent"
 }
@@ -647,7 +647,7 @@ kill_leftovers_in() {
   local dir="$1"
   [ -n "$dir" ] || return 0
   local unit pids pid state cmd victims="" ancestors="" a
-  unit="$(basename "$dir")"
+  unit="$(run_child basename "$dir")"
   case "$unit" in
     solidcraft-gate-quick-*.scope) ;;
     *) return 0 ;;
@@ -677,13 +677,13 @@ kill_leftovers_in() {
   [ -n "$victims" ] || return 0
   echo "gate-quick: the leftovers of the scope are killed:$victims" >&2
   kill -TERM $victims 2>/dev/null || true
-  sleep 1
+  run_child sleep 1
   # Only the pids of the list that are STILL in the scope are killed with
   # SIGKILL: the processes that this function starts (the sleep, the kill)
   # are in the scope too, and killing them would kill the run.
   local alive=""
   for pid in $victims; do
-    if cgroup_pids "$dir" 2>/dev/null | grep -qx "$pid"; then
+    if cgroup_pids "$dir" 2>/dev/null | run_child grep -qx "$pid"; then
       alive="$alive $pid"
     fi
   done
@@ -882,6 +882,37 @@ scope_probe() {
   return 0
 }
 
+# --- the children of the run ------------------------------------------------
+# Every child of the gate runs with the descriptors of the lock CLOSED.
+#
+# WHY (17-11-2026): the lock of the slot (fd 8) and the global one (fd 9) are
+# OPEN in the gate, and a child INHERITS them. A child that outlives the gate
+# (an orphan of a phase, a parser that hangs, a script that is killed with its
+# father) keeps the lock taken, and the NEXT gate of that slot can not take
+# it: it is DEFERRED. It is deferred FOREVER: the slot never gates again,
+# and the symptom is a slot that stopped gating with no error anywhere.
+#
+# The closing is in the CHILD, never in the gate: the gate needs ITS
+# descriptors ALIVE while the run lasts (it is the gate that holds the lock
+# and that releases it when the run ends).
+#
+# `exec 8>&- 9>&-` inside the subshell of the child closes the descriptors
+# in the child AND in everything the child spawns (a fork inherits the
+# CLOSED descriptors and an exec keeps them closed), so the two ways of
+# launching a child (a subshell `( ... )` and a `bash -c`) are covered by
+# the same wrapper.
+#
+# This function is defined BEFORE the belt of the run (the first child of
+# the gate is the scope of the run), and it is used by every child that the
+# gate launches while the lock is taken.
+run_child() {
+  # run_child <command> [args...]
+  # The exit code of the child is the exit code of this function. A command
+  # that does not exist is the failure of the child (127), not of the gate.
+  [ "$#" -gt 0 ] || return 127
+  ( exec 8>&- 9>&-; exec "$@" )
+}
+
 # run_in_scope <unit> <marker> <command> [args...]
 # The command runs inside a transient scope of the user manager, with the
 # limits of the belt. The exit code of the command is the exit code of this
@@ -893,7 +924,7 @@ run_in_scope() {
   if [ -n "$GATE_QUICK_SLICE" ]; then
     slice_arg=( "--slice=$GATE_QUICK_SLICE" )
   fi
-  env SC_QUICK_CGROUP=1 SC_QUICK_SCOPE_MARKER="$marker" \
+  run_child env SC_QUICK_CGROUP=1 SC_QUICK_SCOPE_MARKER="$marker" \
     systemd-run --user --scope --quiet --expand-environment=no \
       --unit="$unit" \
       "${slice_arg[@]}" \
@@ -1327,7 +1358,7 @@ write_scope_file() {
   # atomically at the end of the run, so the window between the removal and
   # the write is the window in which there is NO verdict: that is the honest
   # state ("the gate has not judged this commit yet").
-  rm -f "$file" 2>/dev/null || true
+  run_child rm -f "$file" 2>/dev/null || true
   if ! {
     printf 'GATE_STATUS=%s\n' "$status"
     printf 'SCOPE=%s\n' "$scope"
@@ -1337,17 +1368,17 @@ write_scope_file() {
     printf 'FAILED_TESTS=%s\n' "$tests"
     printf 'CHECKS=%s\n' "$checks"
     printf 'SHA=%s\n' "$SHA"
-    printf 'AT=%s\n' "$(date +%s)"
+    printf 'AT=%s\n' "$(run_child date +%s)"
     if [ -n "$deferred" ]; then
       printf 'DEFERRED=%s\n' "$deferred"
     fi
   } > "$tmp" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null || true
+    run_child rm -f "$tmp" 2>/dev/null || true
     echo "gate-quick: the verdict file cannot be written: $file" >&2
     return 1
   fi
-  if ! mv -f "$tmp" "$file" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null || true
+  if ! run_child mv -f "$tmp" "$file" 2>/dev/null; then
+    run_child rm -f "$tmp" 2>/dev/null || true
     echo "gate-quick: the verdict file cannot be replaced: $file" >&2
     return 1
   fi
@@ -1365,17 +1396,17 @@ write_legacy_file() {
     printf 'NEW_FAILURES=%s\n' "$failures"
     printf 'PUBLISHABLE=no\n'
     printf 'SHA=%s\n' "$SHA"
-    printf 'AT=%s\n' "$(date +%s)"
+    printf 'AT=%s\n' "$(run_child date +%s)"
     if [ -n "$deferred" ]; then
       printf 'DEFERRED=%s\n' "$deferred"
     fi
   } > "$tmp" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null || true
+    run_child rm -f "$tmp" 2>/dev/null || true
     echo "gate-quick: the verdict file cannot be written: $VERDICT_FILE" >&2
     return 1
   fi
-  if ! mv -f "$tmp" "$VERDICT_FILE" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null || true
+  if ! run_child mv -f "$tmp" "$VERDICT_FILE" 2>/dev/null; then
+    run_child rm -f "$tmp" 2>/dev/null || true
     echo "gate-quick: the verdict file cannot be replaced: $VERDICT_FILE" >&2
     return 1
   fi
@@ -1531,13 +1562,13 @@ echo "gate-quick: scope: $SCOPE" >&2
 # it would have been. A knob that is broken never turns a green gate red.
 affected_dependents_scope() {
   local out=""
-  if ! out="$(cd "$REPO" && python3 -I scripts/ci/affected.py \
+  if ! out="$(cd "$REPO" && run_child python3 -I scripts/ci/affected.py \
       --paths "$PATHS_FILE" ${METADATA_ARGS[@]+"${METADATA_ARGS[@]}"} \
       2>"$TMP/dependents.err")"; then
     echo "gate-quick: the scope with the dependents could not be computed:" \
       "the tests run on the narrow scope" >&2
     if [ -f "$TMP/dependents.err" ]; then
-      sed 's/^/gate-quick: /' "$TMP/dependents.err" >&2
+      run_child sed 's/^/gate-quick: /' "$TMP/dependents.err" >&2
     fi
     return 1
   fi
@@ -1571,7 +1602,7 @@ affected_dependents_scope() {
 TEST_SCOPE=""
 TOUCHED_OUT=""
 if [ -s "$METADATA_FILE" ]; then
-  if TOUCHED_OUT="$(python3 -I "$TOUCHED_SCRIPT" \
+  if TOUCHED_OUT="$(run_child python3 -I "$TOUCHED_SCRIPT" \
       --paths "$PATHS_FILE" --metadata "$METADATA_FILE" \
       2>"$TMP/touched.err")"; then
     TOUCHED_NARROW=""
@@ -1588,7 +1619,7 @@ if [ -s "$METADATA_FILE" ]; then
   else
     echo "gate-quick: the scope of the tests could not be computed:" \
       "the tests run on the whole scope" >&2
-    sed 's/^/gate-quick: /' "$TMP/touched.err" >&2
+    run_child sed 's/^/gate-quick: /' "$TMP/touched.err" >&2
   fi
 fi
 # The knob of the dependents: the scope of the TESTS may also be the packages
@@ -1614,8 +1645,8 @@ echo "gate-quick: budget: ${TIMEOUT_MIN} min, slot: ${SLOT_NAME:-<none>}, target
 
 # --- the run --------------------------------------------------------------
 LOG_DIR="$LOOP_DIR/logs"
-mkdir -p "$LOG_DIR" 2>/dev/null || true
-STAMP="$(date +%s)"
+run_child mkdir -p "$LOG_DIR" 2>/dev/null || true
+STAMP="$(run_child date +%s)"
 LOG_FILE="$LOG_DIR/gate-quick-${SHA:0:12}-${STAMP}.log"
 NEXTEST_LOG="$LOG_DIR/gate-quick-nextest-${SHA:0:12}-${STAMP}.log"
 
@@ -1702,7 +1733,7 @@ TIMED_OUT=0
 PHASE_STATE="skipped"
 
 seconds_left() {
-  echo $(( DEADLINE - $(date +%s) ))
+  echo $(( DEADLINE - $(run_child date +%s) ))
 }
 
 # phase <name> <slice-seconds> <log-file> <command> [args...]
@@ -1727,21 +1758,23 @@ phase() {
   # The output of the phase goes to a file of its own first: the safety
   # net of sccache has to know whether the failure of the phase names
   # the cache (and it must not read the phases that came before).
-  out="$(mktemp "${TMPDIR:-/tmp}/gate-quick-phase.XXXXXX" 2>/dev/null)" \
+  out="$(run_child mktemp "${TMPDIR:-/tmp}/gate-quick-phase.XXXXXX" 2>/dev/null)" \
     || out="/dev/null"
-  # The descriptor 9 (the lock of the build directory) is closed in the
-  # phase: a phase that leaves an orphan behind must not keep the lock.
-  timeout --kill-after=30 "$limit" "$@" > "$out" 2>&1 9>&- 8>&-
+  # The descriptors of the lock (8 and 9) are CLOSED in the phase: a phase
+  # that leaves an orphan behind (the binaries of the tests escape the kill
+  # of the group of processes) must not keep the lock taken, or the next
+  # gate of the slot is deferred FOREVER.
+  run_child timeout --kill-after=30 "$limit" "$@" > "$out" 2>&1
   status=$?
-  cat "$out" >> "$log" 2>/dev/null || true
+  run_child cat "$out" >> "$log" 2>/dev/null || true
   # The safety net of sccache: a cache that breaks is not a code that
-  # breaks. The phase is retried ONCE without the wrapper, and ONLY when
-  # the output of the phase names sccache: a lint that fails fails the
+  # breaks. The phase is retried ONCE without the wrapper, and ONLY when the
+  # output of the phase names sccache: a lint that fails fails the
   # same way without the cache, and retrying it would only burn the
   # budget of the run.
   if [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$status" -ne 137 ] \
      && [ "$GATE_SCCACHE" = "1" ] && [ -n "${RUSTC_WRAPPER:-}" ] \
-     && grep -qi "sccache" "$out" 2>/dev/null; then
+     && run_child grep -qi "sccache" "$out" 2>/dev/null; then
     echo "gate-quick: the phase $name failed with sccache:" \
       "it is retried once without it" >&2
     remaining="$(seconds_left)"
@@ -1749,13 +1782,13 @@ phase() {
       limit="$slice"
       if [ "$limit" -gt "$remaining" ]; then limit="$remaining"; fi
       : > "$out"
-      env -u RUSTC_WRAPPER timeout --kill-after=30 "$limit" "$@" \
-        > "$out" 2>&1 9>&- 8>&-
+      run_child env -u RUSTC_WRAPPER timeout --kill-after=30 "$limit" "$@" \
+        > "$out" 2>&1
       status=$?
-      cat "$out" >> "$log" 2>/dev/null || true
+      run_child cat "$out" >> "$log" 2>/dev/null || true
     fi
   fi
-  rm -f "$out"
+  run_child rm -f "$out"
   # The leftovers of the scope die with the phase: the binaries of the tests
   # escape the kill of the group of processes and keep the cargo lock of the
   # build directory.
@@ -2001,7 +2034,7 @@ else
       NEXTEST_STATE="ran"
       # The exit code of the run goes to the log: the parser of the loop reads it.
       printf 'EXIT=%s\n' "$NEXTEST_STATUS" >> "$NEXTEST_LOG"
-      cat "$NEXTEST_LOG" >> "$LOG_FILE" 2>/dev/null || true
+      run_child cat "$NEXTEST_LOG" >> "$LOG_FILE" 2>/dev/null || true
       if [ "$NEXTEST_STATUS" -eq 124 ] || [ "$NEXTEST_STATUS" -eq 137 ]; then
         # The run was CUT by the timeout of the gate: the tests that were
         # running died with it and the log says "SIGTERM". That is not a
@@ -2042,15 +2075,15 @@ CHECK_RUN_CUT="false"
 # A run that was CUT is judged too: the log of a cut run holds the failures
 # that happened BEFORE the cut, and those are real.
 if [ "$NEXTEST_STATE" != "skipped" ] && [ -f "$NEXTEST_LOG" ]; then
-  mkdir -p "$GATES_DIR/$SCRATCH_SLOT" 2>/dev/null || true
+  run_child mkdir -p "$GATES_DIR/$SCRATCH_SLOT" 2>/dev/null || true
   printf '%s\n' "$SHA" > "$GATES_DIR/$SCRATCH_SLOT/sha" 2>/dev/null || true
   printf '%s\n' "$NEXTEST_LOG" > "$GATES_DIR/$SCRATCH_SLOT/log" 2>/dev/null || true
-  CHECK_OUT="$(bash "$GATE_CHECK" --slot "$SCRATCH_SLOT" "$NEXTEST_LOG" \
-    2>"$TMP/check.err")"
+  CHECK_OUT="$(run_child bash "$GATE_CHECK" --slot "$SCRATCH_SLOT" \
+    "$NEXTEST_LOG" 2>"$TMP/check.err")"
   CHECK_RC=$?
   if [ "$CHECK_RC" -ne 0 ] || [ -z "$CHECK_OUT" ]; then
     echo "gate-quick: gate-check.sh did not answer" >&2
-    sed 's/^/gate-quick: /' "$TMP/check.err" >&2
+    run_child sed 's/^/gate-quick: /' "$TMP/check.err" >&2
     STATUS="failed"
     PROBLEMS=$(( PROBLEMS + 1 ))
   else
