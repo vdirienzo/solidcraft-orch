@@ -33,3 +33,5 @@ solidcraft-nice-compilations| */2 * * * *       | bin/nice-compilations.sh| -   
 solidcraft-ping-ready       | */30 * * * *      | bin/ping-ready.sh       | -             | pide el approved-for-ci en los PRs listos
 solidcraft-reporte-diario   | 0 10,22 * * *     | bin/daily-report.py     | -             | el reporte diario, sin LLM
 solidcraft-gc-disk            | */15 * * * *       | bin/gc-disk.sh         | -             | limpia el disco: artefactos y targets muertos
+solidcraft-loop-status        | */15 * * * *       | bin/loop-status.py      | -             | el estado del loop en el chat, sin LLM
+solidcraft-wave-prompt-guard  | */5 * * * *        | bin/wave-prompt-guard.py| -             | el prompt del cron de la wave tiene que ser el canonico

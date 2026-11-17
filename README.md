@@ -213,6 +213,8 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 | solidcraft-ping-ready | 30 min | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
 | solidcraft-reporte-diario | 10 y 22 | daily-report.py | el reporte, sin LLM |
 | solidcraft-gc-disk | 15 min | gc-disk.sh | limpia el disco: artefactos y targets muertos |
+| solidcraft-loop-status | 15 min | loop-status.py | el estado del loop en el chat, sin LLM |
+| solidcraft-wave-prompt-guard | 5 min | wave-prompt-guard.py | el prompt del cron de la wave tiene que ser el canonico |
 
 **`bin/crons.txt` es la fuente de esta tabla.** El grafo dice a qué nodo pertenece cada
 cron y `bin/workflow-validate.py` comprueba que los dos digan lo mismo: un cron que
