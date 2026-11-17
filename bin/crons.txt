@@ -32,3 +32,4 @@ solidcraft-comment-watch    | */15 * * * *      | bin/comment_watch.py    | comm
 solidcraft-nice-compilations| */2 * * * *       | bin/nice-compilations.sh| -             | baja la prioridad de las compilaciones nuevas
 solidcraft-ping-ready       | */30 * * * *      | bin/ping-ready.sh       | -             | pide el approved-for-ci en los PRs listos
 solidcraft-reporte-diario   | 0 10,22 * * *     | bin/daily-report.py     | -             | el reporte diario, sin LLM
+solidcraft-gc-disk            | */15 * * * *       | bin/gc-disk.sh         | -             | limpia el disco: artefactos y targets muertos

@@ -8,6 +8,14 @@ state.json
 history.jsonl
 slots/
 plan-features.json
+# los worktrees de los slots: son estado, no codigo. Cada uno lleva un
+# .gitignore que es un symlink al del repo, y por eso git avisaba de
+# "too many levels of symbolic links" al recorrerlos.
+loop-*/
+# capturas y artefactos de una tanda: pesan y no son codigo
+evidence/
+repro/
+go/
 # backups de parches
 *.bak
 *.bak-*
