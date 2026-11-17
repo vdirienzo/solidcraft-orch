@@ -160,7 +160,10 @@ sys.exit(0)
 STUB
 chmod +x "$TESTDIR/bin/gh"
 export STUB_DIR="$TESTDIR"
-export PATH="$TESTDIR/bin:$PATH"
+# The `gh` of the tests is OUTSIDE the PATH and is chosen with GH_BIN
+# (README rule 4: a stub of a tool in a directory that may be on the PATH
+# is what made a broken `gh` look like it worked).
+export GH_BIN="$TESTDIR/bin/gh"
 
 # --- las fixtures ----------------------------------------------------------
 mkdir -p "$TESTDIR/check-runs" "$TESTDIR/prs"

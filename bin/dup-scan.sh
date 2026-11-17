@@ -30,6 +30,11 @@ set -uo pipefail
 
 ISSUE="${1:-}"
 OUR_REF="${2:-}"
+# The gh of the machine, or the one of a test (the stub lives OUTSIDE the
+# PATH: README rule 4). Without this the only way to test the script is a
+# fake gh on the PATH, which is exactly what rule 4 forbids.
+GH_BIN="${GH_BIN:-gh}"
+
 REPO="${3:-${SC_REPO:-tangency-labs/solidcraft}}"
 OUR_PR="${SC_OUR_PR:-0}"
 
@@ -80,7 +85,7 @@ if [[ ! -s "$TMP/ours.diff" ]]; then
 fi
 
 # 2) Los PRs abiertos, con sus archivos y su head. Una sola llamada.
-gh pr list --repo "$REPO" --state open --limit 2000 \
+"$GH_BIN" pr list --repo "$REPO" --state open --limit 2000 \
   --json number,files,headRefOid >"$TMP/open.json" 2>/dev/null
 if [[ ! -s "$TMP/open.json" ]]; then
   echo "no se pudo leer la lista de PRs de $REPO" >&2
@@ -124,7 +129,11 @@ candidates = [p['number'] for p in prs if our_files & {f['path'] for f in p.get(
 
 def patch_of(pr):
     try:
-        r = subprocess.run(['gh', 'pr', 'diff', str(pr), '--repo', repo],
+        # El gh que se usa: el de la maquina o el de un test (GH_BIN). El
+        # 'gh' a pelo lo resolvia por el PATH, y con el stub FUERA del PATH
+        # (regla 4) este python pedia el gh de verdad.
+        gh_bin = os.environ.get("GH_BIN") or "gh"
+        r = subprocess.run([gh_bin, 'pr', 'diff', str(pr), '--repo', repo],
                            capture_output=True, text=True, timeout=180)
         return pr, r.stdout or ''
     except Exception:

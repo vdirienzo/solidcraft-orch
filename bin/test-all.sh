@@ -33,6 +33,11 @@ fast=0
 for arg in "$@"; do
   case "$arg" in
     --fast) fast=1 ;;
+    # Un "--" a secas es el fin de las opciones (la convencion de Unix): se
+    # ignora. Antes caia en el patron y el runner se negaba con "no hay
+    # suites que coincidan con '--'": un guion que no filtra nada no puede
+    # ser un error de uso.
+    --) ;;
     *) pattern="$arg" ;;
   esac
 done
@@ -41,6 +46,8 @@ done
 # directory or the loop's scripts do not run anywhere else. They are
 # skipped by --fast and reported as failures otherwise.
 HEAVY="test-slot-parallelism.sh test-deploy-drift.sh test-publish-pr.sh test-state-split.sh test-briefs.sh"
+# The gate queue is not heavy (nothing compiles: the gate is a stub), but it
+# needs its own ORCH_DIR and its own worktrees, so it runs alone.
 
 suites=()
 while IFS= read -r f; do

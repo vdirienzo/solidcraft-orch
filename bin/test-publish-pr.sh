@@ -196,8 +196,7 @@ chmod +x "$TMP/gh"
 
 export STUB_DIR="$TMP"
 export GH_BIN="$TMP/gh"
-# El verificador del reclamo usa el "gh" del PATH: el stub va PRIMERO.
-export PATH="$TMP:$PATH"
+# El stub de gh NO va en el PATH: los scripts lo eligen con GH_BIN (regla 4).
 
 # --- el cuerpo de cada caso ------------------------------------------------
 B_YES="$TMP/body-yes.md"

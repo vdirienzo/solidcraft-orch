@@ -89,7 +89,10 @@ PATCH_SRC="$TESTDIR/patches"
 mkdir -p "$GH_DIFF_DIR" "$PATCH_SRC"
 # El stub va PRIMERO en el PATH, o el gh real contesta y el test mide el
 # upstream en vez de la fixture.
-export PATH="$TESTDIR/bin:$PATH"
+# The `gh` of the tests is OUTSIDE the PATH and is chosen with GH_BIN
+# (README rule 4: a stub of a tool in a directory that may be on the PATH
+# is what made a broken `gh` look like it worked).
+export GH_BIN="$TESTDIR/bin/gh"
 
 # --- el repo de mentira ----------------------------------------------------
 # Un checkout throwaway con un commit y un branch. El diff de dup-scan.sh es

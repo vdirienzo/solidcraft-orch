@@ -94,6 +94,11 @@ ERRFILE="$TMP/err"
 LAST_ERROR=""
 # UNKNOWN: something could not be read. The verdict is NOT "no" (rule 7).
 UNKNOWN=0
+# How many slots could not be read. The boolean alone was not enough: with one
+# stuck slot and one unknown slot, the summary said "1 slot(s) atascado(s)"
+# and said nothing about the other, so the reader took the verdict for
+# complete when it was not.
+unknown_n=0
 
 now="$(date +%s)"
 stuck=0
@@ -103,6 +108,7 @@ residue=0
 # unknown <message>: something could not be read.
 unknown() {
   UNKNOWN=1
+  unknown_n=$(( unknown_n + 1 ))
   printf 'slot-stale: %s\n' "$1" >&2
 }
 
@@ -154,7 +160,12 @@ WORK_BRANCH=""; WORK_COMMITS="?"; WORK_CHANGED="0"; WORK_UNKNOWN=0
 analyze_worktree() { # analyze_worktree <worktree>
   local worktree="$1" f m last idx
   WORK_BRANCH=""; WORK_COMMITS="?"; WORK_CHANGED="0"; WORK_UNKNOWN=0
-  [ -d "$worktree" ] || return 0
+  # A lock whose worktree is GONE is not "not stuck": it is a slot whose
+  # state could not be read. Skipping it made the summary say "ningun slot
+  # atascado" without having looked at that slot - the same blindness the
+  # audit found (B2), only narrower. The lock still blocks, so it has to
+  # be visible.
+  [ -d "$worktree" ] || { WORK_UNKNOWN=1; return 0; }
   WORK_BRANCH="$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>"$ERRFILE")" || WORK_BRANCH=""
   [ "$WORK_BRANCH" = "HEAD" ] && WORK_BRANCH="(detached)"
   [ -n "$WORK_BRANCH" ] || return 0
@@ -293,7 +304,9 @@ for slot_dir in "$LOCKS"/*; do
   lock_age_h=$(( (now - since_epoch) / 3600 ))
   [ "$lock_age_h" -lt 0 ] && lock_age_h=0
   analyze_worktree "$WORKTREES_DIR/issue-$slot"
-  [ -n "$WORK_BRANCH" ] || continue
+  # The UNKNOWN check comes FIRST: a slot whose work could not be read
+  # (no worktree, unreadable) has no branch and no commits, and used to
+  # fall through the "no branch" line and vanish.
   if [ "$WORK_UNKNOWN" = "1" ]; then
     # the lock is old and the work could not be read: the verdict of this
     # slot is unknown, and "unknown" is not "not stuck".
@@ -485,10 +498,13 @@ if [ -z "${JSON:-}" ]; then
     fi
   elif [ "$stuck" -gt 0 ]; then
     echo "  $stuck slot(s) atascado(s)"
-  elif [ "$UNKNOWN" = "1" ]; then
-    # "there is no stuck slot" is only said when EVERYTHING was read.
-    echo "  no se pudo leer el estado de todos los slots: el veredicto es UNKNOWN"
-  else
+  fi
+  if [ "$UNKNOWN" = "1" ]; then
+    # "there is no stuck slot" is only said when EVERYTHING was read, and a
+    # count of stuck slots is not a complete verdict while a slot is unknown.
+    echo "  $unknown_n slot(s) sin veredicto: su estado no se pudo leer (UNKNOWN)"
+  fi
+  if [ "$stuck" -eq 0 ] && [ "$UNKNOWN" != "1" ]; then
     echo "  ningun slot atascado (lock de mas de ${HOURS}h sin que el trabajo se mueva)"
   fi
   [ "$residue" -gt 0 ] && echo "  $residue residuo(s): worktree sin lock, pero con su PR ya publicado"

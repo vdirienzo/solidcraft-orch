@@ -37,6 +37,10 @@
 #                                        fuente (state/); --prefer-artifact
 #                                        gana el state.json.
 #   bash bin/merge-state.sh --list       los grupos y cuantas claves tiene cada uno
+#   bash bin/merge-state.sh --bootstrap   crea el estado de una maquina nueva
+#                                        (state/ + state.json + manifest +
+#                                        published.sha256). NO pisa un estado
+#                                        que ya existe: rc=3 si lo hay.
 #
 # REGLAS:
 #   - Reemplazo atomico: se escribe un temporal y se hace os.replace. Un
@@ -66,6 +70,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 ORCH = os.environ.get("ORCH_DIR") or os.path.expanduser("~/.local/share/solidcraft-orch")
 STATE_DIR = os.path.join(ORCH, "state")
@@ -626,6 +631,89 @@ def split(args):
     return 0
 
 
+def bootstrap():
+    """Crea el estado de una maquina nueva.
+
+    POR QUE EXISTE (2026-11-17): no habia forma de empezar. El --split exige
+    un state/manifest.json previo, y sin el se niega (rc=3) con un mensaje
+    que no dice como arreglarlo. El workaround era escribir el manifiesto a
+    mano, con los grupos bien puestos: sin eso, TODAS las claves caen en
+    notes.json y el estado partido por concepto no sirve de nada.
+
+    NO pisa un estado que ya existe: eso seria perder el trabajo de una
+    maquina que ya esta corriendo.
+    """
+    if os.path.exists(STATE_JSON) or os.path.isdir(STATE_DIR):
+        print(f"merge-state: ya existe un estado en {ORCH}: no se crea otro "
+              f"(un --split adopta lo que haya)", file=sys.stderr)
+        return 3
+    grupos = {
+        # updated_at va en meta: si no esta en ningun grupo, la
+        # reconstruccion la pierde y el --check no coincide nunca.
+        "meta": ["updated_at"],
+        "prs": ["open_prs"],
+        "slots": ["slots"],
+        "gates": ["gates"],
+        "claims": ["claims", "abandoned"],
+        "policy": [],
+        "notes": [],
+    }
+    orden = ["updated_at", "slots", "open_prs", "gates", "claims", "abandoned"]
+    manifest = {"version": 1, "generated_at": "", "order": orden, "groups": grupos}
+    vacio = {"slots": {}, "open_prs": [], "gates": {}, "claims": {}, "abandoned": []}
+    # Un estado sin updated_at hace que el resumen del estado escupa
+    # "no such key: updated_at": la clave es parte de la forma del estado.
+    vacio["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # EL ORDEN ES EL DEL MANIFIESTO (2026-11-17).
+    #
+    # POR QUE: el state.json que escribe el bootstrap tiene que ser el MISMO,
+    # byte a byte, que el que reconstruye el --check desde state/. Y el que
+    # reconstruye sigue el 'order' del manifiesto, no el orden en que se
+    # escribieron los conceptos. Con el orden de escritura (updated_at al
+    # final) el round-trip daba el mismo contenido con las claves en otro
+    # orden: el --check decia "IDENTICO" (compara valores) pero el archivo no
+    # era el mismo, y el round-trip (split -> merge -> split) no cerraba.
+    # El estado se escribe SIEMPRE en el orden del manifiesto: una sola
+    # fuente de verdad para el orden de las claves.
+    estado = {k: vacio[k] for k in orden}
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        write_atomic(MANIFEST, dump(manifest))
+        # UN ARCHIVO POR CONCEPTO, TODOS (2026-11-17).
+        #
+        # La maquina que se parte a mano tiene un archivo por grupo, aunque
+        # el grupo este vacio (notes.json es donde cae la clave que no esta
+        # en ningun grupo: sin ese archivo, esa clave no tiene donde ir y el
+        # --split la perderia). Una maquina nueva con el layout distinto no
+        # es la misma maquina: el round-trip del estado no se puede probar.
+        for grupo, claves in grupos.items():
+            write_atomic(os.path.join(STATE_DIR, f"{grupo}.json"),
+                         dump({k: vacio.get(k, {}) for k in claves}))
+        texto = dump(estado)
+        write_atomic(STATE_JSON, texto)
+        # El hash es el del TEXTO que se escribio, como en el merge: si no,
+        # el --check de despues no coincide con lo que hay.
+        write_atomic(PUBLISHED, sha256_bytes(texto.encode("utf-8")) + "\n")
+        # EL RESPALDO PRE-PARTICION (2026-11-17).
+        #
+        # En la maquina del orquestador, el --split manual dejo el estado
+        # viejo en logs/state.json.pre-split.bak: es la referencia con la que
+        # se comprueba que la particion no perdio ninguna clave. Una maquina
+        # nueva no pasa por un split manual, asi que sin este archivo no
+        # tendria contra que compararse. Se escribe el estado recien creado:
+        # es el estado ANTERIOR a cualquier edicion a mano, que es lo que el
+        # backup significa.
+        logs = os.path.join(ORCH, "logs")
+        os.makedirs(logs, exist_ok=True)
+        write_atomic(os.path.join(logs, "state.json.pre-split.bak"), texto)
+    except OSError as e:
+        print(f"merge-state: no se pudo crear el estado: {e}", file=sys.stderr)
+        return 2
+    print(f"merge-state: estado creado en {ORCH} "
+          f"({len(orden)} claves, {len([g for g in grupos if grupos[g]])} grupos)")
+    return 0
+
+
 def write_state(force):
     rebuilt, avisos = rebuild()
     for a in avisos:
@@ -691,7 +779,7 @@ def list_groups():
 
 USAGE = ("merge-state.sh [--check [--vs FILE]] "
          "[--split [--assign CLAVE=GRUPO] "
-         "[--prefer-source|--prefer-artifact]] [--list] [--force]\n"
+         "[--prefer-source|--prefer-artifact]] [--list] [--force] [--bootstrap]\n"
          "  (sin opcion) reconstruye state.json desde state/ (reemplazo atomico)\n"
          "  --check sale 0 SOLO si el state.json se reconstruye identico desde "
          "state/;\n"
@@ -699,11 +787,13 @@ USAGE = ("merge-state.sh [--check [--vs FILE]] "
          "  --split reparte el state.json de vuelta en state/<concepto>.json\n"
          "         --prefer-source (default) gana state/ (la fuente)\n"
          "         --prefer-artifact gana el state.json (el artefacto)\n"
-         "         antes de escribir muestra el diff de lo que va a cambiar")
+         "         antes de escribir muestra el diff de lo que va a cambiar\n"
+         "  --bootstrap crea el estado de una maquina nueva (no pisa uno que ya\n"
+         "         existe: sale 3 si lo hay)")
 
 args = sys.argv[1:]
 comando = "write"
-if args and args[0] in ("--check", "--split", "--list", "--help", "-h"):
+if args and args[0] in ("--check", "--split", "--list", "--bootstrap", "--help", "-h"):
     comando = args[0]
     args = args[1:]
 
@@ -716,6 +806,8 @@ if comando == "--split":
     raise SystemExit(split(args))
 if comando == "--list":
     raise SystemExit(list_groups())
+if comando == "--bootstrap":
+    raise SystemExit(bootstrap())
 force = "--force" in args
 raise SystemExit(write_state(force))
 PY

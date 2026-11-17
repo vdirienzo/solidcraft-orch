@@ -368,3 +368,6 @@ son el estado de una máquina concreta y se regeneran en cada PC (ver §5).
 - La cola de gates: `gates/queue.txt`.
 - Los veredictos: `$LOOP_DIR/gates/<slot>/scope.verdict` (crudo) y `scope.effective.verdict` (el que cuenta).
 - Las reglas y los traps: `docs/` y `RULES.md`.
+- El trabajo que solo existe en una maquina: [`docs/work-at-risk.md`](docs/work-at-risk.md).
+  El gate que lo dice: `bash bin/branch-risk.sh` (rc=1 = hay commits que solo estan en
+  ese disco).
