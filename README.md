@@ -176,9 +176,17 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 |---|---|---|---|
 | solidcraft-gate-queue | 3 min | gate-queue.sh | drena la cola de gates (2 a la vez) |
 | solidcraft-pipeline | 5 min | pipeline.py | corrige bodies, encola gates, pasa a ready |
+| solidcraft-comment-watch | 15 min | comment_watch.py | lee los comentarios del maintainer y arma la cola de tareas |
 | solidcraft-nice-compilations | 2 min | nice-compilations.sh | baja la prioridad de las compilaciones nuevas |
 | solidcraft-ping-ready | 30 min | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
 | solidcraft-reporte-diario | 10 y 22 | daily-report.py | el reporte, sin LLM |
+
+**`bin/crons.txt` es la fuente de esta tabla.** El grafo dice a qué nodo pertenece cada
+cron y `bin/workflow-validate.py` comprueba que los dos digan lo mismo: un cron que
+corre y no está en el registro no existe, y un cron del registro que no está en esta
+tabla es un error del suite (`bin/test-workflow.sh`, casos 11a-11f). Antes había dos
+grafos — el que `workflow.yaml` declaraba (2 crons) y el que el loop ejecutaba (5) — y
+nadie lo comprobaba.
 
 ```bash
 hermes cron create --name solidcraft-gate-queue --schedule '*/3 * * * *' \

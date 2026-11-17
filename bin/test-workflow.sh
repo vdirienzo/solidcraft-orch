@@ -75,14 +75,15 @@ else
   no "el --json del grafo real dice ok=true (rc=$jrc)"
 fi
 
-# el grafo real declara los 12 nodos que el brief exige
+# el grafo real declara los nodos que el brief exige
 faltan=""
-for n in buscar-issue claim-verify causa-raiz test-red fix draft-pr \
-         pipeline gate-queue gate gate-baseline verify-pr ci-upstream; do
+for n in buscar-issue claim-verify causa-raiz test-red fix dup-scan draft-pr \
+         comment-watch revisar-comentarios pipeline gate-queue gate \
+         gate-baseline verify-pr ci-upstream; do
   grep -q "^  - id: $n$" "$WORKFLOW" || faltan="$faltan $n"
 done
-[ -z "$faltan" ] && ok "el grafo declara los 12 nodos del proceso de un issue" \
-                  || no "el grafo declara los 12 nodos (faltan:$faltan)"
+[ -z "$faltan" ] && ok "el grafo declara los 15 nodos del proceso de un issue" \
+                  || no "el grafo declara los 15 nodos (faltan:$faltan)"
 
 # el runner y el validador viven al lado del workflow
 [ -f "$ORCH_DIR/bin/workflow-runner.sh" ] && ok "el runner esta al lado del validador" \
@@ -184,6 +185,97 @@ if [ -x "$ORCH_DIR/bin/workflow-runner.sh" ]; then
     ok "el runner se niega a correr con un grafo roto"
   else
     no "el runner se niega a correr con un grafo roto (rc=$rc)"
+  fi
+fi
+
+# --- 11. EL REGISTRO DE LOS CRONES Y EL GRAFO TIENEN QUE SER LO MISMO -----
+# POR QUE: habia dos grafos. workflow.yaml declaraba dos crons y el README
+# documentaba cinco. Un cron podia correr todos los dias y no estar en ninguno
+# de los dos, y nadie se enteraba. bin/crons.txt es la fuente y el validador
+# comprueba que los dos digan lo mismo.
+#
+# Los casos rotos se hacen de los archivos REALES: una raiz de prueba con
+# bin/ enlazado al real, y un crons.txt roto encima.
+raiz_rota() {   # $1 = raiz de prueba, $2 = crons.txt a poner
+  local dest="$1"
+  rm -rf "$dest"; mkdir -p "$dest/bin"
+  local f
+  for f in "$ORCH_DIR"/bin/*; do
+    ln -sf "$f" "$dest/bin/$(basename "$f")"
+  done
+  rm -f "$dest/bin/crons.txt"
+  cp "$2" "$dest/bin/crons.txt"
+}
+
+CRONS="$ORCH_DIR/bin/crons.txt"
+
+# 11a. un cron_job de un nodo que no esta en el registro: FALLA
+sed 's/^    cron_job: solidcraft-comment-watch$/    cron_job: solidcraft-un-cron-inventado/' \
+  "$WORKFLOW" > "$TMP/cron-job-roto.yaml"
+grep -q "solidcraft-un-cron-inventado" "$TMP/cron-job-roto.yaml" || {
+  echo "test-workflow: no se pudo romper el cron_job (el YAML cambio de forma)" >&2; exit 2; }
+"$PY" "$VALIDADOR" --workflow "$TMP/cron-job-roto.yaml" --root "$ORCH_DIR" >"$TMP/o8" 2>&1
+rc=$?
+if [ $rc -ne 0 ] && grep -q "solidcraft-un-cron-inventado" "$TMP/o8"; then
+  ok "un cron_job que no esta en bin/crons.txt hace FALLAR al validador"
+else
+  no "un cron_job que no esta en bin/crons.txt hace FALLAR al validador (rc=$rc)"
+fi
+
+# 11b. un cron del registro cuyo script no existe: FALLA
+sed 's#bin/gate-queue.sh#bin/no-existe-jamas.sh#' "$CRONS" > "$TMP/crons-sin-script.txt"
+raiz_rota "$TMP/raiz-b" "$TMP/crons-sin-script.txt"
+"$PY" "$VALIDADOR" --workflow "$WORKFLOW" --root "$TMP/raiz-b" >"$TMP/o9" 2>&1
+rc=$?
+if [ $rc -ne 0 ] && grep -q "no-existe-jamas" "$TMP/o9"; then
+  ok "un cron cuyo script no existe hace FALLAR al validador"
+else
+  no "un cron cuyo script no existe hace FALLAR al validador (rc=$rc)"
+fi
+
+# 11c. un cron que dice que pertenece a un nodo que no existe: FALLA
+sed 's#| bin/daily-report.py     | -  *|#| bin/daily-report.py     | nodo-que-no-existe |#' \
+  "$CRONS" > "$TMP/crons-nodo-roto.txt"
+raiz_rota "$TMP/raiz-c" "$TMP/crons-nodo-roto.txt"
+"$PY" "$VALIDADOR" --workflow "$WORKFLOW" --root "$TMP/raiz-c" >"$TMP/o10" 2>&1
+rc=$?
+if [ $rc -ne 0 ] && grep -q "nodo-que-no-existe" "$TMP/o10"; then
+  ok "un cron que apunta a un nodo inexistente hace FALLAR al validador"
+else
+  no "un cron que apunta a un nodo inexistente hace FALLAR al validador (rc=$rc)"
+fi
+
+# 11d. el nodo y el registro dicen cosas distintas del cron: FALLA
+# El nodo dice que su cron_job es X, y el registro dice que X es de otro nodo.
+sed 's/^    cron_job: solidcraft-comment-watch$/    cron_job: solidcraft-pipeline/' \
+  "$WORKFLOW" > "$TMP/cron-desacuerdo.yaml"
+"$PY" "$VALIDADOR" --workflow "$TMP/cron-desacuerdo.yaml" --root "$ORCH_DIR" >"$TMP/o11" 2>&1
+rc=$?
+if [ $rc -ne 0 ] && grep -q "tienen que decir lo mismo" "$TMP/o11"; then
+  ok "el nodo y el registro que no coincidan hace FALLAR al validador"
+else
+  no "el nodo y el registro que no coincidan hace FALLAR al validador (rc=$rc)"
+fi
+
+# 11e. un nodo con cron_job pero sin cron (la expresion): FALLA
+grep -v -F '    cron: "*/15 * * * *"' "$WORKFLOW" > "$TMP/cron-sin-expresion.yaml"
+"$PY" "$VALIDADOR" --workflow "$TMP/cron-sin-expresion.yaml" --root "$ORCH_DIR" >"$TMP/o12" 2>&1
+rc=$?
+if [ $rc -ne 0 ] && grep -q "cron_job" "$TMP/o12"; then
+  ok "un nodo con cron_job pero sin cron hace FALLAR al validador"
+else
+  no "un nodo con cron_job pero sin cron hace FALLAR al validador (rc=$rc)"
+fi
+
+# 11f. el registro y el README cuentan lo mismo
+if [ -f "$ORCH_DIR/README.md" ]; then
+  jobs_reg="$(awk -F'|' '/^[^#]/ && NF >= 4 {gsub(/ /,"",$1); print $1}' "$CRONS" | sort)"
+  jobs_readme="$(grep -oE '^\| solidcraft-[a-z-]+' "$ORCH_DIR/README.md" | tr -d '| ' | sort)"
+  if [ "$jobs_reg" = "$jobs_readme" ]; then
+    ok "el README lista los mismos crones que bin/crons.txt"
+  else
+    no "el README lista los mismos crones que bin/crons.txt"
+    printf '     registro: %s\n     README:   %s\n' "$jobs_reg" "$jobs_readme"
   fi
 fi
 

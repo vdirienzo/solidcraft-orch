@@ -1,0 +1,34 @@
+# The crons of the loop. THIS FILE IS THE SOURCE.
+#
+# WHY (2026-11-17): there were two graphs. workflow.yaml declared two crons
+# (the pipeline and the gate queue) and README.md documented five. The
+# declared graph and the executed graph were not the same thing, and
+# nothing checked: a cron could exist, run every day, and be in neither
+# list. The repo's own audit found the same shape in the process graph
+# (reports/loop-codigo.md): two arbitrators for one concept, two
+# directories, and a graph nobody ran.
+#
+# workflow.yaml says WHICH NODE each cron belongs to. bin/workflow-validate.py
+# checks that this file and workflow.yaml agree, and that every script
+# named here exists. A cron that is not in this file does not run, and a
+# node whose cron_job is not here is a node nobody runs.
+#
+# FORMAT (one cron per line, '#' starts a comment):
+#
+#   <job> | <schedule> | <script> | <node> | <what it does>
+#
+#   <job>      the name the cron is registered under (hermes cron create)
+#   <schedule> a 5-field cron expression
+#   <script>   the script, relative to the repo root
+#   <node>     the id of the node in workflow.yaml, or '-' when the cron
+#              is a side job and not a step of the issue process
+#
+# A cron that is registered here but not installed on this machine is not
+# an error of the graph: bin/preflight.sh says what is missing.
+
+solidcraft-gate-queue       | */3 * * * *       | bin/gate-queue.sh       | gate-queue    | drena la cola de gates (2 a la vez)
+solidcraft-pipeline         | */5 * * * *       | bin/pipeline.py         | pipeline      | corrige bodies, encola gates, pasa a ready
+solidcraft-comment-watch    | */15 * * * *      | bin/comment_watch.py    | comment-watch | lee los comentarios del maintainer y arma la cola de tareas
+solidcraft-nice-compilations| */2 * * * *       | bin/nice-compilations.sh| -             | baja la prioridad de las compilaciones nuevas
+solidcraft-ping-ready       | */30 * * * *      | bin/ping-ready.sh       | -             | pide el approved-for-ci en los PRs listos
+solidcraft-reporte-diario   | 0 10,22 * * *     | bin/daily-report.py     | -             | el reporte diario, sin LLM
