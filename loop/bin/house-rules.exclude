@@ -1,0 +1,4 @@
+# The patterns of the house rules of the loop. They are relative to the top of
+# the working tree, so they only hide the files of THIS worktree.
+/.house-rules.md
+/.house-rules.exclude
