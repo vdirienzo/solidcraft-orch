@@ -91,7 +91,7 @@ bash bin/slot-lock.sh --slot 1001 --release
 | `slot-lock.sh --take` | rc=0 y `locks/slot-1001/` con `pid`, `since`, `owner` | el lock es un DIRECTORIO con tres archivos |
 | `comment_watch.py` | "issues=0 prs=0 / sin delta" | el stub no tiene PRs que seguir |
 | `pipeline.py` | "PRs nuestros abiertos: 0 (0 en draft)" y rc=0 | no hay PRs que tocar |
-| `slot-stale.sh --locks` | el lock aparece con su dueño y su edad | el formato es el del PRODUCTOR |
+| `slot-stale.sh --locks` | con un lock NUEVO: "ningun slot atascado"; con un lock VIEJO (>= `--hours`) y su worktree: "slot 1001 lock de hace 3h owner ... rama ... sin moverse hace 3h" | `--hours` es el UMBRAL de lo atascado, no un filtro de los locks: solo se listan los viejos |
 | `gate.sh 1001 deadbeef` | **rc=2** y "the gate script is not there" | sin `gate-quick.sh` el gate NO compila el checkout principal |
 | el log del stub | solo lecturas | la prueba de que no se toco GitHub |
 
@@ -138,12 +138,17 @@ la maquina del orquestador.
 ```bash
 cd ~/.local/share/solidcraft-orch
 bash bin/test-all.sh --fast              # 16/16
-bash bin/test-all.sh --fast --           # (todo)
+bash bin/test-all.sh                     # (todo: sin --fast)
 ```
 
 Las 5 que se saltan necesitan la maquina del orquestador (la copia desplegada, los
 worktrees, los scripts del LOOP) o el checkout de upstream en el path por defecto — con
 el symlink de la Fase 2.2, `test-briefs.sh` corre.
+
+**Las suites se corren SIN `GH_BIN` en el entorno** (como el CI del repo). Cada suite
+trae su propio stub de `gh`; `test-ci-status.sh` lo mete en el PATH, y `pipeline.py`
+prefiere `GH_BIN` por sobre el PATH: con el `GH_BIN` del sandbox exportado, ese stub no
+es el que contesta y la suite falla con 16 casos en rojo que NO son un defecto del repo.
 
 ---
 

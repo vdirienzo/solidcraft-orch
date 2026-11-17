@@ -33,6 +33,11 @@ fast=0
 for arg in "$@"; do
   case "$arg" in
     --fast) fast=1 ;;
+    # Un "--" a secas es el fin de las opciones (la convencion de Unix): se
+    # ignora. Antes caia en el patron y el runner se negaba con "no hay
+    # suites que coincidan con '--'": un guion que no filtra nada no puede
+    # ser un error de uso.
+    --) ;;
     *) pattern="$arg" ;;
   esac
 done

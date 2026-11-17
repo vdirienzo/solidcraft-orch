@@ -664,18 +664,48 @@ def bootstrap():
     # Un estado sin updated_at hace que el resumen del estado escupa
     # "no such key: updated_at": la clave es parte de la forma del estado.
     vacio["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # EL ORDEN ES EL DEL MANIFIESTO (2026-11-17).
+    #
+    # POR QUE: el state.json que escribe el bootstrap tiene que ser el MISMO,
+    # byte a byte, que el que reconstruye el --check desde state/. Y el que
+    # reconstruye sigue el 'order' del manifiesto, no el orden en que se
+    # escribieron los conceptos. Con el orden de escritura (updated_at al
+    # final) el round-trip daba el mismo contenido con las claves en otro
+    # orden: el --check decia "IDENTICO" (compara valores) pero el archivo no
+    # era el mismo, y el round-trip (split -> merge -> split) no cerraba.
+    # El estado se escribe SIEMPRE en el orden del manifiesto: una sola
+    # fuente de verdad para el orden de las claves.
+    estado = {k: vacio[k] for k in orden}
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
         write_atomic(MANIFEST, dump(manifest))
+        # UN ARCHIVO POR CONCEPTO, TODOS (2026-11-17).
+        #
+        # La maquina que se parte a mano tiene un archivo por grupo, aunque
+        # el grupo este vacio (notes.json es donde cae la clave que no esta
+        # en ningun grupo: sin ese archivo, esa clave no tiene donde ir y el
+        # --split la perderia). Una maquina nueva con el layout distinto no
+        # es la misma maquina: el round-trip del estado no se puede probar.
         for grupo, claves in grupos.items():
-            if not claves:
-                continue
             write_atomic(os.path.join(STATE_DIR, f"{grupo}.json"),
                          dump({k: vacio.get(k, {}) for k in claves}))
-        write_atomic(STATE_JSON, dump(vacio))
+        texto = dump(estado)
+        write_atomic(STATE_JSON, texto)
         # El hash es el del TEXTO que se escribio, como en el merge: si no,
         # el --check de despues no coincide con lo que hay.
-        write_atomic(PUBLISHED, sha256_bytes(dump(vacio).encode("utf-8")) + "\n")
+        write_atomic(PUBLISHED, sha256_bytes(texto.encode("utf-8")) + "\n")
+        # EL RESPALDO PRE-PARTICION (2026-11-17).
+        #
+        # En la maquina del orquestador, el --split manual dejo el estado
+        # viejo en logs/state.json.pre-split.bak: es la referencia con la que
+        # se comprueba que la particion no perdio ninguna clave. Una maquina
+        # nueva no pasa por un split manual, asi que sin este archivo no
+        # tendria contra que compararse. Se escribe el estado recien creado:
+        # es el estado ANTERIOR a cualquier edicion a mano, que es lo que el
+        # backup significa.
+        logs = os.path.join(ORCH, "logs")
+        os.makedirs(logs, exist_ok=True)
+        write_atomic(os.path.join(logs, "state.json.pre-split.bak"), texto)
     except OSError as e:
         print(f"merge-state: no se pudo crear el estado: {e}", file=sys.stderr)
         return 2

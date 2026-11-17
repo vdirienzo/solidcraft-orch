@@ -647,6 +647,46 @@ if [ -f "$BOOT/state/prs.json" ] && [ -f "$BOOT/state/slots.json" ] && [ -f "$BO
 else
   no "el bootstrap reparte las claves por concepto (no todas en notes.json)" "$(ls "$BOOT/state" 2>&1)"
 fi
+
+# UN ARCHIVO POR CONCEPTO, TODOS (2026-11-17).
+#
+# La maquina que se parte a mano tiene un archivo por grupo, aunque el grupo
+# este vacio: notes.json es donde cae la clave que no esta en ningun grupo, y
+# sin ese archivo esa clave no tiene donde ir. Una maquina nueva con otro
+# layout no es la misma maquina: el round-trip del estado no se puede probar.
+if [ -f "$BOOT/state/notes.json" ] && [ -f "$BOOT/state/policy.json" ]; then
+  ok "el bootstrap crea un archivo por concepto, tambien los grupos vacios"
+else
+  no "el bootstrap crea un archivo por concepto, tambien los grupos vacios" "$(ls "$BOOT/state" 2>&1)"
+fi
+
+# EL state.json DEL BOOTSTRAP ES EL MISMO QUE EL QUE RECONSTRUYE EL --CHECK.
+#
+# El --check compara VALORES (por eso decia "IDENTICO" con las claves en otro
+# orden), pero el round-trip (split -> merge -> split) tiene que cerrar byte a
+# byte: el estado se escribe en el ORDEN DEL MANIFIESTO, que es el orden que
+# usa la reconstruccion.
+cp "$BOOT/state.json" "$TMP/boot-state.json"
+rm -f "$BOOT/state.json"
+ORCH_DIR="$BOOT" bash "$BOOT/merge-state.sh" >/dev/null 2>&1
+if cmp -s "$BOOT/state.json" "$TMP/boot-state.json"; then
+  ok "el state.json del bootstrap es byte a byte el que reconstruye el merge"
+else
+  no "el state.json del bootstrap es byte a byte el que reconstruye el merge" \
+     "$(diff "$TMP/boot-state.json" "$BOOT/state.json" 2>&1 | head -6)"
+fi
+
+# EL RESPALDO PRE-PARTICION (2026-11-17).
+#
+# En la maquina del orquestador, el --split manual dejo el estado viejo en
+# logs/state.json.pre-split.bak: es la referencia con la que se comprueba que
+# la particion no perdio ninguna clave. Una maquina nueva no pasa por un
+# split manual: sin ese archivo no tendria contra que compararse.
+if [ -f "$BOOT/logs/state.json.pre-split.bak" ]; then
+  ok "el bootstrap deja el respaldo pre-particion"
+else
+  no "el bootstrap deja el respaldo pre-particion" "$(ls "$BOOT/logs" 2>&1)"
+fi
 ORCH_DIR="$BOOT" bash "$BOOT/merge-state.sh" --bootstrap >/dev/null 2>&1
 if [ $? -eq 3 ]; then
   ok "el bootstrap NO pisa un estado que ya existe (rc=3)"
