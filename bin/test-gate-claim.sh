@@ -28,8 +28,23 @@
 #   5. the discovery of our pull request from the branch of the worktree
 #      finds the right number.
 #
-# THE TESTS ARE HERMETIC: the real gate is NEVER run (it compiles Rust).
-# The BLOCK of the check of the claim is extracted from bin/gate.sh (the same
+# AND (2026-11-17) THE GATE AND THE RUNNER:
+#   6. the gate WITHOUT the worktree of the slot FAILS (rc != 0), writes NO
+#      verdict and says WHERE the worktree was expected: a verdict that
+#      describes the main checkout is worse than no verdict;
+#   7. the gate WITH the worktree of the slot goes on its way;
+#   8. the runner does NOT take the verdict of "SHA=0d74d8ca" as the verdict
+#      of the commit "0d74d8cae" (the comparison was not anchored);
+#   9. the runner DOES take the verdict of "SHA=0d74d8cae" as the verdict of
+#      the commit "0d74d8cae";
+#   10. the runner WITHOUT arguments and with a state that has nothing
+#      pending does NOTHING (rc=0): no work is not an error;
+#   11. the runner WITHOUT arguments gates the pending slot OF THE STATE,
+#      not the slot that was written in the script;
+#   12. the same, with the pending slot coming from the "slots" of the state.
+#
+# THE TESTS ARE HERMETIC: the real gate NEVER compiles Rust. The BLOCK of
+# the check of the claim is extracted from bin/gate.sh (the same
 # technique as the block of the brake in the loop: the block between two
 # anchors, run on its own) and run against:
 #   * a `gh` of the tests, FIRST in the PATH: the pull requests come from
@@ -40,6 +55,13 @@
 #     it (which arguments, which exit code);
 #   * their own HOME and their own worktree: the checkout of the product and
 #     its worktrees are never touched.
+#
+# The cases 6 to 12 run the REAL bin/gate.sh (and the REAL bin/gate-runner.sh)
+# against a world of their own: a `cargo` and un `gh` STUB in the HOME of the
+# tests (bin/gate.sh builds its PATH out of $HOME/.cargo/bin), a gate script
+# of the loop that writes the verdict and nothing else, and un gate.sh STUB
+# for the runner that writes down what it was asked to gate. Nothing of the
+# machine is touched: no Rust is compiled and GitHub is never contacted.
 #
 # Run:  bash ~/.local/share/solidcraft-orch/bin/test-gate-claim.sh
 # ---------------------------------------------------------------------------
@@ -420,6 +442,323 @@ if [ -f "$WORKTREE/.git" ] && [ ! -d "$WORKTREE/.git" ]; then
 else
   bad "the worktree of the test has .git as a FILE (like a real worktree)" \
       "$(ls -ld "$WORKTREE/.git" 2>&1)"
+fi
+
+# =============================================================================
+# THE GATE WITHOUT THE WORKTREE OF THE SLOT, THE SHA ANCHORED AND THE PENDING
+# SLOTS OF THE STATE (2026-11-17)
+#
+# WHAT IS TESTED HERE (the cases are the rules, not the source):
+#   6. the gate WITHOUT the worktree of the slot FAILS (rc != 0) and writes
+#      NO verdict: a verdict that describes another tree (the main checkout)
+#      is worse than no verdict at all;
+#   7. the gate WITH the worktree of the slot goes on its way;
+#   8. the runner does NOT take the verdict of "SHA=0d74d8ca" as the verdict
+#      of the commit "0d74d8cae" (the comparison was not anchored);
+#   9. the runner DOES take the verdict of "SHA=0d74d8cae" as the verdict of
+#      the commit "0d74d8cae";
+#   10. the runner WITHOUT arguments and with a state that has nothing
+#      pending does NOTHING (rc=0): no work is not an error;
+#   11. the runner WITHOUT arguments gates the pending slot OF THE STATE,
+#      not the slot that was written in the script;
+#   12. the same, with the pending slot coming from the "slots" of the state.
+#
+# THE TESTS ARE HERMETIC: the real gate NEVER compiles Rust (the cargo of
+# the tests is a STUB in the HOME of the tests, because bin/gate.sh builds
+# its own PATH out of $HOME/.cargo/bin) and the gate.sh of the runner is a
+# STUB that writes down what it was asked to gate. GitHub is never
+# contacted: the gh of the tests is a stub that fails.
+# =============================================================================
+
+GATE_SH="${GATE_SH:-$ORCH_DIR/bin/gate.sh}"
+RUNNER_SH="${RUNNER_SH:-$HERE/gate-runner.sh}"
+
+# --- the world of the gate: its own orchestrator, its own loop ---------------
+GATEROOT="$TESTDIR/gateworld"
+GATEORCH="$GATEROOT/orch"
+GATELOOP="$GATEROOT/loop"
+GATEHOME="$GATEROOT/home"
+GATETARGETS="$GATEROOT/targets"
+GATEWT="$GATEROOT/worktrees"
+mkdir -p "$GATEORCH/bin" "$GATEORCH/logs" "$GATELOOP/bin" "$GATELOOP/gates" \
+         "$GATEHOME/.cargo/bin" "$GATETARGETS" "$GATEWT" \
+         "$GATEROOT/checkout-principal"
+
+# The cargo of the tests: the gate compiles Rust for 8+ minutes and the
+# machine is shared. The stub says "it compiled" and does nothing else.
+cat > "$GATEHOME/.cargo/bin/cargo" <<'STUB'
+#!/usr/bin/env bash
+echo "cargo $* (STUB de los tests)"
+exit 0
+STUB
+chmod 755 "$GATEHOME/.cargo/bin/cargo"
+
+# The gh of the tests: GitHub is NEVER contacted.
+cat > "$GATEHOME/.cargo/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+echo "gh: los tests no contactan GitHub" >&2
+exit 1
+STUB
+chmod 755 "$GATEHOME/.cargo/bin/gh"
+
+# The helpers of the gate: the target dir of the slot, los jobs de cargo, el
+# token del build slot, el verificador del claim y el veredicto efectivo.
+cat > "$GATEORCH/bin/slot-target-dir.sh" <<'STUB'
+#!/usr/bin/env bash
+slot=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --slot) slot="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+echo "${GATE_TARGETS:-$PWD}/slot-$slot"
+STUB
+cat > "$GATEORCH/bin/cargo-jobs.sh" <<'STUB'
+#!/usr/bin/env bash
+echo 2
+STUB
+cat > "$GATEORCH/bin/build-slot.sh" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --take) echo "token-de-los-tests" ;;
+esac
+exit 0
+STUB
+cat > "$GATEORCH/bin/claim-verify.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "VEREDICTO=OK el claim es nuestro"
+exit 0
+STUB
+cat > "$GATEORCH/bin/gate-baseline.sh" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod 755 "$GATEORCH/bin/"*.sh
+
+# El gate del loop (el que de verdad compila) es un STUB: escribe el
+# veredicto del slot y nada mas.
+cat > "$GATELOOP/bin/gate-quick.sh" <<'STUB'
+#!/usr/bin/env bash
+slot=""
+rest=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --slot) slot="$2"; shift 2 ;;
+    *) rest="$rest $1"; shift ;;
+  esac
+done
+set -- $rest
+base="${1:-}"
+sha="${2:-}"
+mkdir -p "$LOOP_DIR/gates/$slot"
+{
+  echo "GATE_STATUS=finished"
+  echo "VERDICT=VERDE-SCOPE"
+  echo "SHA=$sha"
+  echo "BASE=$base"
+} > "$LOOP_DIR/gates/$slot/scope.verdict"
+exit 0
+STUB
+chmod 755 "$GATELOOP/bin/gate-quick.sh"
+
+# --- the run of the gate ----------------------------------------------------
+GATE_OUT=""
+GATE_RC=0
+run_gate() {
+  # $1 issue, $2 sha, $3 el directorio de los worktrees
+  GATE_OUT="$(env HOME="$GATEHOME" \
+                  ORCH_DIR="$GATEORCH" \
+                  LOOP_DIR="$GATELOOP" \
+                  WORKTREES_DIR="$3" \
+                  SOLIDCRAFT_REPO="$GATEROOT/checkout-principal" \
+                  GATE_TARGETS="$GATETARGETS" \
+                  bash "$GATE_SH" "$1" "$2" 2>&1)"
+  GATE_RC=$?
+}
+
+# --- 6. the gate WITHOUT the worktree of the slot --------------------------
+rm -rf "$GATELOOP/gates"
+mkdir -p "$GATELOOP/gates"
+EMPTY_WT="$GATEROOT/worktrees-vacias"
+mkdir -p "$EMPTY_WT"
+run_gate "$ISSUE" "$SHA" "$EMPTY_WT"
+if [ "$GATE_RC" -ne 0 ]; then
+  ok "6. the gate without the worktree of the slot FAILS (rc=$GATE_RC)"
+else
+  bad "6. the gate without the worktree of the slot FAILS (rc=$GATE_RC)" \
+      "the gate compiles the main checkout and writes the verdict of another tree"
+fi
+if [ -z "$(find "$GATELOOP/gates" -name scope.verdict 2>/dev/null)" ]; then
+  ok "6. the gate without the worktree of the slot writes NO verdict"
+else
+  bad "6. the gate without the worktree of the slot writes NO verdict" \
+      "$(find "$GATELOOP/gates" -name scope.verdict 2>/dev/null | tr '\n' ' ')"
+fi
+if printf '%s' "$GATE_OUT" | grep -q "issue-$ISSUE"; then
+  ok "6. the message says WHERE the worktree of the slot was expected"
+else
+  bad "6. the message says WHERE the worktree of the slot was expected" \
+      "$(printf '%s' "$GATE_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+# --- 7. the gate WITH the worktree of the slot: it goes on its way --------
+rm -rf "$GATELOOP/gates"
+mkdir -p "$GATELOOP/gates"
+ln -sfn "$WORKTREE" "$GATEWT/issue-$ISSUE"
+run_gate "$ISSUE" "$SHA" "$GATEWT"
+if [ "$GATE_RC" -eq 0 ] && [ -f "$GATELOOP/gates/$ISSUE/scope.verdict" ]; then
+  ok "7. the gate with the worktree of the slot goes on its way (rc=0, verdict written)"
+else
+  bad "7. the gate with the worktree of the slot goes on its way" \
+      "rc=$GATE_RC $(printf '%s' "$GATE_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+# =============================================================================
+# EL RUNNER: EL SHA ANCHORADO (F2) Y LOS SLOTS PENDIENTES DEL ESTADO (F3)
+# =============================================================================
+RUNROOT="$TESTDIR/runnerworld"
+RUNORCH="$RUNROOT/orch"
+RUNLOOP="$RUNROOT/loop"
+RUNWT="$RUNROOT/worktrees"
+RUNLOG="$RUNROOT/gate-calls.log"
+mkdir -p "$RUNORCH/bin" "$RUNORCH/logs" "$RUNLOOP/gates" "$RUNWT"
+: > "$RUNLOG"
+mkdir -p "$RUNWT/issue-4712" "$RUNWT/issue-9999" "$RUNWT/issue-8888" "$RUNWT/issue-10159"
+
+# El gate.sh del runner es un STUB que escribe lo que se le pidio gatear: el
+# de verdad compila Rust.
+cat > "$RUNORCH/bin/gate.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s %s\n' "${1:-}" "${2:-}" >> "${RUNNER_LOG:-/dev/null}"
+exit 0
+STUB
+chmod 755 "$RUNORCH/bin/gate.sh"
+# El accessor del estado es el REAL (solo se lee): el runner tiene que leer
+# el estado por la misma puerta que todos los demás scripts.
+cp "$HERE/orch-state.sh" "$RUNORCH/bin/orch-state.sh"
+chmod 755 "$RUNORCH/bin/orch-state.sh"
+
+RUNNER_OUT=""
+RUNNER_RC=0
+run_runner() {
+  RUNNER_OUT="$(env ORCH_DIR="$RUNORCH" \
+                     LOOP_DIR="$RUNLOOP" \
+                     WORKTREES_DIR="$RUNWT" \
+                     RUNNER_LOG="$RUNLOG" \
+                     bash "$RUNNER_SH" "$@" 2>&1)"
+  RUNNER_RC=$?
+}
+
+# --- 8. the verdict of ANOTHER commit is not served ------------------------
+# The sha of the verdict has to be THE SAME commit that is asked for. The
+# comparison was not anchored: the pattern "SHA=0d74d8ca" is found inside
+# the line "SHA=0d74d8cae" of a verdict of ANOTHER commit, and the runner
+# took that verdict as the gate of the commit it was asked for.
+mkdir -p "$RUNLOOP/gates/4712"
+cat > "$RUNLOOP/gates/4712/scope.verdict" <<'EOF'
+GATE_STATUS=finished
+VERDICT=VERDE-SCOPE
+SHA=0d74d8ca
+EOF
+: > "$RUNLOG"
+run_runner 4712 0d74d8cae
+if grep -q '^4712 0d74d8cae$' "$RUNLOG"; then
+  ok "8. the runner does NOT take the verdict of SHA=0d74d8ca as the one of 0d74d8cae"
+else
+  bad "8. the runner does NOT take the verdict of SHA=0d74d8ca as the one of 0d74d8cae" \
+      "the runner took the verdict of another commit as served"
+fi
+
+# --- 8b. the same, al reves: el veredicto del commit largo y el pedido del
+#         corto (este es el caso que la comparacion sin anclar rompia) ------
+cat > "$RUNLOOP/gates/4712/scope.verdict" <<'EOF'
+GATE_STATUS=finished
+VERDICT=VERDE-SCOPE
+SHA=0d74d8cae
+EOF
+: > "$RUNLOG"
+run_runner 4712 0d74d8ca
+if grep -q '^4712 0d74d8ca$' "$RUNLOG"; then
+  ok "8b. the runner does NOT take the verdict of SHA=0d74d8cae as the one of 0d74d8ca"
+else
+  bad "8b. the runner does NOT take the verdict of SHA=0d74d8cae as the one of 0d74d8ca" \
+      "the runner took the verdict of another commit as served"
+fi
+
+# --- 9. the verdict of THIS commit is served ------------------------------
+cat > "$RUNLOOP/gates/4712/scope.verdict" <<'EOF'
+GATE_STATUS=finished
+VERDICT=VERDE-SCOPE
+SHA=0d74d8cae
+EOF
+: > "$RUNLOG"
+run_runner 4712 0d74d8cae
+if [ ! -s "$RUNLOG" ]; then
+  ok "9. the runner takes the verdict of SHA=0d74d8cae as the one of 0d74d8cae (served)"
+else
+  bad "9. the runner takes the verdict of SHA=0d74d8cae as the one of 0d74d8cae (served)" \
+      "the runner gateo de nuevo: $(cat "$RUNLOG")"
+fi
+
+# --- 10. no arguments and nothing pending: it does NOTHING ----------------
+cat > "$RUNORCH/state.json" <<'EOF'
+{
+  "gates": {
+    "4712": {"issue": 4712, "sha": "0d74d8cae", "status": "finished"}
+  },
+  "slots": {}
+}
+EOF
+: > "$RUNLOG"
+run_runner
+if [ "$RUNNER_RC" -eq 0 ] && [ ! -s "$RUNLOG" ]; then
+  ok "10. the runner without arguments and with nothing pending does NOTHING (rc=0)"
+else
+  bad "10. the runner without arguments and with nothing pending does NOTHING (rc=0)" \
+      "rc=$RUNNER_RC calls: $(cat "$RUNLOG" | tr '\n' ' ')"
+fi
+
+# --- 11. no arguments and a pending slot: it gates THAT slot ---------------
+cat > "$RUNORCH/state.json" <<'EOF'
+{
+  "gates": {
+    "9999": {"issue": 9999, "sha": "abc123def456", "status": "pending"}
+  },
+  "slots": {}
+}
+EOF
+: > "$RUNLOG"
+run_runner
+if grep -q '^9999 abc123def456$' "$RUNLOG"; then
+  ok "11. the runner without arguments gates the pending slot OF THE STATE (9999)"
+else
+  bad "11. the runner without arguments gates the pending slot OF THE STATE (9999)" \
+      "calls: $(cat "$RUNLOG" | tr '\n' ' ')"
+fi
+if ! grep -q '^10159 ' "$RUNLOG"; then
+  ok "11. the runner without arguments does NOT gate the slot written in the script (10159)"
+else
+  bad "11. the runner without arguments does NOT gate the slot written in the script (10159)" \
+      "the runner gateo el slot que estaba escrito en el codigo"
+fi
+
+# --- 12. the pending slot can come from the "slots" of the state ------------
+cat > "$RUNORCH/state.json" <<'EOF'
+{
+  "gates": {},
+  "slots": {
+    "3": {"issue": 8888, "sha": "beefcafe1234", "status": "running"}
+  }
+}
+EOF
+: > "$RUNLOG"
+run_runner
+if grep -q '^8888 beefcafe1234$' "$RUNLOG"; then
+  ok "12. the runner without arguments gates the pending slot of the 'slots' of the state"
+else
+  bad "12. the runner without arguments gates the pending slot of the 'slots' of the state" \
+      "calls: $(cat "$RUNLOG" | tr '\n' ' ')"
 fi
 
 TOTAL=$(( PASS + FAIL ))
