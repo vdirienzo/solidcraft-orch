@@ -183,7 +183,9 @@ if [ ! -s "$BLOCK" ]; then
 fi
 # The block has to be the one of the check of the claim. A script that lost
 # it is a script whose gate never checks the claim: the tests below are red.
-for needle in 'claim-verify.sh' 'OUR_PR' 'gh pr list' 'exit 4'; do
+# The gate calls the gh through GH_BIN (the stub lives OUTSIDE the PATH:
+# README rule 4), so the needle is the variable, not the bare command.
+for needle in 'claim-verify.sh' 'OUR_PR' 'GH_BIN' 'pr list' 'exit 4'; do
   if grep -q -- "$needle" "$BLOCK"; then
     ok "the block of the claim contains: $needle"
   else
@@ -249,8 +251,10 @@ run_block() {
   # $1 issue, $2 sha, $3 base, $4 our_pr (may be empty), $5 the repo
   local repo="$5"
   local orch="${ORCH_DIR_UNDER_TEST:-$ORCH_DIR}"
+  # El stub de gh NO va en el PATH: el gate y el arbitro lo eligen con
+  # GH_BIN (regla 4 del repo).
   OUT="$(env HOME="$TESTDIR/home" \
-              PATH="$STUBBIN:$PATH" \
+              GH_BIN="$STUBBIN/gh" \
               ORCH_DIR="$orch" \
               TEST_REPO="$repo" \
               STUB_PRS="$STUB_PRS" \
@@ -567,12 +571,16 @@ GATE_OUT=""
 GATE_RC=0
 run_gate() {
   # $1 issue, $2 sha, $3 el directorio de los worktrees
+  # GH_BIN: el `gh` de los tests, FUERA del PATH (regla 4 del repo). El
+  # gate lo honra, asi que el stub no tiene que estar en el PATH.
+  # El stub de gh NO va en el PATH: el gate lo elige con GH_BIN (regla 4).
   GATE_OUT="$(env HOME="$GATEHOME" \
                   ORCH_DIR="$GATEORCH" \
                   LOOP_DIR="$GATELOOP" \
                   WORKTREES_DIR="$3" \
                   SOLIDCRAFT_REPO="$GATEROOT/checkout-principal" \
                   GATE_TARGETS="$GATETARGETS" \
+                  GH_BIN="$STUBBIN/gh" \
                   bash "$GATE_SH" "$1" "$2" 2>&1)"
   GATE_RC=$?
 }

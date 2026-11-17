@@ -99,6 +99,11 @@ if [ -n "$OUR_PR" ] && ! [[ "$OUR_PR" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
+# The gh of the machine, or the one of a test (the stub lives OUTSIDE the
+# PATH: README rule 4). Without this the only way to test the script is a
+# fake gh on the PATH, which is exactly what rule 4 forbids.
+GH_BIN="${GH_BIN:-gh}"
+
 REPO="${SC_REPO:-tangency-labs/solidcraft}"
 # The top of the open pull requests that are asked for (9-11-2026): the
 # upstream has 1009 open and with 1000 the guard went BLIND for every issue
@@ -179,7 +184,7 @@ JQ
 # empty in some pull requests and the filter over the body finds nothing.
 # The author comes with it: the rule of the same author needs to know WHO
 # wrote each pull request.
-HITS="$(gh pr list --repo "$REPO" --state open --limit "$LIMIT" \
+HITS="$("$GH_BIN" pr list --repo "$REPO" --state open --limit "$LIMIT" \
         --json number,title,body,author \
         --jq "$(cat "$CLAIM_JQ")" 2>/dev/null)"
 
@@ -205,7 +210,7 @@ if [ "${#HIT_NUMBERS[@]}" -eq 0 ]; then
   # the probe answered "the list can be read", the hits were empty, and the
   # arbiter said THE ISSUE IS FREE. That is the most expensive direction
   # there is: the orchestrator takes an issue that somebody else holds.
-  if [ -n "${HITS//[[:space:]]/}" ] || ! gh pr list --repo "$REPO" --state open --limit 1 \
+  if [ -n "${HITS//[[:space:]]/}" ] || ! "$GH_BIN" pr list --repo "$REPO" --state open --limit 1 \
         --json number,title,body,author --jq "$(cat "$CLAIM_JQ")" >/dev/null 2>&1; then
     echo "VEREDICTO=ERROR no se pudo leer los PRs de $REPO (gh fallo, o el filtro no se pudo aplicar?)" >&2
     exit 2
@@ -234,7 +239,7 @@ resolve_our_author() {
     OUR_AUTHOR="$(grep -E '^[[:space:]]*(export[[:space:]]+)?FORK_OWNER=' "$LOOP_DIR/config.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"'"'" | tr -d '[:space:]')"
   fi
   if [ -z "$OUR_AUTHOR" ]; then
-    OUR_AUTHOR="$(gh api user --jq .login 2>/dev/null | head -1)"
+    OUR_AUTHOR="$("$GH_BIN" api user --jq .login 2>/dev/null | head -1)"
   fi
   # A login and nothing else: the answer of a broken gh is not a login.
   case "$OUR_AUTHOR" in

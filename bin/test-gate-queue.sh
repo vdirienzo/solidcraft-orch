@@ -36,6 +36,11 @@ no(){ printf 'FALLA- %s\n' "$1"; fail=$((fail+1)); [ $# -gt 1 ] && printf '     
 
 ORCH="$TMP/orch"
 WT="$TMP/wt"
+# The paths of the machine, with a default (the portability check asks for
+# it, and it is right: a script that uses one without defining it runs
+# with an EMPTY path on the other PC).
+LOOP_DIR="${LOOP_DIR:-$ORCH/loop}"
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-$ORCH/checkout-principal}"
 mkdir -p "$ORCH/bin" "$ORCH/gates" "$ORCH/logs" "$WT"
 cp "$SRC" "$ORCH/bin/gate-queue.sh"
 
@@ -55,7 +60,12 @@ chmod +x "$ORCH/bin/gate.sh" "$ORCH/bin/build-slot.sh"
 run_queue() {
   # GATE_STAGGER=0: the stagger is 90 s in production (so the second gate finds
   # a warm sccache). Here it would just make the suite slow.
-  ORCH_DIR="$ORCH" WORKTREES_DIR="$WT" GATE_STAGGER=0 bash "$ORCH/bin/gate-queue.sh" "$@" 2>&1
+  ORCH_DIR="$ORCH" \
+  LOOP_DIR="${LOOP_DIR:-$ORCH/loop}" \
+  SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-$ORCH/checkout-principal}" \
+  WORKTREES_DIR="$WT" \
+  GATE_STAGGER=0 \
+    bash "$ORCH/bin/gate-queue.sh" "$@" 2>&1
 }
 
 # --- 1. encolar y listar ---------------------------------------------------

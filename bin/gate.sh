@@ -56,6 +56,10 @@ export PATH="$HOME/.cargo/bin:$HOME/.rustup/toolchains/stable-x86_64-unknown-lin
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+# The gh of the machine, or the one of a test (the stub lives OUTSIDE the
+# PATH: README rule 4). Without this the only way to test the script is a
+# fake gh on the PATH, which is exactly what rule 4 forbids.
+GH_BIN="${GH_BIN:-gh}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 # SOLIDCRAFT_REPO is NOT the fallback of the gate anymore (2026-11-17): the
 # gate compiles the worktree of the slot or it does not run. It stays
@@ -173,7 +177,7 @@ echo "gate.sh: repo:       $REPO" >&2
 if [ -z "$OUR_PR" ] && { [ -d "$REPO/.git" ] || [ -f "$REPO/.git" ]; }; then
   _branch="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   if [ -n "$_branch" ] && [ "$_branch" != "HEAD" ]; then
-    OUR_PR="$(gh pr list --repo tangency-labs/solidcraft --state open \
+    OUR_PR="$("$GH_BIN" pr list --repo tangency-labs/solidcraft --state open \
                 --head "$_branch" --json number --jq '.[].number' 2>/dev/null | head -1)"
   fi
 fi
