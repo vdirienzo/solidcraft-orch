@@ -96,6 +96,10 @@ GH_BIN = os.environ.get("GH_BIN") or shutil.which("gh") or "gh"
 
 # El autor de nuestros PRs (el fork). La API no filtra por autor: el filtro se hace aca.
 AUTHOR = "vdirienzo"
+# How many open pull requests of ours the pipeline asks for. The upstream
+# has a thousand open; ours are a handful. The limit is here so that a
+# bug in the filter cannot ask for the whole upstream.
+PR_LIMIT = 500
 
 
 def recortar(texto, maximo=200):
@@ -656,7 +660,11 @@ def _aplanar(paginas):
 
 
 def _normalizar_pr(p):
-    """Un PR de la API con los mismos campos que usaba 'gh pr list --json'."""
+    """Un PR con los mismos campos que usaba 'gh pr list --json'.
+
+    It accepts the two shapes: the one of `gh pr list --json` (author,
+    headRefOid, isDraft) and the one of the API (user, head.sha, draft).
+    """
     head = p.get("head") or {}
     labels = []
     for l in (p.get("labels") or []):
@@ -668,9 +676,9 @@ def _normalizar_pr(p):
         "number": p.get("number"),
         "title": p.get("title") or "",
         "body": p.get("body") or "",
-        "isDraft": bool(p.get("draft")),
-        "headRefName": head.get("ref") or "",
-        "headRefOid": head.get("sha") or "",
+        "isDraft": bool(p.get("isDraft") if "isDraft" in p else p.get("draft")),
+        "headRefName": p.get("headRefName") or head.get("ref") or "",
+        "headRefOid": p.get("headRefOid") or head.get("sha") or "",
         "labels": labels,
     }
 
@@ -680,20 +688,37 @@ def listar_prs():
 
     Si la lista no se puede leer, el error dice QUE fallo (el comando, su rc y
     su stderr): un 'gh' que falla no es 'no hay PRs'.
+
+    THE LIST IS ASKED FOR WITH THE AUTHOR FILTER (2026-11-17). The API's
+    pulls endpoint has no author filter, so the first version paged through
+    EVERY open pull request of the upstream - a thousand of them, with
+    their bodies, megabytes every five minutes - and then threw away the
+    ones that were not ours. `gh pr list --author` asks the server for
+    ours only, which is what RULES.md:21 prescribed in the first place.
+    The filter is ALSO applied here, because the filter of the tool is not
+    the filter of the rule.
     """
-    ruta = f"repos/{REPO}/pulls?state=open&per_page=100"
-    rc, raw, err = gh_run("api", ruta, "--paginate", "--slurp")
+    args = ["pr", "list", "--repo", REPO, "--author", AUTHOR,
+            "--state", "open", "--limit", str(PR_LIMIT),
+            "--json", "number,title,isDraft,body,headRefName,headRefOid,labels"]
+    rc, raw, err = gh_run(*args)
     if rc != 0:
-        return [], (f"'gh api {ruta} --paginate --slurp' fallo: rc={rc}: "
+        return [], (f"'gh {' '.join(args[:4])}' fallo: rc={rc}: "
                     f"{recortar(err)}")
     try:
         data = json.loads(raw or "[]")
     except json.JSONDecodeError as exc:
-        return [], (f"'gh api {ruta} --paginate --slurp' respondio algo que no "
-                    f"es JSON: {exc}")
-    prs = [_normalizar_pr(p) for p in _aplanar(data)
-           if isinstance(p, dict)
-           and ((p.get("user") or {}).get("login")) == AUTHOR]
+        return [], (f"'gh pr list' respondio algo que no es JSON: {exc}")
+    if not isinstance(data, list):
+        return [], ("'gh pr list' no respondio una lista")
+    prs = []
+    for p in data:
+        if not isinstance(p, dict):
+            continue
+        autor = (p.get("author") or {}).get("login")
+        if autor and autor != AUTHOR:
+            continue
+        prs.append(_normalizar_pr(p))
     return prs, None
 
 
@@ -794,6 +819,10 @@ def main():
     pendientes = 0
     # Los problemas de la corrida: cada uno sale en el log Y en el exit code.
     problemas = []
+    # The things that could NOT be read. They are not failures: they are
+    # the UNKNOWN of the repo (exit code 6). They do not make the run
+    # "something failed"; they make it "nobody knows".
+    desconocidos = []
 
     # El resumen de CI: el numero que al mantenedor le importa (a quien pinguear).
     ci_conteo = {VERDE: 0, PENDIENTE: 0, ROJO: 0}
@@ -812,7 +841,13 @@ def main():
             runs, error = fetch_check_runs(sha)
             if error:
                 estado, detalle_ci = PENDIENTE, f"no pude leer los check-runs: {error}"
-                problemas.append(f"PR #{num}: no pude leer los check-runs: {error}")
+                # UNKNOWN, not a failure: the check-runs could not be read.
+                # It is a different thing from "an action failed", and the
+                # cron has to tell them apart: a run of GitHub that fails
+                # for every pull request would otherwise leave the cron red
+                # every five minutes, for ever, with no way to tell it from
+                # a real problem. The vocabulary already has 6 for this.
+                desconocidos.append(f"PR #{num}: no pude leer los check-runs: {error}")
             else:
                 estado, detalle_ci = evaluar_check_runs(runs)
         else:
@@ -987,6 +1022,15 @@ def main():
         for p in problemas:
             log(f"  - {p}")
         return 1
+    if desconocidos:
+        # Lo que no se pudo leer. No es un fallo: es un "no se sabe", y el
+        # codigo del repo para eso es el 6 (UNKNOWN). Un fallo de GitHub que
+        # dura mas de una pasada dejaba el cron rojo cada cinco minutos, sin
+        # forma de distinguirlo de un problema de verdad.
+        log(f"desconocidos: {len(desconocidos)}")
+        for d in desconocidos:
+            log(f"  - {d}")
+        return 6
     return 0
 
 

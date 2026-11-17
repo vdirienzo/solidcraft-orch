@@ -404,6 +404,10 @@ def servir_api(path):
         f = os.path.join(D, "checks", "%s.jsonl" % sha)
         if not os.path.isfile(f):
             return "", 0, ""
+        # A switch to make the check-runs UNREADABLE: the API answers with
+        # something that is not the JSON it owes.
+        if os.path.isfile(os.path.join(D, "checks-fail")):
+            return "", 1, "gh: the API could not be read"
         lineas = [l for l in open(f).read().splitlines() if l.strip()]
         crudo = json.dumps({"total_count": len(lineas),
                              "check_runs": [json.loads(l) for l in lineas]})
@@ -442,6 +446,17 @@ if ARGS[:1] == ["api"]:
 
 if ARGS[:2] == ["pr", "list"]:
     f = os.path.join(D, "pulls.json")
+    # The switch for a 'gh' that CANNOT read the list: a cron that answers
+    # "there are no pull requests" when GitHub is down is the silence this
+    # whole suite is about.
+    if os.path.isfile(os.path.join(D, "pulls-fail")):
+        sys.stderr.write("gh: Bad credentials (HTTP 401)\n")
+        sys.exit(1)
+    # The switch for a list that is not JSON: the tool answered, but what
+    # it answered is not a list.
+    if os.path.isfile(os.path.join(D, "pulls-garbage.json")):
+        sys.stdout.write(open(os.path.join(D, "pulls-garbage.json")).read())
+        sys.exit(0)
     crudo = open(f).read() if os.path.isfile(f) else "[]"
     # un gh de verdad recorta la lista al --limit: un stub que lo ignora
     # mediria el stub, no la regla (la lista truncada es justamente el bug).
@@ -550,6 +565,29 @@ if grep -q "^READY:12574" "$TMP/calls.log"; then
 else
   no "un PR con el CI verde y el gate verde pasa a ready" "$(cat "$TMP/calls.log")"
 fi
+
+# --- caso: los check-runs NO se pueden leer -> UNKNOWN (6), no un fallo ----
+# La diferencia importa: un fallo de GitHub que dura mas de una pasada
+# dejaba el cron rojo cada cinco minutos, sin forma de distinguirlo de un
+# problema de verdad. El repositorio tiene un codigo para "no se sabe": el 6.
+set_pulls <<'EOF'
+12574|Preset numbers|1|abc123def4567890|Preset numbers for functions\n\nFixes #12418\n\nChanges a default: no\n|[]
+EOF
+: > "$TMP/checks-fail"
+: > "$TMP/calls.log"
+run_pipeline
+rc=$?
+if [ "$rc" -eq 6 ]; then
+  ok "los check-runs que no se pueden leer dan UNKNOWN (rc=6), no un fallo"
+else
+  no "los check-runs que no se pueden leer dan UNKNOWN (rc=6), no un fallo" "rc=$rc"
+fi
+if grep -q "desconocidos" "$TMP/out.log"; then
+  ok "el log dice que no se pudo leer"
+else
+  no "el log dice que no se pudo leer" "$(tail -3 "$TMP/out.log")"
+fi
+rm -f "$TMP/checks-fail"
 
 # --- caso B: el PR NO tiene la linea de defaults ----------------------------
 set_pulls <<'EOF'

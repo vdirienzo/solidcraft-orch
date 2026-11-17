@@ -331,16 +331,21 @@ else
   CLAIM_OUT="claim-verify.sh no esta ahi: $CLAIM_VERIFY"
   CLAIM_RC=2
 fi
+# THE EXIT CODES OF THE ARBITER ARE THE VERDICT AND THEY ARE NOT
+# TRANSLATED (2026-11-17). The arbiter returns 0 (ours), 1 (lost) and 2
+# (could not be checked). This used to fold the 2 into the same 4 as the
+# "lost", which told the operator that somebody else had the issue when
+# nobody knew: the two cost very different things. A lost claim is a
+# race we lost; an unknown claim is a question we could not answer, and
+# the answer is to ask again, not to close the work.
 case "$CLAIM_RC" in
   0) echo "publish-pr: el reclamo es nuestro: $CLAIM_OUT" >&2 ;;
   1) printf '%s\n' "$CLAIM_OUT" >&2
      die 4 "el reclamo del issue $ISSUE lo tiene otro pull request: no se publica" ;;
-  11) printf '%s\n' "$CLAIM_OUT" >&2
-     die 4 "el issue $ISSUE ya no esta abierto (resuelto): no se publica" ;;
   2) printf '%s\n' "$CLAIM_OUT" >&2
-     die 4 "el reclamo del issue $ISSUE no se pudo verificar (UNKNOWN): no se publica" ;;
+     die 2 "el reclamo del issue $ISSUE no se pudo verificar (UNKNOWN): no se publica ni se abandona" ;;
   *) printf '%s\n' "$CLAIM_OUT" >&2
-     die 4 "el reclamo del issue $ISSUE dio un codigo inesperado ($CLAIM_RC): no se publica" ;;
+     die 2 "el reclamo del issue $ISSUE dio un codigo inesperado ($CLAIM_RC): no se publica" ;;
 esac
 
 # El issue cerrado es el caso "RESOLVED" del freno del reclamo (11): el

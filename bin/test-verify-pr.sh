@@ -682,6 +682,30 @@ else
       "fails=$(fails_in "$OUT")"
 fi
 
+# j1b) `gh pr checks` exits 1 WHEN A CHECK FAILED: that is a KNOWN state
+#      (the PR is red), not a "nobody knows". The red checks are reported
+#      as the failure they are, and the verdict is NOT "UNKNOWN".
+#      The code that cannot be read is the one with no payload at all.
+run_pr 4303 \
+  $'Fixes #7058\n\nChanges a default: no\n\nthe fix\n' \
+  "fix/issue-$SLOT-the-engine" \
+  "crates/engine/src/lib.rs"
+write_verdict "$SLOT" "$SHORT_SHA"
+set_checks 4303 '[{"name":"Native Linux tests","state":"FAILURE","bucket":"fail"}]'
+set_checks_failing 4303 1 "some checks failed"
+run_verify 4303
+if [ "$RC" -eq 1 ] && ! printf '%s' "$OUT" | grep -qi 'UNKNOWN'; then
+  ok "j1b) un 'gh pr checks' que sale con 1 por un check rojo es un FAIL conocido, no UNKNOWN"
+else
+  bad "j1b) un 'gh pr checks' que sale con 1 por un check rojo es un FAIL conocido, no UNKNOWN" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+if printf '%s' "$OUT" | grep -q 'Native Linux tests'; then
+  ok "j1b) el check rojo queda nombrado"
+else
+  bad "j1b) el check rojo queda nombrado" "$(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
 # j2) a red check of ANY name blocks: "Native Linux tests" is one of the
 #     three that decide if a pull request is mergeable, and the old filter
 #     never looked at it.

@@ -199,7 +199,12 @@ if [ -x "$LOOP_DIR/bin/pr-defaults-line.sh" ]; then
     bad "el validador de defaults del upstream FALLA"
   fi
 else
-  note "  --   no hay pr-defaults-line.sh: no se pudo validar"
+  # THE VALIDATOR OF THE UPSTREAM IS THE AUTHORITY of the format of the
+  # line, and the check above only counts lines. Without the validator the
+  # body was NOT validated: that is not a green, it is a "no se sabe".
+  # (Rule 7: a check that could not run is not a red - and it is not a
+  # green either: it is UNKNOWN.)
+  unknown "no se pudo correr el validador de defaults del upstream ($LOOP_DIR/bin/pr-defaults-line.sh)"
 fi
 rm -f "$BODYFILE"
 
@@ -328,12 +333,17 @@ else
     bad "check(s) en rojo que bloquean el PR:$CHECKS_RED"
     note "  --   mira el log del run mas NUEVO (los viejos suelen estar cancelados)"
   fi
-  if [ "$CHECKS_RC" -ne 0 ] && [ "$CHECKS_RC" -ne 8 ]; then
-    # `gh pr checks` salio con un codigo que no es 0 (ni el 8 de "pending"):
-    # o no pudo leer el rollup, o leyo algo a medias. El rollup que imprime
-    # no alcanza para decir que el CI esta verde: UNKNOWN. (El 8 es el de
-    # "checks pending": el CI todavia no dio veredicto, y eso es un estado
-    # conocido, no un "no se sabe".)
+  if [ "$CHECKS_RC" -ne 0 ] && [ "$CHECKS_RC" -ne 8 ] && [ -z "$CHECKS_RED" ]; then
+    # `gh pr checks` sale con 1 cuando un check FALLO y con 8 cuando uno
+    # esta PENDIENTE: los dos son estados CONOCIDOS, y los rojos ya se
+    # reportaron arriba. Cualquier otro codigo (auth, red, API) es "no se
+    # pudo leer": UNKNOWN.
+    #
+    # Y un rc=1 SIN rojos en el payload tampoco esta explicado por el
+    # payload: el rollup que gh imprime no alcanza para decir que el CI
+    # esta verde. Por eso la condicion mira el contenido, no el codigo
+    # solo: un rc=1 con rojos es un rojo conocido, y un rc=1 sin ellos
+    # es un "no se sabe".
     unknown "el CI del PR no se pudo leer bien (gh pr checks salio con rc=$CHECKS_RC${CHECKS_ERR1:+: $CHECKS_ERR1})"
   fi
   [ -n "$CHECKS_RED_EXEMPT" ] && note "  --   check(s) en rojo EXENTOS (no bloquean):$CHECKS_RED_EXEMPT"
