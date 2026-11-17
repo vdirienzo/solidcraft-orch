@@ -59,6 +59,10 @@ mkdir -p "$ROOT/bin" "$ROOT/gates" "$LOOP/gates"
 
 cp "$WORKFLOW_REAL" "$ROOT/workflow.yaml"
 cp "$ORCH_DIR/bin/workflow-validate.py" "$ROOT/bin/workflow-validate.py" 2>/dev/null || true
+# The registry of the crons travels with the graph: the validator checks
+# that the two agree, so a fixture without it fails with errors that have
+# nothing to do with the runner.
+cp "$ORCH_DIR/bin/crons.txt" "$ROOT/bin/crons.txt" 2>/dev/null || true
 
 # Los STUB: un script que NO hace el trabajo real, solo deja rastro de que
 # corrio y con que argumentos. El runner decide; el script es un witness.
@@ -76,6 +80,14 @@ stub gate-queue.sh
 stub gate.sh
 stub gate-baseline.sh
 stub verify-pr.sh
+stub dup-scan.sh
+stub comment_watch.py
+# The side jobs of the crons registry: they are not steps of the issue
+# process, but the validator checks that every script the registry names
+# exists, so the fixture has to have them.
+stub nice-compilations.sh
+stub ping-ready.sh
+stub daily-report.py
 cat > "$ROOT/bin/pipeline.py" <<EOF
 #!/usr/bin/env python3
 import sys

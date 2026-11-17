@@ -45,6 +45,8 @@ HEAVY="test-slot-parallelism.sh test-deploy-drift.sh test-publish-pr.sh test-sta
 suites=()
 while IFS= read -r f; do
   name="$(basename "$f")"
+  # This runner is not a suite: it would run itself.
+  [ "$name" = "test-all.sh" ] && continue
   [ -n "$pattern" ] && case "$name" in *"$pattern"*) ;; *) continue ;; esac
   suites+=("$name")
 done < <(ls -1 "$BIN"/test-*.sh "$BIN"/test-*.py 2>/dev/null | sort -u)
