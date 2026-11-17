@@ -26,6 +26,10 @@ set -uo pipefail
 # The paths come from the environment, with the default of THIS
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+# La mitad LOOP: el gate que compila (gate-quick.sh) vive ahi, y el
+# worktree del publisher tambien. Antes este script no la nombraba, y con
+# "set -u" usarlo sin definirla mataba el script en la mitad.
+LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 BIN="$ORCH_DIR/bin"
@@ -78,6 +82,7 @@ run(){
   trap 'rmdir "$LOCK" 2>/dev/null || true; exit 143' TERM INT
   echo "gate-queue: $(date +%H:%M:%S) runner activo (espera maxima ${max_wait} min)"
   local waited=0
+  local sin_worktree=0
   while [ -s "$QUEUE" ]; do
     # "build-slots: 0 used of 2" -> used=0, total=2. The old parse took the
     # LAST number for both, so it read "2 used of 2" and the queue never
@@ -99,10 +104,27 @@ run(){
     issue="$(printf '%s' "$entry" | awk '{print $1}')"
     sha="$(printf '%s' "$entry" | awk '{print $2}')"
     [ -z "$issue" ] && { sed -i '1d' "$QUEUE"; continue; }
+    # THE WORKTREE OF THE SLOT, OR NOTHING (2026-11-17).
+    #
+    # The queue used to fall back to the main checkout: `cd
+    # "$WORKTREES_DIR/issue-$issue" || cd "$SOLIDCRAFT_REPO"`. The gate then
+    # compiled a tree that did NOT contain the change and wrote a verdict that
+    # read as if it did - and bin/verify-pr.sh took it as "the gate of this
+    # pull request". The gate itself refuses now (exit 5); the queue has to
+    # refuse too, or it launches a gate that is going to fail.
+    local wt="$WORKTREES_DIR/issue-$issue"
+    if [ ! -d "$wt" ] && [ ! -d "$LOOP_DIR/work/issue-$issue" ]; then
+      echo "gate-queue: el slot $issue no tiene worktree en $wt: NO lanzo el gate" >&2
+      echo "gate-queue:   (un gate sobre el checkout principal compila un arbol sin el cambio)" >&2
+      sin_worktree=$(( sin_worktree + 1 ))
+      sed -i '1d' "$QUEUE"
+      waited=0
+      continue
+    fi
     # the gate takes the token itself: there is a free slot right now
     echo "gate-queue: lanzando el gate del slot $issue ($sha) (hay $free de $total slots libres)"
     sed -i '1d' "$QUEUE"
-    ( cd "$WORKTREES_DIR/issue-$issue" 2>/dev/null || cd "$SOLIDCRAFT_REPO"
+    ( cd "$wt" 2>/dev/null || cd "$LOOP_DIR/work/issue-$issue" 2>/dev/null || cd "$SOLIDCRAFT_REPO"
       # The scoped gate gives the fmt phase 2% of the budget: with the 60 min default that
       # is 72 s, and `cargo fmt --all -- --check` over the whole workspace takes ~67 s
       # on an idle box and more when the agents are compiling. The phase is then killed
@@ -116,16 +138,28 @@ run(){
     waited=0
   done
   echo "gate-queue: $(date +%H:%M:%S) runner terminado; cola: $( [ -s "$QUEUE" ] && wc -l < "$QUEUE" | tr -d ' ' || echo 0) pendiente(s)"
+  # THE VERDICT REACHES THE EXIT CODE (rule 7).
+  #
+  # The gate itself runs in the background: its verdict lands in
+  # $LOOP_DIR/gates/<slot>/scope.verdict, which is where the rest of the
+  # system reads it. What the QUEUE can answer is "could I launch it": a
+  # queue that skipped a slot because there was no worktree has to say so,
+  # or the cron is green over a gate that never ran.
+  if [ "$sin_worktree" -gt 0 ]; then
+    echo "gate-queue: $sin_worktree slot(s) sin worktree: NO se gatearon" >&2
+    return 1
+  fi
+  return 0
 }
 
 case "${1:-}" in
   --enqueue) enqueue "${2:-}" "${3:-}" ;;
   --list)    list ;;
-  --run)     run "${2:-240}" ;;
+  --run)     run "${2:-240}"; exit $? ;;
   # WITHOUT ARGUMENTS IT RUNS THE QUEUE: this is how the cron calls it
   # (a cron job runs a script with no arguments), and a script that only
   # printed the usage would leave the queue standing still.
-  "")        run 240 ;;
+  "")        run 240; exit $? ;;
   *) echo "usage: gate-queue.sh --enqueue <issue> <sha> | --list | --run [min]" >&2; exit 2 ;;
 esac
 exit 0

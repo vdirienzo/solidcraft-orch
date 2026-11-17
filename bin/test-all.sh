@@ -41,6 +41,8 @@ done
 # directory or the loop's scripts do not run anywhere else. They are
 # skipped by --fast and reported as failures otherwise.
 HEAVY="test-slot-parallelism.sh test-deploy-drift.sh test-publish-pr.sh test-state-split.sh test-briefs.sh"
+# The gate queue is not heavy (nothing compiles: the gate is a stub), but it
+# needs its own ORCH_DIR and its own worktrees, so it runs alone.
 
 suites=()
 while IFS= read -r f; do
