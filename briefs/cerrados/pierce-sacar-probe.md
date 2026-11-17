@@ -1,3 +1,6 @@
+> **Este brief esta retirado (2026-11-17): el PR #11388 ya fue MERGEADO** en upstream
+> ("Sketch: groundwork for pierce constraints, no UI yet", #3599). El probe que este
+> brief mandaba borrar ya no existe: `crates/engine/tests/pierce_probe.rs` no esta.
 # Brief: sacar el archivo de debug del PR #11388 (el pierce)
 
 **Tarea mecánica de 6 comandos. No explores el repo.** El archivo a borrar está abajo y el

@@ -1,3 +1,7 @@
+> **Este brief esta retirado (2026-11-17): el trabajo ya esta en upstream.** El
+> boton de dependientes esta implementado, el texto
+> `ui.dependents_select_first` esta en los catalogos y el test real es
+> `crates/ui-egui/src/timeline_dependents_tests.rs`.
 # Brief LITERAL: el botón "Dependents" de INSPECT > HISTORY (timeline.dependents)
 
 **NO EXPLORES EL REPO.** El código que hay que escribir está más abajo, literal, con el archivo y

@@ -4,7 +4,7 @@
 # manejaba el orquestador. 49 scripts y ningun mapa: nadie puede responder "que sigue"
 # ni "donde se trabo" sin reconstruir el estado a mano.
 #
-# QUE ES: la DECLARACION del proceso de un issue (12 nodos) con sus aristas, sus
+# QUE ES: la DECLARACION del proceso de un issue (15 nodos) con sus aristas, sus
 # precondiciones y que hacer en cada fallo.
 # QUE NO ES: un framework. Este archivo no ejecuta nada. Quien ejecuta es
 # bin/workflow-runner.sh (UN nodo elegible; NUNCA lo que compila Rust) y los crons
@@ -45,6 +45,7 @@ senales:
   - pr_listo_para_verificar          # hay un PR no-draft con veredicto verde en su head
   - cola_no_vacia                    # gates/queue.txt tiene al menos una entrada
   - slot_sin_veredicto_efectivo      # hay un slot con scope.verdict y sin scope.effective.verdict
+  - tarea_pendiente                   # hay un pedido del maintainer en state/pending_tasks.json
 
 # ---------------------------------------------------------------------------
 # LOS NODOS
@@ -171,6 +172,27 @@ nodos:
       El brief al que implementa lleva el codigo a aplicar con su numero de linea;
       el agente no investiga: aplica. El test dirigido tiene que pasar.
 
+  - id: dup-scan
+    titulo: "Comprobar que este PR no duplica otro abierto"
+    agente: false
+    script: "bin/dup-scan.sh"
+    interprete: bash
+    lee:
+      - "los PRs abiertas del upstream (title + body + parche)"
+      - "el parche de la rama del slot"
+    escribe: []
+    precondiciones:
+      - "el fix esta commiteado en la rama del slot y todavia no se abrio el PR"
+    si_falla: escalar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      Un PR que duplica otro abierto no se publica: se cierra el nuestro. El detector
+      mira el PARCHE, no la prosa: un competidor que describe el fallo en prosa es
+      invisible para el guard del claim y visible para este. bin/publish-pr.sh lo
+      corre antes de abrir el PR.
+
   - id: draft-pr
     titulo: "PR en DRAFT (el draft ES el claim)"
     agente: true
@@ -191,6 +213,50 @@ nodos:
     notas: >-
       El draft se abre DESPUES del commit y ANTES del gate: el draft es lo que mantiene
       vivo el claim de 72 h. Un draft sin pushes 72 h puede ser tomado por otro.
+
+  - id: comment-watch
+    titulo: "Leer los comentarios del maintainer"
+    agente: false
+    script: "bin/comment_watch.py"
+    interprete: python3
+    lee:
+      - "GitHub: comentarios de los issues y PRs que seguimos"
+      - "las reviews de los PRs (estado y cuerpo)"
+    escribe:
+      - "state/pending_tasks.json"
+      - "state/comments/"
+    precondiciones: []
+    si_falla: reintentar
+    cron: "*/15 * * * *"
+    cron_job: solidcraft-comment-watch
+    compilacion_pesada: "no"
+    notas: >-
+      Compara los comentarios contra su snapshot y saca SOLO el delta. No gasta tokens:
+      no llama al modelo. Un comentario de un bot no es una tarea, y el de un tercero
+      llega al agente marcado como no confiable. El registro de los crones es
+      bin/crons.txt y el validador comprueba que los dos digan lo mismo.
+
+  - id: revisar-comentarios
+    titulo: "Atender el pedido del maintainer"
+    agente: true
+    script: null
+    lee:
+      - "state/pending_tasks.json"
+      - "GitHub: el comentario pedido, completo (no el resumen)"
+    escribe:
+      - "un commit en la rama del slot"
+    precondiciones:
+      - "hay una tarea pendiente en state/pending_tasks.json"
+    si_falla: esperar
+    cron: null
+    cron_job: null
+    compilacion_pesada: "no"
+    notas: >-
+      Un comentario del maintainer con un pedido concreto es una TAREA, no una opinion.
+      Si cambia el ALCANCE de lo que se esta haciendo, es un corte: se para y se
+      re-planifica. Tope: 3 rondas de repair por PR; al superarlas se PREGUNTA en vez de
+      gastar. El repair tiene su propio presupuesto de iteraciones, mas bajo que el de
+      un issue.
 
   - id: pipeline
     titulo: "Pipeline del orquestador (body, cola y ready)"
@@ -386,7 +452,10 @@ flujo:
     - causa-raiz
     - test-red
     - fix
+    - dup-scan
     - draft-pr
+    - comment-watch
+    - revisar-comentarios
     - pipeline
     - gate-queue
     - gate
@@ -416,14 +485,34 @@ flujo:
       si_no: "reintentar una vez; si no deja un commit, escalar"
 
     - de: fix
-      a: draft-pr
+      a: dup-scan
       si: "el fix esta commiteado, pusheado al fork y el test dirigido pasa"
       si_no: "reintentar"
 
+    - de: dup-scan
+      a: draft-pr
+      si: "no hay ningun PR abierto con el mismo parche"
+      si_no: "escalar: el PR es un duplicado, se cierra el nuestro"
+
     - de: draft-pr
-      a: pipeline
+      a: comment-watch
       si: "el PR en draft esta abierto con 'Fixes #N' en el titulo y en el body"
       si_no: "escalar: el draft es el claim y sin el se pierde el issue"
+
+    - de: comment-watch
+      a: revisar-comentarios
+      si: "el watcher imprimo algo: hay un comentario que atender"
+      si_no: "seguir: no hay pedidos nuevos"
+
+    - de: comment-watch
+      a: pipeline
+      si: "el watcher no imprimo nada: no hay pedidos que atender"
+      si_no: "seguir: no hay pedidos nuevos"
+
+    - de: revisar-comentarios
+      a: pipeline
+      si: "la tarea quedo atendida (hecho) o descartada con su razon"
+      si_no: "preguntar en el PR y esperar: no se pudo aplicar en el presupuesto"
 
     - de: pipeline
       a: gate-queue
