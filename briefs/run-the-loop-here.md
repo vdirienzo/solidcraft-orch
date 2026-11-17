@@ -41,24 +41,15 @@ ln -sfn /home/user/Projects/solidcraft-orch/solidcraft-orch ~/.local/share/solid
 #     SIN esto, gate.sh y los checks que leen el repo.compile fallan.
 sudo ln -sfn /home/user/Projects/solidcraft-orch /home/user/solidcraft
 
-# 2.3 El estado, partido por concepto. EL BOOTSTRAP NO EXISTE: merge-state.sh --split
-#     exige un state/manifest.json previo, y sin el se niega (rc=3).
+# 2.3 El estado, partido por concepto. El bootstrap lo crea:
 O=~/.local/share/solidcraft-orch
-mkdir -p "$O/state"
-cat > "$O/state/manifest.json" <<'EOF'
-{"version": 1, "generated_at": "", "order": ["slots", "open_prs", "gates", "claims", "abandoned"],
- "groups": {"meta": [], "prs": ["open_prs"], "slots": ["slots"], "gates": ["gates"],
-            "claims": ["claims", "abandoned"], "policy": [], "notes": []}}
-EOF
-cat > "$O/state.json" <<'EOF'
-{"slots": {}, "open_prs": [], "gates": {}, "claims": {}, "abandoned": []}
-EOF
-ORCH_DIR="$O" bash "$O/bin/merge-state.sh" --split
+ORCH_DIR="$O" bash "$O/bin/merge-state.sh" --bootstrap
 ORCH_DIR="$O" bash "$O/bin/merge-state.sh" --check     # tiene que dar rc=0
 ```
 
-**Sin el manifest, las claves caen todas en `notes.json`**: el split es util solo si cada
-concepto tiene su grupo.
+**El bootstrap no pisa un estado que ya existe**: sale con rc=3 y lo dice. Antes de este
+comando no habia forma de empezar (el `--split` exige un `state/manifest.json` previo, y
+sin el se negaba con un mensaje que no decia como arreglarlo).
 
 ```bash
 # 2.4 El `gh` de mentira. FUERA del PATH (regla 4 del repo), se elige con GH_BIN.

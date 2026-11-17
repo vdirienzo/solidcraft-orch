@@ -623,6 +623,37 @@ else
   no "el --split que falla no deja temporales tirados ($basura)"
 fi
 
+# --- el bootstrap de una maquina nueva ---------------------------------------
+# NO habia forma de empezar: el --split exige un state/manifest.json previo y
+# sin el se niega con un mensaje que no dice como arreglarlo. Y sin el manifiesto
+# con los grupos puestos, TODAS las claves caen en notes.json.
+BOOT="$TMP/boot"
+mkdir -p "$BOOT"
+cp "$SRC" "$BOOT/merge-state.sh"
+ORCH_DIR="$BOOT" bash "$BOOT/merge-state.sh" --bootstrap >/dev/null 2>&1
+if [ -f "$BOOT/state.json" ] && [ -f "$BOOT/state/manifest.json" ] && [ -f "$BOOT/state/published.sha256" ]; then
+  ok "el bootstrap crea el estado, el manifiesto y el hash"
+else
+  no "el bootstrap crea el estado, el manifiesto y el hash" "$(ls "$BOOT" 2>&1)"
+fi
+ORCH_DIR="$BOOT" bash "$BOOT/merge-state.sh" --check >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+  ok "el estado recien creado pasa el --check (se reconstruye identico)"
+else
+  no "el estado recien creado pasa el --check (se reconstruye identico)"
+fi
+if [ -f "$BOOT/state/prs.json" ] && [ -f "$BOOT/state/slots.json" ] && [ -f "$BOOT/state/gates.json" ]; then
+  ok "el bootstrap reparte las claves por concepto (no todas en notes.json)"
+else
+  no "el bootstrap reparte las claves por concepto (no todas en notes.json)" "$(ls "$BOOT/state" 2>&1)"
+fi
+ORCH_DIR="$BOOT" bash "$BOOT/merge-state.sh" --bootstrap >/dev/null 2>&1
+if [ $? -eq 3 ]; then
+  ok "el bootstrap NO pisa un estado que ya existe (rc=3)"
+else
+  no "el bootstrap NO pisa un estado que ya existe (rc=3)"
+fi
+
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit 0
