@@ -300,6 +300,55 @@ else
   bad "el rival con el issue en el titulo y en el body lo reclama" "rc=$RC"
 fi
 
+# THE THREE CASES THAT MADE THE ARBITER SAY "TAKEN" FOR A FREE ISSUE
+# (2026-11-17). The three of them come from upstream's own parser:
+#   - the noise: upstream strips the HTML comments and the code blocks
+#     before it parses (stripNoise, pr-checks.js:25-31), so a "Fixes #N"
+#     INSIDE A CODE BLOCK is an example, not a claim;
+#   - another repository: upstream skips "owner/repo#N" when the repo is
+#     not ours (parseClosing);
+#   - our own pull request does not claim its own number (claim.js:297).
+# Each of them costs a whole slot of the machine when it goes wrong.
+# The bodies with real newlines: the write_fixture takes the body as one
+# argument, and a literal "\n" would be two characters, not a line break.
+CUERPO_EN_BLOQUE=$'```\nFixes #361\n```'
+CUERPO_CON_RUIDO=$'antes\n```\nFixes #362\n```\ndespues\nFixes #361'
+write_fixture "1700|un titulo sin issue|$CUERPO_EN_BLOQUE"
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "un 'Fixes #361' dentro de un bloque de codigo NO lo reclama (el upstream saca el ruido)"
+else
+  bad "un 'Fixes #361' dentro de un bloque de codigo NO lo reclama" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+write_fixture '1701|otro titulo|Fixes other/repo#361'
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "una referencia a OTRO repositorio no lo reclama"
+else
+  bad "una referencia a OTRO repositorio no lo reclama" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+write_fixture '361|propio|Fixes #361'
+claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "un PR no se reclama a si mismo (claim.js:297)"
+else
+  bad "un PR no se reclama a si mismo (claim.js:297)" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# And the real claim, with the noise around it, IS a claim.
+write_fixture "1702|otro titulo mas|$CUERPO_CON_RUIDO"
+claim_verify 361
+if [ "$RC" -eq 1 ]; then
+  ok "el cierre real sigue reclamando aunque el cuerpo tenga ruido (rc=1)"
+else
+  bad "el cierre real sigue reclamando aunque el cuerpo tenga ruido" "rc=$RC"
+fi
+
 # The issue in the body with a closing verb: the rule of pr-checks.js.
 write_fixture '10826|Fix|Fixes #361'
 claim_verify 361

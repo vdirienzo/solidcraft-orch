@@ -118,6 +118,18 @@ LIMIT="${SC_PR_LIMIT:-2000}"
 # a closing verb, an optional colon, and then a LIST of issue references.
 # The '#' is mandatory in the body.
 #
+# THREE THINGS THE FIRST VERSION OF THIS FILTER GOT WRONG (2026-11-17), and
+# all three made the arbiter say TAKEN for an issue that is free - which
+# costs a whole slot of the machine:
+#   1. the NOISE was not stripped. Upstream strips the HTML comments and
+#      the code blocks before it parses (stripNoise, pr-checks.js:25-31), so
+#      a body with "Fixes #361" INSIDE A CODE BLOCK is free. Ours counted it.
+#   2. a reference to ANOTHER REPOSITORY was counted. Upstream skips
+#      "owner/repo#N" when the repo is not ours (parseClosing, the line
+#      `if (ref[1] && repoFullName && ref[1].toLowerCase() !== ...) continue`).
+#   3. the pull request's OWN number was counted. Upstream skips it
+#      (claim.js:297, `if (n === pull.number) continue`).
+#
 # The patterns have NO backslash and NO lookahead on purpose: the jq of gh
 # is gojq (the regexp of Go), where a lookahead does not exist. The rule of
 # the upstream is written as ONE pattern: the verb, then the items of the
@@ -126,14 +138,41 @@ LIMIT="${SC_PR_LIMIT:-2000}"
 # ("Fixes #10181, #10182" claims the two).
 TITLE_RE="(^|[[:space:](])#${ISSUE}([^0-9A-Za-z_]|\$)"
 BODY_RE="(?i)(?:^|[^0-9A-Za-z_])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*(?:(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+[[:space:]]*(?:,|and|&)[[:space:]]*)*(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#${ISSUE}([^0-9A-Za-z_]|\$)"
+# The repository of a reference: "owner/repo#N" only counts when it is ours.
+REPO_OWNER="${REPO%%/*}"
+REPO_NAME="${REPO#*/}"
 CLAIM_JQ="$(mktemp)"
 trap 'rm -f "$CLAIM_JQ"' EXIT
 cat >"$CLAIM_JQ" <<JQ
+# The noise of upstream's stripNoise (pr-checks.js:25-31): the HTML comments
+# and the code blocks are examples, not claims. The inline code is NOT
+# stripped: upstream's parseClosing keeps it.
+def sin_ruido:
+  gsub("<!--[^>]*-->"; "")
+  | gsub("\`\`\`[^<\`]*\`\`\`"; "")
+  | gsub("~~~[^<~]*~~~"; "");
+
+# A reference to ANOTHER repository is not a claim on ours (upstream skips
+# it in parseClosing). Ours counts, so it becomes the plain form; any other
+# repo-qualified reference to the issue is removed.
+def sin_otros_repos:
+  gsub("(?i)${REPO_OWNER}/${REPO_NAME}#${ISSUE}"; "#${ISSUE}")
+  | gsub("(?i)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#${ISSUE}"; "");
+
 .[] | select(
+    # the title: the rule of the claim bot (referencedIssues)
     ((.title // "") | test("${TITLE_RE}"))
     or
-    ((.body // "") | test("${BODY_RE}"))
-  ) | "\(.number)\t\(.author.login // "")"
+    # the body: the rule of the pull request check (parseClosing), with the
+    # noise out and the references to other repositories out
+    (((.body // "") | sin_ruido | sin_otros_repos) | test("${BODY_RE}"))
+  )
+  # a pull request does not claim ITSELF (claim.js:297: "if (n === pull.number)
+  # continue"): the PR whose number IS the issue we are asking about is not a
+  # holder of it. It is NOT about excluding OUR pull request from the hits:
+  # that is the rule of the same author, which is decided further down.
+  | select((.number | tostring) != "${ISSUE}")
+  | "\(.number)\t\(.author.login // "")"
 JQ
 
 # gh pr list (and not gh api) because the listing of the api returns the body
@@ -159,8 +198,16 @@ done <<<"$HITS"
 if [ "${#HIT_NUMBERS[@]}" -eq 0 ]; then
   # Distinguish "there is none" from "gh failed": check that the list of
   # pull requests could be read.
-  if [ -n "${HITS//[[:space:]]/}" ] || ! gh pr list --repo "$REPO" --state open --limit 1 --json number >/dev/null 2>&1; then
-    echo "VEREDICTO=ERROR no se pudo leer los PRs de $REPO (gh fallo?)" >&2
+  #
+  # THE PROBE USES THE SAME FILTER (2026-11-17). The probe used to ask for
+  # the numbers WITHOUT the filter: if the FILTER was what failed (a jq
+  # that does not understand the program, a pattern that does not compile),
+  # the probe answered "the list can be read", the hits were empty, and the
+  # arbiter said THE ISSUE IS FREE. That is the most expensive direction
+  # there is: the orchestrator takes an issue that somebody else holds.
+  if [ -n "${HITS//[[:space:]]/}" ] || ! gh pr list --repo "$REPO" --state open --limit 1 \
+        --json number,title,body,author --jq "$(cat "$CLAIM_JQ")" >/dev/null 2>&1; then
+    echo "VEREDICTO=ERROR no se pudo leer los PRs de $REPO (gh fallo, o el filtro no se pudo aplicar?)" >&2
     exit 2
   fi
   echo "issue=$ISSUE PRs que lo mencionan: (ninguno)"
