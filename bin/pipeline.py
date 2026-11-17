@@ -32,6 +32,30 @@ POR QUE EL CI DE GITHUB SE MIRA ADEMAS DEL GATE LOCAL (2026-11-07):
   mismo check de dos runs. El que vale es el MAS RECIENTE de cada nombre.
 
 Se corre desde un cron cada 5 minutos. Es idempotente: correrlo dos veces no rompe nada.
+
+QUE NO MIENTE (2026-11-17):
+  Este script corre cada 5 minutos, asi que sus silencios son los que hacen que
+  el mantenedor crea que algo esta pasando cuando no esta pasando nada. Por eso:
+    - un 'gh' que falla se ve (el comando, su rc y su stderr) y el rc LLEGA al
+      exit code (Regla 7 del repo: un veredicto que no llega al exit code es
+      peor que no tener veredicto);
+    - un veredicto de gate con el SHA CORTO se encuentra con el head completo
+      de la API (si no, el gate se reencola cada 5 minutos y el PR nunca llega
+      a ready);
+    - el comentario del veredicto lleva un marcador con el head sha y se
+      postea UNA vez, no cada 5 minutos;
+    - un 'gh pr ready' que falla se loguea y cuenta como problema;
+    - la lista de PRs sale de la API paginada (no de un --limit 30);
+    - el issue de un PR sale del titulo o de un verbo de cierre real, nunca de
+      un '#numero' suelto.
+
+  LOS CODIGOS DE SALIDA:
+    0  todo bien
+    1  la corrida ocurrio pero hubo problemas (un 'gh pr ready' que fallo, un
+       body que no se pudo editar, un comentario que no se pudo postear)
+    6  UNKNOWN: no se pudo leer la lista de PRs, asi que no se hizo nada. No es
+       un 'no': es un 'no se sabe' (RULES.md: un check que no pudo correr NO
+       es un rojo).
 """
 import json
 import os
@@ -70,26 +94,54 @@ def log(msg):
 # los que existentes): por eso es configurable y hay que verificar el binario.
 GH_BIN = os.environ.get("GH_BIN") or shutil.which("gh") or "gh"
 
+# El autor de nuestros PRs (el fork). La API no filtra por autor: el filtro se hace aca.
+AUTHOR = "vdirienzo"
+
+
+def recortar(texto, maximo=200):
+    """El texto en una linea y recortado: el log tiene que decir QUE fallo."""
+    t = " ".join(str(texto or "").split())
+    if len(t) > maximo:
+        t = t[:maximo] + "..."
+    return t or "(sin stderr)"
+
+
+def gh_run(*args, timeout=120):
+    """(rc, stdout, stderr) de la llamada a gh. Es el UNICO lugar que corre gh.
+
+    El rc NO se traga. Este script corre cada 5 minutos por cron: un 'gh' que
+    fallaba en silencio (por ejemplo, un corte de auth de GitHub) producia un
+    cron VERDE que no habia hecho nada.
+    """
+    try:
+        r = subprocess.run([GH_BIN, *args], capture_output=True, text=True,
+                           timeout=timeout)
+    except FileNotFoundError as exc:
+        return 127, "", f"no se pudo ejecutar {GH_BIN}: {exc}"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"la llamada a gh se paso de {timeout}s"
+    return r.returncode, r.stdout or "", r.stderr or ""
+
 
 def gh(*args, timeout=120):
-    r = subprocess.run([GH_BIN, *args], capture_output=True, text=True, timeout=timeout)
-    return r.stdout if r.returncode == 0 else ""
+    """(rc, stdout) de la llamada a gh.
+
+    Si el comando falla, el log dice QUE fallo (el comando, su rc y el stderr
+    recortado) y el rc queda a la vista de quien llama: la falla es visible.
+    """
+    rc, out, err = gh_run(*args, timeout=timeout)
+    if rc != 0:
+        log(f"gh fallo: {GH_BIN} {' '.join(args)} -> rc={rc}: {recortar(err)}")
+    return rc, out
 
 
-def gh_ok(*args, timeout=120):
-    """Como gh(), pero devuelve si el comando salio bien (no si el stdout tiene texto:
-    'gh pr ready' no imprime nada cuando funciona, asi que truthiness no sirve)."""
-    r = subprocess.run([GH_BIN, *args], capture_output=True, text=True, timeout=timeout)
-    return r.returncode == 0
+def issue_of(title, body):
+    """El issue que referencia el PR (o None si no se sabe).
 
-
-def issue_of(body, pr_num):
-    """El issue que referencia el PR. 'Fixes #N' y 'Addresses #N' valen; el numero solo."""
-    for pat in (r"(?:Fixes|Closes|Addresses|Refs)\s+#(\d+)", r"#(\d+)"):
-        m = re.search(pat, body or "")
-        if m:
-            return m.group(1)
-    return None
+    Ver el bloque de "EL ISSUE DE UN PR" mas abajo: sale del titulo o de un
+    verbo de cierre real, NUNCA de un '#numero' suelto.
+    """
+    return issue_de_cierre(body) or issue_del_titulo(title) or issue_referenciado(body)
 
 
 # --------------------------------------------------------------------------
@@ -248,14 +300,14 @@ def fetch_check_runs(sha, repo=REPO):
     """Los check-runs del HEAD SHA, uno por linea en JSON. (runs, error)"""
     if not sha:
         return [], "no se pudo leer el HEAD SHA"
-    r = subprocess.run(
-        [GH_BIN, "api", f"repos/{repo}/commits/{sha}/check-runs", "--paginate",
-         "--jq", ".check_runs[] | {name,status,conclusion,completed_at,started_at,id}"],
-        capture_output=True, text=True, timeout=180)
-    if r.returncode != 0:
-        return [], (r.stderr or "gh api fallo").strip().splitlines()[0] if r.stderr else "gh api fallo"
+    ruta = f"repos/{repo}/commits/{sha}/check-runs"
+    rc, raw, err = gh_run("api", ruta, "--paginate", "--jq",
+                          ".check_runs[] | {name,status,conclusion,completed_at,"
+                          "started_at,id}", timeout=180)
+    if rc != 0:
+        return [], f"'gh api {ruta}' fallo: rc={rc}: {recortar(err)}"
     runs = []
-    for linea in (r.stdout or "").splitlines():
+    for linea in (raw or "").splitlines():
         linea = linea.strip()
         if not linea:
             continue
@@ -311,6 +363,91 @@ def strip_noise(body, inline_code=True):
     if inline_code:
         text = RE_CODIGO_EN_LINEA.sub("", text)
     return text
+
+
+# --------------------------------------------------------------------------
+# EL ISSUE DE UN PR (2026-11-17)
+#
+# De donde sale el issue, en este orden:
+#   1. un verbo de CIERRE real en el body ('Fixes #12', 'Closes #12',
+#      'Resolves #12'). Es lo que cierra el issue, y es lo que leen el bot de
+#      upstream (scripts/pr-checks/pr-checks.js, parseClosing) y el bot del
+#      claim (scripts/claim/claim.js).
+#   2. el issue del TITULO ('<summary> (#12)'): es el contrato del claim
+#      (RULES.md: el bot lee '#N' en el titulo).
+#   3. una REFERENCIA que no cierra ('Addresses #12', 'Refs #12').
+#
+# NUNCA de un '#numero' suelto: un '#3' en un bloque de codigo, en un heading
+# o en un issue citado de paso NO es el issue del PR. El pipeline antes tomaba
+# ese numero y lo escribia en el body de un PR publico ('Addresses #3'), o sea
+# publicaba un numero que el autor nunca dijo.
+#
+# Y la distincion 'cierra' vs 'menciona' es la de bin/verify-pr.sh: un body
+# que solo MENCIONA el issue puede ser un fix parcial, y escribirle
+# 'Fixes #N' le cerraria un issue al autor por sorpresa.
+# --------------------------------------------------------------------------
+
+# Un verbo de cierre REAL: el '#' es obligatorio (como en el parser de upstream:
+# 'fix 3 problems' no cierra nada).
+RE_CIERRE = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?[ \t]+#(\d{1,7})\b", re.I)
+# Una referencia que NO cierra el issue.
+RE_REFERENCIA = re.compile(
+    r"\b(?:addresses|refs?|see|part of|related to|follows up)\b:?[ \t]+#(\d{1,7})\b",
+    re.I)
+# Cualquier numero de issue mencionado en el texto.
+RE_NUMERO = re.compile(r"#(\d{1,7})\b")
+# El issue del titulo: '<summary> (#12)'.
+RE_TITULO_PAREN = re.compile(r"\(#(\d{1,7})\)\s*$")
+# O cualquier '#12' del titulo (la misma regla que el bot de upstream).
+RE_TITULO_CUALQUIERA = re.compile(r"(?:^|[\s(])#(\d{1,7})\b")
+
+
+def issue_del_titulo(title):
+    """El issue del titulo del PR: '<summary> (#12)'."""
+    m = RE_TITULO_PAREN.search(title or "")
+    if m:
+        return m.group(1)
+    m = RE_TITULO_CUALQUIERA.search(title or "")
+    return m.group(1) if m else None
+
+
+def issue_de_cierre(body):
+    """El issue que el body CIERRA ('Fixes #12'). None si no cierra ninguno."""
+    m = RE_CIERRE.search(strip_noise(body))
+    return m.group(1) if m else None
+
+
+def issue_referenciado(body):
+    """El issue que el body solo MENCIONA ('Addresses #12', 'Refs #12')."""
+    m = RE_REFERENCIA.search(strip_noise(body))
+    return m.group(1) if m else None
+
+
+def menciona_issue(body):
+    """True si el body menciona ALGUN numero de issue ('#12'), aunque sea de paso.
+
+    El cuerpo NO se limpia del ruido: un '#12' dentro de un bloque de codigo
+    tambien es una mencion. Ante la duda, el estado por defecto es 'no se
+    toco el body del autor' (no se le cierra un issue por sorpresa).
+    """
+    return bool(RE_NUMERO.search(body or ""))
+
+
+def reparar_body(body, title):
+    """El body con la referencia al issue que le falta, o None si no hay que tocarlo.
+
+    Solo se repara un body que NO menciona ningun issue. Lo que se escribe es
+    'Fixes #N' (el contrato del claim: RULES.md pide 'Fixes #N' en el body),
+    no 'Addresses #N' (que no cierra nada).
+    """
+    if menciona_issue(body):
+        return None
+    iss = issue_del_titulo(title)
+    if not iss:
+        return None
+    base = (body or "").rstrip()
+    return f"{base}\n\nFixes #{iss}\n" if base else f"Fixes #{iss}\n"
 
 
 # El resumen que CodeRabbit pega al final del body: no es del autor del PR y menciona
@@ -402,8 +539,51 @@ def contar_ci(conteo, rojos, pendientes, num, estado):
         pendientes.append(num)
 
 
+# EL COMPARADOR DE SHAs (2026-11-17): el mismo que bin/gate.sh.
+#
+# Dos SHAs son el mismo commit cuando uno es el prefijo del otro y el prefijo
+# tiene al menos 7 chars: un SHA de 7 chars es el prefijo de MUCHOS commits.
+# El gate escribe el SHA que le pasaron (a veces corto: en los veredictos del
+# disco hay SHAs de 9 chars) y la API da el head completo (40 chars). Con la
+# comparacion exacta el veredicto no se encuentra NUNCA y el PR no llega
+# nunca a ready.
+MIN_SHA = 7
+
+
+def same_sha(a, b):
+    """True si a y b son el mismo commit (uno es el prefijo del otro)."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(b) >= MIN_SHA and a.startswith(b):
+        return True
+    if len(a) >= MIN_SHA and b.startswith(a):
+        return True
+    return False
+
+
+def _leer(path):
+    """El contenido de un archivo, o None si no se pudo leer."""
+    try:
+        with open(path, errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _sha_del_verdicto(txt):
+    """El valor de 'SHA=' de un veredicto (la primera linea que lo trae)."""
+    m = re.search(r"^SHA=(.*)$", txt or "", re.M)
+    return m.group(1).strip() if m else ""
+
+
 def verdict_for(sha):
-    """El veredicto de gate de ese SHA, buscado en todos los slots por SHA (no por nombre)."""
+    """El veredicto de gate de ese SHA, buscado en todos los slots por SHA (no por nombre).
+
+    El SHA del veredicto y el del PR no siempre tienen la misma longitud: se
+    comparan como PREFIJO (same_sha, como en bin/gate.sh).
+    """
     if not sha:
         return None
     for slot in sorted(os.listdir(GATES)) if os.path.isdir(GATES) else []:
@@ -411,33 +591,27 @@ def verdict_for(sha):
         if not os.path.isfile(f):
             continue
         crudo = f
-        try:
-            txt = open(f, errors="replace").read()
-        except OSError:
+        txt = _leer(f)
+        if txt is None:
             continue
-        if f"SHA={sha}" not in txt:
+        if not same_sha(_sha_del_verdicto(txt), sha):
             continue
         # el veredicto EFECTIVO es el que cuenta: el crudo sale ROJO por los fallos
         # preexistentes de origin/main. gate-baseline.sh lo deja al lado.
         ef = f.replace("scope.verdict", "scope.effective.verdict")
-        if os.path.isfile(ef):
-            try:
-                etxt = open(ef, errors="replace").read()
-            except OSError:
-                etxt = ""
-            if f"SHA={sha}" in etxt:
-                txt = etxt
-                crudo = ef
+        etxt = _leer(ef) if os.path.isfile(ef) else None
+        if etxt and same_sha(_sha_del_verdicto(etxt), sha):
+            txt = etxt
+            crudo = ef
         def grab(key, default=""):
             m = re.search(rf"^{key}=(.*)$", txt, re.M)
             return m.group(1).strip() if m else default
         status = grab("GATE_STATUS")
         if not status:
             # el efectivo puede no traer GATE_STATUS: se hereda del crudo
-            try:
-                status = re.search(r"^GATE_STATUS=(.*)$", open(crudo, errors="replace").read(), re.M).group(1).strip()
-            except AttributeError:
-                status = ""
+            crudo_txt = _leer(crudo) or ""
+            m = re.search(r"^GATE_STATUS=(.*)$", crudo_txt, re.M)
+            status = m.group(1).strip() if m else ""
         return {
             "slot": slot,
             "status": status,
@@ -459,15 +633,158 @@ def enqueued_issues():
     return out
 
 
-def main():
-    raw = gh("pr", "list", "--repo", REPO, "--author", "vdirienzo", "--state", "open",
-             "--limit", "30",
-             "--json", "number,title,isDraft,body,headRefName,headRefOid,labels")
+# --------------------------------------------------------------------------
+# LA LISTA DE PRs (2026-11-17)
+#
+# La lista sale de la API paginada, no de 'gh pr list --limit 30': ese limite
+# hacia invisibles los PRs pasados del #30 (para el pipeline y para el
+# resumen), y 'gh pr list' ademas corta en 500 y deja pasar algunos
+# (prompts/wave-prompt.md: hay que paginar con 'gh api --paginate').
+#
+# 'gh api --paginate --slurp' devuelve un ARRAY DE ARRAYS (una pagina por
+# elemento) y la API no filtra por autor: el filtro se hace aca.
+# --------------------------------------------------------------------------
+def _aplanar(paginas):
+    """Una lista de paginas (o una pagina) en una sola lista de PRs."""
+    out = []
+    for pagina in paginas if isinstance(paginas, list) else [paginas]:
+        if isinstance(pagina, list):
+            out.extend(pagina)
+        elif isinstance(pagina, dict):
+            out.append(pagina)
+    return out
+
+
+def _normalizar_pr(p):
+    """Un PR de la API con los mismos campos que usaba 'gh pr list --json'."""
+    head = p.get("head") or {}
+    labels = []
+    for l in (p.get("labels") or []):
+        if isinstance(l, dict):
+            labels.append({"name": l.get("name") or ""})
+        elif isinstance(l, str):
+            labels.append({"name": l})
+    return {
+        "number": p.get("number"),
+        "title": p.get("title") or "",
+        "body": p.get("body") or "",
+        "isDraft": bool(p.get("draft")),
+        "headRefName": head.get("ref") or "",
+        "headRefOid": head.get("sha") or "",
+        "labels": labels,
+    }
+
+
+def listar_prs():
+    """(prs, error): los PRs abiertos NUESTROS. (error None = se pudo leer)
+
+    Si la lista no se puede leer, el error dice QUE fallo (el comando, su rc y
+    su stderr): un 'gh' que falla no es 'no hay PRs'.
+    """
+    ruta = f"repos/{REPO}/pulls?state=open&per_page=100"
+    rc, raw, err = gh_run("api", ruta, "--paginate", "--slurp")
+    if rc != 0:
+        return [], (f"'gh api {ruta} --paginate --slurp' fallo: rc={rc}: "
+                    f"{recortar(err)}")
     try:
-        prs = json.loads(raw or "[]")
-    except json.JSONDecodeError:
-        log("no pude leer la lista de PRs")
-        return 0
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError as exc:
+        return [], (f"'gh api {ruta} --paginate --slurp' respondio algo que no "
+                    f"es JSON: {exc}")
+    prs = [_normalizar_pr(p) for p in _aplanar(data)
+           if isinstance(p, dict)
+           and ((p.get("user") or {}).get("login")) == AUTHOR]
+    return prs, None
+
+
+# --------------------------------------------------------------------------
+# EL COMENTARIO DEL VERDICTO (2026-11-17)
+#
+# El comentario lleva un marcador con el head sha: el mismo patron que
+# bin/ping-ready.sh ('<!-- ping-ready: sha=%s -->'). Con el marcador el
+# comentario es idempotente: si ya esta en el PR, no se vuelve a postear. Sin
+# el marcador, este cron postea un comentario identico cada 5 minutos en un PR
+# publico.
+#
+# Y la clave de idempotencia se escribe ANTES del efecto: si el proceso se
+# muere entre la clave y el comentario, la pasada siguiente ve la clave y no
+# repite el efecto.
+# --------------------------------------------------------------------------
+MARCADOR_VERDICT = "<!-- pipeline-verdict: sha=%s -->"
+CLAVES = f"{ORCH}/pipeline/verdicts"
+
+
+def _clave(num, sha):
+    return f"{CLAVES}/pr-{num}-{sha}.done"
+
+
+def clave_ya_escrita(num, sha):
+    """True si la clave del veredicto de este (PR, sha) ya esta escrita."""
+    return os.path.isfile(_clave(num, sha))
+
+
+def escribir_clave(num, sha):
+    """La clave de idempotencia, escrita ANTES del efecto. (ok, error)
+
+    La escritura es atomica (un temporal + os.replace): un crash a mitad de
+    escritura deja el estado corrupto.
+    """
+    try:
+        os.makedirs(CLAVES, exist_ok=True)
+        final = _clave(num, sha)
+        tmp = f"{final}.tmp.{os.getpid()}"
+        with open(tmp, "w") as fh:
+            fh.write(f"pr={num} sha={sha} at={time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+        os.replace(tmp, final)
+        return True, None
+    except OSError as exc:
+        return False, str(exc)
+
+
+def borrar_clave(num, sha):
+    """La clave se borra si el efecto NO se pudo hacer: lo que no se hizo se
+    vuelve a hacer en la pasada siguiente (fallo seguro)."""
+    try:
+        os.remove(_clave(num, sha))
+    except OSError:
+        pass
+
+
+def ya_comentado(num, sha):
+    """(True|False|None, detalle): si el PR ya tiene el comentario del veredicto
+    de este SHA.
+
+    None = no se pudo saber (GitHub no respondio): ante la duda NO se postea
+    (un comentario repetido cada 5 minutos en un PR publico es peor que un
+    comentario que falta).
+    """
+    marcador = MARCADOR_VERDICT % sha
+    ruta = f"repos/{REPO}/issues/{num}/comments?per_page=100"
+    rc, raw, err = gh_run("api", ruta, "--paginate", "--slurp")
+    if rc != 0:
+        return None, f"'gh api {ruta}' fallo: rc={rc}: {recortar(err)}"
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError as exc:
+        return None, f"la respuesta de 'gh api {ruta}' no es JSON: {exc}"
+    for c in _aplanar(data):
+        if not isinstance(c, dict):
+            continue
+        login = ((c.get("user") or {}).get("login")) or ""
+        if login and login != AUTHOR:
+            continue      # el comentario de otro no es nuestro
+        if marcador in (c.get("body") or ""):
+            return True, "el marcador ya esta en un comentario del PR"
+    return False, "no hay ningun comentario con el marcador"
+
+
+def main():
+    prs, error = listar_prs()
+    if error is not None:
+        # UNKNOWN, no un 'no': no se pudo leer la lista, asi que no se hizo nada.
+        # Y el rc tiene que llegar al exit code (Regla 7 del repo).
+        log(f"no pude leer la lista de PRs: {error}")
+        return 6
 
     drafts = [p for p in prs if p.get("isDraft")]
     log(f"PRs nuestros abiertos: {len(prs)} ({len(drafts)} en draft)")
@@ -475,15 +792,18 @@ def main():
     queued = enqueued_issues()
     verds = {}
     pendientes = 0
+    # Los problemas de la corrida: cada uno sale en el log Y en el exit code.
+    problemas = []
 
     # El resumen de CI: el numero que al mantenedor le importa (a quien pinguear).
     ci_conteo = {VERDE: 0, PENDIENTE: 0, ROJO: 0}
     ci_rojos = []
     ci_pendientes = []
 
-    for pr in sorted(prs, key=lambda p: p["number"]):
-        num = pr["number"]
+    for pr in sorted(prs, key=lambda p: (p.get("number") or 0)):
+        num = pr.get("number")
         body = pr.get("body") or ""
+        title = pr.get("title") or ""
         sha = pr.get("headRefOid") or ""
 
         # 1. el estado del CI de GitHub en el HEAD SHA. Se mira en TODOS los PRs, no solo en
@@ -492,6 +812,7 @@ def main():
             runs, error = fetch_check_runs(sha)
             if error:
                 estado, detalle_ci = PENDIENTE, f"no pude leer los check-runs: {error}"
+                problemas.append(f"PR #{num}: no pude leer los check-runs: {error}")
             else:
                 estado, detalle_ci = evaluar_check_runs(runs)
         else:
@@ -501,9 +822,11 @@ def main():
             contar_ci(ci_conteo, ci_rojos, ci_pendientes, num, estado)
             continue
 
-        iss = issue_of(body, num)
+        iss = issue_of(title, body)
         if not iss:
-            log(f"  PR #{num}: el body no referencia ningun issue -> no lo encolo")
+            # Sin issue no se encola el gate: el slot es POR issue.
+            log(f"  PR #{num}: no se sabe que issue es (ni el titulo lo nombra ni el "
+                f"body lo cierra) -> no lo encolo")
             contar_ci(ci_conteo, ci_rojos, ci_pendientes, num, PENDIENTE)
             continue
 
@@ -531,12 +854,18 @@ def main():
                 f"upstream la va a rechazar) -> queda en draft y la reescribe el autor")
             estado = PENDIENTE
             detalle_ci = "la linea 'Changes a default:' esta mal formada"
-        if not re.search(r"(?:Fixes|Closes|Addresses|Refs)\s+#\d+", body):
-            # 'Addresses #N' es honesto: no reclama el cierre del issue.
-            nuevo = body.rstrip() + f"\n\nAddresses #{iss}\n"
-            if gh("pr", "edit", str(num), "--repo", REPO, "--body", nuevo):
-                log(f"  PR #{num}: le agregue la referencia al issue #{iss}")
+        # La referencia al issue: SOLO si el body no menciona ninguno. Un body que solo
+        # menciona el issue puede ser un fix parcial, y escribirle 'Fixes #N' le
+        # cerraria un issue al autor por sorpresa.
+        nuevo = reparar_body(body, title)
+        if nuevo is not None:
+            rc, _ = gh("pr", "edit", str(num), "--repo", REPO, "--body", nuevo)
+            if rc == 0:
+                log(f"  PR #{num}: le agregue 'Fixes #{issue_del_titulo(title)}' "
+                    f"(el body no mencionaba ningun issue)")
                 edite = True
+            else:
+                problemas.append(f"PR #{num}: 'gh pr edit' fallo (rc={rc})")
         if edite:
             # Se edito el body: el workflow pr-checks vuelve a correr (types: edited) y su
             # check todavia no existe. El CI que acabamos de leer judged el body VIEJO.
@@ -546,8 +875,13 @@ def main():
         contar_ci(ci_conteo, ci_rojos, ci_pendientes, num, estado)
 
         if not sha:
-            sha = gh("pr", "view", str(num), "--repo", REPO, "--json", "headRefOid")
-            sha = (json.loads(sha).get("headRefOid") if sha else None) or ""
+            rc, raw = gh("pr", "view", str(num), "--repo", REPO, "--json", "headRefOid")
+            sha = ""
+            if rc == 0 and raw:
+                try:
+                    sha = (json.loads(raw).get("headRefOid")) or ""
+                except json.JSONDecodeError:
+                    sha = ""
         v = verdict_for(sha)
         if v is None:
             # 3. sin veredicto: encolar, salvo que la caja ya tenga enough trabajo
@@ -586,14 +920,58 @@ def main():
             log(f"  PR #{num} (issue #{iss}): gate local verde pero el CI de GitHub esta "
                 f"{estado.upper()} ({detalle_ci}) -> sigue en draft")
             continue
-        if gh_ok("pr", "ready", str(num), "--repo", REPO):
-            log(f"  PR #{num} (issue #{iss}): gate VERDE y CI de GitHub VERDE -> pasado a ready")
-        cuerpo = (f"Gate local en verde y CI de GitHub en verde.\n\n"
+        # 'gh pr ready' que falla se loguea y cuenta como problema: y NO se postea
+        # el comentario (el comentario dice 'verde': seria mentira).
+        rc, _ = gh("pr", "ready", str(num), "--repo", REPO)
+        if rc != 0:
+            log(f"  PR #{num} (issue #{iss}): 'gh pr ready' fallo -> el PR sigue en "
+                f"draft y no comento el veredicto")
+            problemas.append(f"PR #{num}: 'gh pr ready' fallo (rc={rc})")
+            continue
+        log(f"  PR #{num} (issue #{iss}): gate VERDE y CI de GitHub VERDE -> pasado a ready")
+
+        # El comentario del veredicto: con marcador, y UNA sola vez por head sha.
+        marcador = MARCADOR_VERDICT % sha
+        if clave_ya_escrita(num, sha):
+            log(f"  PR #{num} (issue #{iss}): el veredicto de este SHA ya se habia "
+                f"comentado -> no lo repito")
+            continue
+        ya, detalle = ya_comentado(num, sha)
+        if ya is None:
+            # No se pudo saber si ya esta: ante la duda no se postea (un comentario
+            # repetido cada 5 minutos en un PR publico es peor que uno que falta).
+            log(f"  PR #{num} (issue #{iss}): no se pudo saber si el veredicto ya estaba "
+                f"comentado ({detalle}) -> no lo posteo ahora")
+            problemas.append(f"PR #{num}: no se pudo leer los comentarios del PR")
+            continue
+        if ya:
+            escribir_clave(num, sha)
+            log(f"  PR #{num} (issue #{iss}): el veredicto de este SHA ya estaba en el PR "
+                f"-> no lo repito")
+            continue
+        # La clave de idempotencia, ANTES del efecto.
+        ok, err = escribir_clave(num, sha)
+        if not ok:
+            log(f"  PR #{num} (issue #{iss}): no se pudo escribir la clave del veredicto "
+                f"({err}) -> no lo posteo (mejor no repetir que duplicar)")
+            problemas.append(f"PR #{num}: no se pudo escribir la clave del veredicto")
+            continue
+        cuerpo = (f"{marcador}\n\n"
+                  f"Gate local en verde y CI de GitHub en verde.\n\n"
                   f"- SHA: `{sha}`\n"
                   f"- Veredicto: `{v['verdict']}` (GATE_STATUS: {v['status']})\n"
                   f"- Fallos nuevos: {v['new_failures'] or '0'}\n"
                   f"- Fallos preexistentes en origin/main: {v['preexisting'] or '0'}\n")
-        gh("pr", "comment", str(num), "--repo", REPO, "--body", cuerpo)
+        rc, _ = gh("pr", "comment", str(num), "--repo", REPO, "--body", cuerpo)
+        if rc != 0:
+            # Lo que no se hizo, se vuelve a hacer en la pasada siguiente.
+            borrar_clave(num, sha)
+            log(f"  PR #{num} (issue #{iss}): 'gh pr comment' fallo -> no quedo el "
+                f"comentario del veredicto")
+            problemas.append(f"PR #{num}: 'gh pr comment' fallo (rc={rc})")
+            continue
+        log(f"  PR #{num} (issue #{iss}): deje el comentario del veredicto con el "
+            f"marcador del head sha")
 
     log(f"fin: {pendientes} encolado(s) ahora, {len(queued)} en la cola, "
         f"{len(verds)} con veredicto")
@@ -603,6 +981,12 @@ def main():
         log(f"  PRs con el CI en rojo: {', '.join('#' + str(n) for n in ci_rojos)}")
     if ci_pendientes:
         log(f"  PRs con el CI pendiente: {', '.join('#' + str(n) for n in ci_pendientes)}")
+    if problemas:
+        # Un veredicto que no llega al exit code es peor que no tener veredicto.
+        log(f"problemas: {len(problemas)}")
+        for p in problemas:
+            log(f"  - {p}")
+        return 1
     return 0
 
 
