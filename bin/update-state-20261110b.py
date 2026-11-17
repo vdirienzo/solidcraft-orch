@@ -7,6 +7,7 @@ import tempfile
 
 ORCH_DIR = os.environ.get("ORCH_DIR", "/home/user/.local/share/solidcraft-orch")
 WORKTREES_DIR = os.environ.get("WORKTREES_DIR", "/home/user/solidcraft-wt")
+SOLIDCRAFT_REPO = os.environ.get("SOLIDCRAFT_REPO", "/home/user/solidcraft")
 
 ORCH = ORCH_DIR
 STATE = os.path.join(ORCH, "state")
@@ -39,15 +40,15 @@ slots["14337"] = {
     "pr": None,
     "lock_owner": WAVE,
     "branch": "spike/issue-14337",
-    "worktree": "/home/user/solidcraft-wt/issue-14337",
-    "target_dir": "/home/user/.local/share/solidcraft-orch/targets/slot-14337",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-14337'),
+    "target_dir": os.path.join(ORCH_DIR, "targets", 'slot-14337'),
     "delegation": (
         "loop: agent-issue.sh (opencode, MiniMax M3.1 Flash), timeout 40 min, "
         "CARGO_TARGET_DIR=targets/slot-14337. PRIMER intento (timeout 30) murio por "
         "ECONNRESET del proveedor SIN dejar commit; segundo intento relanzado 08:12Z."
     ),
-    "log": "/home/user/.local/share/solidcraft-orch/logs/14337-wave2.log",
-    "log_primer_intento": "/home/user/.local/share/solidcraft-orch/logs/14337-wave.log",
+    "log": os.path.join(ORCH_DIR, "logs", '14337-wave2.log'),
+    "log_primer_intento": "${ORCH_DIR}/logs/14337-wave.log",
     "agent_finished": False,
     "result": (
         "en marcha (2do intento, relanzado 08:12Z con timeout 40 min). "
@@ -70,13 +71,13 @@ slots["14256"] = {
     "pr": None,
     "lock_owner": WAVE,
     "branch": "spike/issue-14256",
-    "worktree": "/home/user/solidcraft-wt/issue-14256",
-    "target_dir": "/home/user/.local/share/solidcraft-orch/targets/slot-14256",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-14256'),
+    "target_dir": os.path.join(ORCH_DIR, "targets", 'slot-14256'),
     "delegation": (
         "loop: agent-issue.sh (opencode, MiniMax M3.1 Flash), timeout 40 min, "
         "CARGO_TARGET_DIR=targets/slot-14256"
     ),
-    "log": "/home/user/.local/share/solidcraft-orch/logs/14256-wave.log",
+    "log": os.path.join(ORCH_DIR, "logs", '14256-wave.log'),
     "agent_finished": False,
     "result": (
         "en marcha (despachado 08:18Z). claim-verify rc=0: el issue esta libre. "
@@ -107,7 +108,7 @@ slots_doc["housekeeping"]["2026_11_10"] = {
     ),
     "lo_que_no_se_toco": (
         "targets/slot-2130 NO se borro (6.5G): es el binario que la sesion interactiva usa para "
-        "la grabacion que pidio el mantenedor en #11886. Y /home/user/solidcraft/target-wt11886 "
+        "la grabacion que pidio el mantenedor en #11886. Y ${SOLIDCRAFT_REPO}/target-wt11886 "
         "(77G) se dejo: el worktree wt-11886 sigue en uso para esa misma captura."
     ),
     "locks": (
@@ -135,7 +136,7 @@ for pr in prs_doc["open_prs"]:
         pr["estado_2026_11_10"]["lo_que_falta"] = (
             "La captura antes/despues que pidio el mantenedor ('fix that one case on its own and "
             "show it with a screenshot'). Hay un script listo: "
-            "/home/user/pr-body-work/capture-12418-evidence.py."
+            "${WORKTREES_DIR}/../pr-body-work/capture-12418-evidence.py."
         )
 save("prs.json", prs_doc)
 

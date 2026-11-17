@@ -38,6 +38,8 @@ bad()  { FAIL=$(( FAIL + 1 )); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && print
 # has to find nothing, not even here).
 HOMEBASE='/home/'"user"
 DEFPAT=':-'"$HOMEBASE"
+# The python form of a default: ORCH_DIR = os.environ.get("ORCH_DIR", "/home/user/...")
+DEFPAT_PY='", "'"$HOMEBASE"
 
 # The scripts of bin/: the ones that TRAVEL to the other PC. Those are the
 # ones Git knows (tracked or staged): a script lying loose in the directory
@@ -63,7 +65,7 @@ scripts() {
 HARD=""
 while read -r f; do
   [ -z "$f" ] && continue
-  hits="$(grep -n "$HOMEBASE" "$BIN/$f" 2>/dev/null | grep -v "$DEFPAT" || true)"
+  hits="$(grep -n "$HOMEBASE" "$BIN/$f" 2>/dev/null | grep -v "$DEFPAT" | grep -v "$DEFPAT_PY" || true)"
   [ -n "$hits" ] && HARD="$HARD$f"$'\n'"$hits"$'\n'
 done < <(scripts)
 
@@ -80,7 +82,7 @@ HARD2=""
 while read -r f; do
   [ -z "$f" ] && continue
   hits="$(grep -nE "$HOMEBASE/(solidcraft|solidcraft-wt)" "$BIN/$f" 2>/dev/null \
-          | grep -v "$DEFPAT" || true)"
+          | grep -v "$DEFPAT" | grep -v "$DEFPAT_PY" || true)"
   [ -n "$hits" ] && HARD2="$HARD2$f"$'\n'"$hits"$'\n'
 done < <(scripts)
 

@@ -14,6 +14,7 @@ import tempfile
 
 ORCH_DIR = os.environ.get("ORCH_DIR", "/home/user/.local/share/solidcraft-orch")
 WORKTREES_DIR = os.environ.get("WORKTREES_DIR", "/home/user/solidcraft-wt")
+SOLIDCRAFT_REPO = os.environ.get("SOLIDCRAFT_REPO", "/home/user/solidcraft")
 
 ORCH = ORCH_DIR
 STATE = os.path.join(ORCH, "state")
@@ -46,8 +47,8 @@ slots["12124"] = {
     "status": "pr_open",
     "role": "repair-12212-conflict-with-main",
     "branch": "fix/issue-12124-face-attach-two-sided-cut",
-    "worktree": "/home/user/solidcraft-wt/issue-12212-rebase",
-    "target_dir": "/home/user/.local/share/solidcraft-orch/targets/slot-12124",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-12212-rebase'),
+    "target_dir": os.path.join(ORCH_DIR, "targets", 'slot-12124'),
     "lock_owner": None,
     "delegation": f"{WAVE}: subagente (Hermes) con brief literal del conflicto",
     "head": "af375ab48bd2df75d79a74dbb7a61c337b7d955a",
@@ -75,7 +76,7 @@ slots["13151"] = {
     "pr": None,
     "lock_owner": None,
     "branch": "spike/issue-13151",
-    "worktree": "/home/user/solidcraft-wt/issue-13151",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-13151'),
     "delegation": "loop: agent-issue.sh (opencode) - el agente murio otra vez",
     "agent_finished": True,
     "result": (
@@ -98,7 +99,7 @@ slots["14050"] = {
     "pr": None,
     "lock_owner": None,
     "branch": "spike/issue-14050",
-    "worktree": "/home/user/solidcraft-wt/issue-14050",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-14050'),
     "delegation": "loop: agent-issue.sh (opencode) - el freno del reclamo veto la publicacion",
     "agent_finished": True,
     "result": (
@@ -118,8 +119,8 @@ slots["12418"] = {
     "status": "pr_open",
     "role": "verify-12574-narrowed-fillet",
     "branch": "fix/issue-12418-length-preset-defaults",
-    "worktree": "/home/user/solidcraft-wt/issue-12418-fix",
-    "target_dir": "/home/user/.local/share/solidcraft-orch/targets/slot-12418",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-12418-fix'),
+    "target_dir": os.path.join(ORCH_DIR, "targets", 'slot-12418'),
     "lock_owner": None,
     "commit": "478dc3236231b5bc222cfe9039cd3caa23e3249b",
     "result": (
@@ -143,13 +144,13 @@ slots["14337"] = {
     "pr": None,
     "lock_owner": WAVE,
     "branch": "spike/issue-14337",
-    "worktree": "/home/user/solidcraft-wt/issue-14337",
-    "target_dir": "/home/user/.local/share/solidcraft-orch/targets/slot-14337",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-14337'),
+    "target_dir": os.path.join(ORCH_DIR, "targets", 'slot-14337'),
     "delegation": (
         "loop: agent-issue.sh (opencode, MiniMax M3.1 Flash), timeout 40 min, "
         "CARGO_TARGET_DIR=targets/slot-14337, systemd scope sc14337.scope"
     ),
-    "log": "/home/user/.local/share/solidcraft-orch/logs/14337-wave3.log",
+    "log": os.path.join(ORCH_DIR, "logs", '14337-wave3.log'),
     "cinturon": "systemd scope sc14337.scope: MemoryHigh=12G, MemoryMax=16G, CPUWeight=100, IOWeight=50",
     "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/sc14337.scope (hermano del scope del worker de Hermes: NO hereda su tope de 4 GiB)",
     "agent_finished": False,
@@ -174,13 +175,13 @@ slots["14256"] = {
     "pr": None,
     "lock_owner": WAVE,
     "branch": "spike/issue-14256",
-    "worktree": "/home/user/solidcraft-wt/issue-14256",
-    "target_dir": "/home/user/.local/share/solidcraft-orch/targets/slot-14256",
+    "worktree": os.path.join(WORKTREES_DIR, 'issue-14256'),
+    "target_dir": os.path.join(ORCH_DIR, "targets", 'slot-14256'),
     "delegation": (
         "loop: agent-issue.sh (opencode, MiniMax M3.1 Flash), timeout 40 min, "
         "CARGO_TARGET_DIR=targets/slot-14256, systemd scope sc14256.scope"
     ),
-    "log": "/home/user/.local/share/solidcraft-orch/logs/14256-wave2.log",
+    "log": os.path.join(ORCH_DIR, "logs", '14256-wave2.log'),
     "cinturon": "systemd scope sc14256.scope: MemoryHigh=12G, MemoryMax=16G, CPUWeight=100, IOWeight=50",
     "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/sc14256.scope (hermano del scope del worker de Hermes: NO hereda su tope de 4 GiB)",
     "agent_finished": False,
@@ -208,7 +209,7 @@ hk["2026_11_10"] = {
     ),
     "lo_que_no_se_toco": (
         "targets/slot-2130 NO se borro (6.5G): es el binario que la sesion interactiva usa para la "
-        "grabacion que pidio el mantenedor en #11886. Y /home/user/solidcraft/target-wt11886 (77G) "
+        "grabacion que pidio el mantenedor en #11886. Y ${SOLIDCRAFT_REPO}/target-wt11886 (77G) "
         "se dejo: el worktree wt-11886 sigue en uso para esa misma captura."
     ),
     "locks": (
@@ -228,7 +229,7 @@ hk["2026_11_10"] = {
         "como HERMANO del scope del worker en app.slice: el tope de 4 GiB no le aplica y el OOM se "
         "llevaria al corredor, no al turno. Verificado en los dos corredores vivos. "
         "Tambien se corrigio el target dir: config.env pineaba "
-        "CARGO_TARGET_DIR=/home/user/solidcraft/target para TODOS los agentes (59 GB y lock "
+        "CARGO_TARGET_DIR=${SOLIDCRAFT_REPO}/target para TODOS los agentes (59 GB y lock "
         "compartido entre dos agentes). Ahora config.env respeta un valor ya exportado por el que "
         "llama y el orquestador le da a cada agente su propio targets/slot-<issue>. "
         "config-check.sh y config-preflight.sh siguen en OK."
@@ -304,7 +305,7 @@ for pr in prs_doc["open_prs"]:
             "lo_que_falta": (
                 "La captura antes/despues que pidio el mantenedor ('fix that one case on its own "
                 "and show it with a screenshot'). Hay un script listo: "
-                "/home/user/pr-body-work/capture-12418-evidence.py."
+                "${WORKTREES_DIR}/../pr-body-work/capture-12418-evidence.py."
             ),
         }
     elif num == 11886:
@@ -318,7 +319,7 @@ for pr in prs_doc["open_prs"]:
                 "happens while panning and while rotating when the cursor passes over other faces: "
                 "does the highlight jump between faces or flash?'. Nuestra respuesta posterior fue "
                 "solo un ping de estado: la pregunta sigue SIN responder. La captura se esta armando "
-                "en /home/user/pr-body-work (build-web-2130.sh + run-capture.sh), con el binario "
+                "en ${WORKTREES_DIR}/../pr-body-work (build-web-2130.sh + run-capture.sh), con el binario "
                 "del slot-2130, que por eso NO se borro en la limpieza de disco."
             ),
             "verificado_2026_11_10": "leido de GitHub: OPEN, draft=false, MERGEABLE/CLEAN, head 74941d97 == rama del fork",

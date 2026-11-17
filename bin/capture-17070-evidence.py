@@ -29,7 +29,8 @@ import time
 HOST = "127.0.0.1"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 27970
 TOKEN = sys.argv[2] if len(sys.argv) > 2 else ""
-OUTDIR = sys.argv[3] if len(sys.argv) > 3 else "/home/user/scratch/17070/out"
+OUTDIR = sys.argv[3] if len(sys.argv) > 3 else os.path.join(
+    os.environ.get("SCRATCH_DIR", os.path.expanduser("~/scratch")), "17070", "out")
 MODE = sys.argv[4] if len(sys.argv) > 4 else "form"
 
 AGENT_ID = "evidence-agent"

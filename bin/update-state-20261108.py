@@ -148,7 +148,7 @@ notes["wave_2026_11_08_2218"] = {
             "issue": 13424,
             "lock": "wave-20261108-2218",
             "runner": "agent-issue.sh (opencode MiniMax-M3.1-Flash), timeout 45 min",
-            "worktree": "/home/user/solidcraft-wt/issue-13471 -> issue-13424",
+            "worktree": os.path.join(WORKTREES_DIR, 'issue-13471'),
             "target": "targets/slot-13424",
             "claim": "VERDICT=OK (issue libre)",
         },

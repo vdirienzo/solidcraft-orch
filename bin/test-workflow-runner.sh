@@ -63,6 +63,35 @@ cp "$ORCH_DIR/bin/workflow-validate.py" "$ROOT/bin/workflow-validate.py" 2>/dev/
 # that the two agree, so a fixture without it fails with errors that have
 # nothing to do with the runner.
 cp "$ORCH_DIR/bin/crons.txt" "$ROOT/bin/crons.txt" 2>/dev/null || true
+# The SCRIPTS of the registry travel too. The validator checks that every
+# script named in bin/crons.txt exists: a fixture with the registry but
+# without the scripts fails with "the script 'bin/X' does not exist", which
+# is about the fixture and not about the runner.
+# (2026-11-17: adding the cron of the disk cleanup added bin/gc-disk.sh to
+# the registry, and this test started failing for that reason.)
+# The parse is in python because the fields are separated by a pipe and a
+# shell read with IFS='|' is fragile with the comments of the file.
+python3 - "$ORCH_DIR" "$ROOT" <<'PYEOF'
+import os, shutil, sys
+orch, root = sys.argv[1], sys.argv[2]
+try:
+    lines = open(os.path.join(root, "bin", "crons.txt"), encoding="utf-8").read().split("\n")
+except OSError:
+    sys.exit(0)
+for line in lines:
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    parts = [x.strip() for x in line.split("|")]
+    if len(parts) < 3:
+        continue
+    script = parts[2]
+    src = os.path.join(orch, script)
+    if os.path.isfile(src):
+        dst = os.path.join(root, script)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+PYEOF
 
 # Los STUB: un script que NO hace el trabajo real, solo deja rastro de que
 # corrio y con que argumentos. El runner decide; el script es un witness.
