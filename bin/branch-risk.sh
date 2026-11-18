@@ -66,9 +66,29 @@ if [ "$fetch" -eq 1 ]; then
   fi
 fi
 
-# The base: what the fork's main has. A branch that is an ancestor of
-# it was merged and its work is upstream.
-base="$FORK_REMOTE/main"
+# The base: what the UPSTREAM's main has. A branch that is an ancestor of it
+# was merged and its work is upstream.
+#
+# WHY THE UPSTREAM AND NOT THE FORK (2026-11-18): the fork's main is BEHIND
+# the upstream's main by thousands of commits (the fork only gets what we
+# merge into it). Measuring against the fork counted every commit of the
+# upstream's history as "work that only exists on this disk": 83 branches
+# "at risk" with 4323 commits each, when the real work was 5 commits on one
+# branch. The base has to be the UPSTREAM's main, because the question is
+# "is this MY work in the fork?", not "is this upstream's history in the
+# fork?".
+base="${BRANCH_RISK_BASE:-}"
+if [ -z "$base" ]; then
+  # The upstream's remote, when the checkout has one: 'origin' is the
+  # upstream and 'fork' is ours, but the names are configurable.
+  for candidate in origin upstream; do
+    if git remote get-url "$candidate" >/dev/null 2>&1; then
+      base="$candidate/main"
+      break
+    fi
+  done
+fi
+[ -n "$base" ] || base="$FORK_REMOTE/main"
 if ! git rev-parse --verify --quiet "$base" >/dev/null; then
   echo "branch-risk: no existe $base: no se puede comparar" >&2
   exit 2
@@ -105,7 +125,7 @@ while read -r tip branch; do
   # 3. not on any ref of the fork: the commit exists ONLY here.
   at_risk=$((at_risk + 1))
   n="$(git rev-list --count "$base".."$tip" 2>/dev/null || echo '?')"
-  echo "EN RIESGO- $branch ($tip) - $n commit(s) que el fork no tiene"
+  echo "EN RIESGO- $branch ($tip) - $n commit(s) propios que no estan en $base"
   git log --oneline --no-decorate "$base".."$tip" 2>/dev/null | sed 's/^/           /' | head -5
   echo "           para salvarlo:  git push $FORK_REMOTE $branch"
   echo

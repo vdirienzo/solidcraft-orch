@@ -9,9 +9,46 @@ cierto, no completo"* y *"GitHub manda; el disco se corrige"*. Y otra, de `READM
 Esta pagina es el inventario de lo que **no** esta en GitHub. Es corta a proposito: si
 crece, algo anda mal.
 
+**Actualizado el 2026-11-18: hoy el inventario esta VACIO.** Las 83 ramas que el script
+de riesgo reportaba estan a salvo en el fork (bajo `archive/`), y el script de riesgo
+dejo de mentir (ver la seccion 1).
+
 ---
 
-## 1. El fork de SolidCraft: una rama en riesgo, y una que se creia perdida
+## 1. El fork de SolidCraft: hoy, nada en riesgo
+
+**El 2026-11-18 el script de riesgo reportaba 83 ramas "en riesgo". Todas estaban a
+salvo despues de empujarlas al fork** (`git push fork <sha>:refs/heads/archive/<rama>`,
+83 ramas en 5 lotes). La cuenta final: **0 en riesgo, 160 salvadas con otro nombre, 46
+mergeadas en `origin/main`**.
+
+**El script moria, y por eso el numero era falso.** `bin/branch-risk.sh` comparaba cada
+rama contra `fork/main`, y el `fork/main` esta **6034 commits atrasado** respecto del
+`origin/main` (el fork solo recibe lo que uno mergea en el). La pregunta que hace el
+script es "este trabajo esta en el fork?", y medir contra el fork contaba **toda la
+historia del upstream** como "trabajo que solo existe en este disco": una rama con 5
+commits propios aparecia con 4323.
+
+**El arreglo**: la base es el `main` del **upstream** (`origin/main`), no el del fork. La
+razon: lo que se pregunta es "este trabajo MIO esta en el fork?", y la historia del
+upstream no es trabajo nuestro.
+
+**Lo que el numero NO dice (y hay que decirlo)**: 83 ramas en riesgo es una cota
+superior. La mitad son la MISMA idea en tres ramas (`backup/*`, `tmp-*`, `salvage/*`,
+`rebase/*` del mismo issue), y un squash-merge cambia el SHA: un commit ya mergeado
+upstream aparece como "propio" hasta que se compara por **patch-id** y no por SHA. Por
+eso las ramas se empujaron **todas**: empujar de mas no cuesta, empujar de menos pierde
+trabajo.
+
+### La rama que se creia perdida
+
+La version anterior de esta pagina decia que **dos** ramas estaban en riesgo. **Estaba
+mal en una de las dos**, y el error era del metodo, no de los datos:
+
+| Rama | Commit | Que es |
+|---|---|---|
+| `perf/issue-3892-browser-tree-hover` | `2211fd87a` | "perf(#3892): index the hidden joints and folders" — 1 commit |
+| `fix/issue-5505-sketch-constraint-dof` | `77665cb5b` | "fix(#5505): a zero dimension keeps constraining" — 3 commits |
 
 La auditoria del propio repo (`reports/loop-codigo.md`, seccion 3.2, 2026-11-02) encontro
 **12 ramas locales con commits reales que no estaban en el fork**. De esas 12, **10 ya
@@ -82,13 +119,27 @@ fork no se parece al upstream.
 
 ## 2. El orquestador: la mitad LOOP
 
+**Actualizado el 2026-11-18: esta seccion estaba en riesgo y ya no.**
+
 La mitad LOOP del orquestador (`agent-issue.sh`, `claim-race.sh`, `claim-brake.sh`,
 `claim-salvage.sh`, `gate-quick.sh`, `pr-defaults-line.sh`, `gc-disk.sh`, `supervisor.sh`,
-`config.env`, `prompts/agent-issue.md` y sus dos suites) **no esta en git**: vive en
-`$LOOP_DIR` de la maquina del orquestador.
+`config.env`, `prompts/agent-issue.md` y sus dos suites) vivia **solo** en `$LOOP_DIR` de
+la maquina del orquestador. **Hoy esta en git**: la rama `origin/fix/orchestrator-truthfulness`
+(28 commits) se integro con merge `--no-ff` (commit de movimiento `149f7fa`), y los
+ficheros de apoyo que la suite necesitaba quedaron adoptados en `loop/`.
 
-**No es un problema de trabajo perdido** (esa maquina los tiene), pero es un problema de
-reproducibilidad: un clone de este repo no puede publicar, ni gatear, ni arbitrar.
+Lo que **sigue** sin estar en git, a proposito:
+
+| Que | Por que | Como se recupera |
+|---|---|---|
+| `loop/config.env` | lleva las rutas de UNA maquina y secretos | `loop/config.env.example` esta en git; `cp config.env.example config.env` |
+| `state/`, `logs/`, `targets/`, `locks/`, `gates/`, `state.json` | estado de la maquina, se regenera | `bash bin/merge-state.sh --split --prefer-artifact` |
+| El `config.env` real del LOOP (`$LOOP_DIR/config.env`) | idem, mas los labels de excepcion de cada repo | el backup portable (`vdirienzo/hermes-harness`) lo lleva |
+
+**Verificado hoy:** un clon limpio de este repo (`git clone` sin ningun fichero local)
+pasa `bin/test-all.sh --fast` (20/20) **y** `python3 loop/bin/test-rules.py` (todas las
+reglas, RC=0). La suite crea su `config.env` desde la plantilla si no lo encuentra, y lo
+borra al terminar.
 
 - El inventario completo: [`docs/la-otra-mitad.md`](la-otra-mitad.md)
 - Como traerlo: [`briefs/bring-the-loop.md`](../briefs/bring-the-loop.md)
