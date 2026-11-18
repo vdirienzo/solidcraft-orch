@@ -39,7 +39,26 @@ CORES="$(nproc 2>/dev/null || echo 4)"
 
 # The compilations running right now: one per cargo process. Counting the
 # rustc children instead would count the jobs of a single compilation.
-CONC="$(pgrep -x cargo 2>/dev/null | wc -l | tr -d ' ')"
+#
+# WHY THE NAME IS NOT ENOUGH (2026-11-18): `pgrep -x cargo` matches the
+# process NAME exactly, and cargo is not always called 'cargo': a clippy
+# runs as 'cargo-clippy' and a nextest as 'cargo-nextest'. The script counted
+# ONE compilation while a clippy of seven packages was running with 16 jobs,
+# and its clippy-driver of solidcraft_engine reached 4.7 GB of RSS: the OOM
+# killer took it, and with it the whole scope of the build that was next to
+# it (the nextest of another slot, which died with exit 143 and no fault of
+# its own).
+#
+# The count is by COMMAND, and each cargo invocation counts ONCE: the
+# 'timeout --kill-after' wrapper and the 'cargo' that it runs are the same
+# compilation.
+# Each PROCESS is a compilation, so the count cannot be a count of NAMES: a
+# box with eight 'cargo' processes has eight compilations, not one. The
+# name of the binary is what tells them apart from the rest of the system.
+CONC="$(ps -eo cmd= 2>/dev/null \
+        | grep -E '(^|[ /])cargo(-clippy|-nextest)?( |$)' \
+        | grep -vE 'cargo-jobs(\.sh)?( |$)' \
+        | awk 'END{print NR}' | tr -d ' ')"
 case "$CONC" in ''|*[!0-9]*) CONC=1 ;; esac
 [ "$CONC" -lt 1 ] && CONC=1
 
