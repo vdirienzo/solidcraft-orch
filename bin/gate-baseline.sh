@@ -102,9 +102,18 @@ BASE_AGE_DAYS=""
 if [ -f "$BASE" ]; then
   base_date="$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$BASE" 2>/dev/null | head -1)"
   if [ -n "$base_date" ]; then
-    base_epoch="$(date -d "$base_date" +%s 2>/dev/null || echo 0)"
+    # THE AGE IS COUNTED IN THE CALENDAR OF THE BASELINE (2026-11-17).
+    #
+    # The baseline's file says the day it was measured, and it is written in
+    # UTC (bin/baseline-refresh.sh: `date -u +%Y-%m-%d`). The age is the
+    # number of CALENDAR days between that day and today, in the same clock:
+    # counting the seconds from the baseline's midnight to now counted the
+    # hours of the day as a fraction of a day, and with a local midnight
+    # against a UTC date the age was a day short for three hours a day (the
+    # suite went red at midnight UTC).
+    base_epoch="$(date -u -d "$base_date" +%s 2>/dev/null || echo 0)"
     if [ "$base_epoch" -gt 0 ]; then
-      now_epoch="$(date +%s)"
+      now_epoch="$(date -u -d "$(date -u +%F)" +%s)"
       BASE_AGE_DAYS=$(( (now_epoch - base_epoch) / 86400 ))
       if [ "$BASE_AGE_DAYS" -gt "$BASE_MAX_AGE_DAYS" ]; then
         BASE_STALE="el baseline se midio hace ${BASE_AGE_DAYS} dias y el tope es ${BASE_MAX_AGE_DAYS}"
