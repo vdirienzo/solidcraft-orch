@@ -4088,8 +4088,15 @@ def test_the_scoped_gates_do_not_fight_for_the_build_directory():
     holders = []
     try:
         # --- (A) the leftovers of a scope die ------------------------------
+        # run_child IS PART OF THE LIST (2026-11-18): the gate closes the
+        # descriptors 8 and 9 in every child, and it does it through
+        # run_child(). A function that calls run_child and is extracted
+        # WITHOUT it fails with "run_child: command not found", and the
+        # rule that reads the source passes while the code does not work:
+        # the leftover of the scope was NOT killed.
         funcs = bash_functions_of_the_gate(src, ["cgroup_pids", "pid_cmdline",
                                                   "pid_state", "ppid_of",
+                                                  "run_child",
                                                   "kill_leftovers_in"])
         script = os.path.join(root, "leftovers.sh")
         with open(script, "w", encoding="utf-8") as fh:
@@ -4150,8 +4157,11 @@ def test_the_scoped_gates_do_not_fight_for_the_build_directory():
                       encoding="utf-8") as fh:
                 fh.write("%d\n" % pid)
         log = os.path.join(root, "systemctl.log")
+        # run_child IS PART OF THE LIST (2026-11-18): see the note of the
+        # extraction of the leftovers. cleanup_dead_scopes calls it too.
         funcs = bash_functions_of_the_gate(src, ["unit_property",
                                                   "cgroup_pids", "pid_cmdline",
+                                                  "run_child",
                                                   "cleanup_dead_scopes"])
         script = os.path.join(root, "debris.sh")
         with open(script, "w", encoding="utf-8") as fh:
