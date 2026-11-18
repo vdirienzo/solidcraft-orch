@@ -57,6 +57,26 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOOP = os.path.dirname(HERE)
 
+# The configuration of the loop is NOT in git: the real config.env carries
+# the paths of ONE machine and the repo has to be installable on another.
+# The suite reads the config.env of the loop (the ceiling, the excluded
+# labels, the budget of the gate), so a CLONE without that file died with a
+# traceback in the middle of a rule, which reads as a broken rule and not
+# as "this machine has no configuration yet".
+#
+# WHY (2026-11-18): the template (config.env.example) IS in git and it
+# carries the same variables with the same values. When the config.env is
+# missing, the suite makes one FROM THE TEMPLATE, runs against it, and
+# deletes it afterwards: a clone can be tested without touching the machine
+# that owns the real one.
+_LOOP_CONFIG = os.path.join(LOOP, "config.env")
+_LOOP_CONFIG_WAS_MADE = False
+if not os.path.exists(_LOOP_CONFIG):
+    _template = os.path.join(LOOP, "config.env.example")
+    if os.path.exists(_template):
+        shutil.copyfile(_template, _LOOP_CONFIG)
+        _LOOP_CONFIG_WAS_MADE = True
+
 # This suite tests the scripts that live NEXT TO IT, so it has to be run from
 # its own directory. A copy somewhere else (a /tmp scratch copy, for example)
 # resolves LOOP to the parent of that copy and then looks for the scripts
@@ -7000,6 +7020,15 @@ def test_the_config_of_the_loop_is_checked_before_it_is_sourced():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _cleanup_loop_config():
+    """The config.env that the suite made for itself does not stay."""
+    if _LOOP_CONFIG_WAS_MADE:
+        try:
+            os.remove(_LOOP_CONFIG)
+        except OSError:
+            pass
+
+
 def run_tests():
     green = gate_log("g", GREEN)
     running = gate_log("r", RUNNING)
@@ -7164,4 +7193,7 @@ def run_tests():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        _cleanup_loop_config()

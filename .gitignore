@@ -16,6 +16,12 @@ loop-*/
 evidence/
 repro/
 go/
+# los reports que escribe el loop en cada corrida: son estado de la maquina,
+# no codigo. Los reports que SI son evidencia (una medicion, una captura
+# revisada) van a evidence/ y a los PRs, no ahi.
+reports/latest.md
+reports/daily-*.md
+reports/cron-prompt-actual.txt
 # backups de parches
 *.bak
 *.bak-*
