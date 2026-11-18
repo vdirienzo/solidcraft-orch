@@ -230,6 +230,98 @@ PR_LIMIT="$(cfg_get SC_PR_LIMIT "$LOOP_DIR/config.env")"
 FORK_OWNER="${FORK_OWNER:-}"
 [ -n "$FORK_OWNER" ] || FORK_OWNER="$(cfg_get FORK_OWNER "$LOOP_DIR/config.env")"
 
+# --- the record of the issue ------------------------------------------------
+#
+# WHY THE SHIM READS THE ISSUE ITSELF (2026-11-18): the arbiter decides WHO
+# holds the claim. It does not decide whether the issue is still worth
+# working on: that is the funnel, and the funnel is the guard's rule.
+#
+# The original rule (the one this shim replaced) answered RESOLVED for three
+# cases that the arbiter does not know about:
+#   - the issue does not exist (404): there is nothing to work on.
+#   - the issue is CLOSED: the work is moot.
+#   - the issue carries an excluded label (kernel-paused, needs-info,
+#     status:decision, area:kernel): the work would be thrown away.
+# The guard of the loop reads those three answers (exit 2 for the excluded
+# label, exit 4 for the closed issue, and the "unknown" for a GitHub that
+# does not answer). Without them the shim said OK for an issue that was
+# closed, and the guard took it.
+#
+# The labels come from the config.env of the loop, in the same order and
+# with the same default as the original rule read them.
+EXCLUDED_LABELS="$(cfg_get CLAIM_EXCLUDED_LABELS "$LOOP_DIR/config.env")"
+[ -n "$EXCLUDED_LABELS" ] || EXCLUDED_LABELS="in progress,kernel-paused,status:decision,needs-info,area:kernel"
+
+ISSUE_RECORD="$(mktemp "${TMPDIR:-/tmp}/claim-race-issue.XXXXXX")"
+ISSUE_ERR="$(mktemp "${TMPDIR:-/tmp}/claim-race-issue-err.XXXXXX")"
+
+read_issue_record() {
+  gh issue view "$ISSUE" --repo "$REPO" \
+     --json number,state,stateReason,labels,assignees,comments >"$ISSUE_RECORD" 2>"$ISSUE_ERR"
+}
+
+emit_resolved() {
+  # emit_resolved <reason> [<state>]
+  printf 'VERDICT=RESOLVED\n'
+  printf 'REASON=%s\n' "$1"
+  printf 'ISSUE=%s\n' "$ISSUE"
+  [ -n "${2:-}" ] && printf 'ISSUE_STATE=%s\n' "$2"
+  rm -f "$ISSUE_RECORD" "$ISSUE_ERR"
+  exit 11
+}
+
+emit_unknown() {
+  printf 'VERDICT=UNKNOWN\n'
+  printf 'REASON=%s\n' "${1:-unknown-github}"
+  printf 'ISSUE=%s\n' "$ISSUE"
+  rm -f "$ISSUE_RECORD" "$ISSUE_ERR"
+  exit 12
+}
+
+if ! read_issue_record; then
+  # An issue that does not exist is not ignorance, it is a fact: there is
+  # nothing to work on. A network that does not answer IS ignorance.
+  if grep -qiE "404|not found|could not resolve" "$ISSUE_ERR" 2>/dev/null; then
+    emit_resolved "issue-not-found" "CLOSED"
+  fi
+  emit_unknown "unknown-github"
+fi
+
+if [ ! -s "$ISSUE_RECORD" ]; then
+  emit_unknown "unknown-github"
+fi
+
+# The state and the labels of the issue, read with jq when it is there and
+# with a shell fallback when it is not (the machine of the loop has jq).
+ISSUE_STATE=""
+ISSUE_LABEL_LIST=""
+if command -v jq >/dev/null 2>&1; then
+  ISSUE_STATE="$(jq -r '.state // ""' <"$ISSUE_RECORD" 2>/dev/null)"
+  ISSUE_LABEL_LIST="$(jq -r '[.labels[]? | (.name // "")] | join("\n")' <"$ISSUE_RECORD" 2>/dev/null)"
+else
+  ISSUE_STATE="$(sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([A-Z]*\)".*/\1/p' "$ISSUE_RECORD" | head -1)"
+  ISSUE_LABEL_LIST="$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ISSUE_RECORD")"
+fi
+
+if [ "$ISSUE_STATE" != "OPEN" ]; then
+  emit_resolved "issue-closed" "${ISSUE_STATE:-CLOSED}"
+fi
+
+# The label of a claim IS one of the excluded ones (the issue is being worked
+# on): in the funnel, an issue that carries it cannot be claimed AGAIN.
+LABEL_LOWER="$(printf '%s' "$ISSUE_LABEL_LIST" | tr 'A-Z' 'a-z')"
+while IFS= read -r excl; do
+  excl="$(printf '%s' "$excl" | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
+  [ -n "$excl" ] || continue
+  if printf '%s\n' "$LABEL_LOWER" | grep -qxF "$excl"; then
+    emit_resolved "excluded-label" "$ISSUE_STATE"
+  fi
+done <<EOF
+$(printf '%s' "$EXCLUDED_LABELS" | tr ',' '\n')
+EOF
+
+rm -f "$ISSUE_RECORD" "$ISSUE_ERR"
+
 # --- the arbitration --------------------------------------------------------
 ARBITER="$(find_arbiter)" || ARBITER=""
 if [ -z "$ARBITER" ]; then

@@ -65,6 +65,28 @@ if [ "$1" = "api" ] && [ "$2" = "user" ]; then
   printf '%s\n' "${GH_LOGIN:-ourfork}"
   exit 0
 fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  # `gh issue view N --json number,state,stateReason,labels,...`: the record
+  # of the issue. The shim reads it to know whether the issue is still worth
+  # working on (the funnel), because the arbiter only decides WHO holds the
+  # claim.
+  #
+  # GH_ISSUE_STATE: the state of the issue (OPEN by default).
+  # GH_ISSUE_LABELS: the labels, separated by spaces.
+  # GH_ISSUE_404=1: the issue does not exist.
+  if [ -n "${GH_ISSUE_404:-}" ]; then
+    echo "gh: Could not resolve to an Issue with the number of $3." >&2
+    exit 1
+  fi
+  labels=""
+  for l in ${GH_ISSUE_LABELS:-}; do
+    [ -n "$labels" ] && labels="$labels, "
+    labels="$labels{\"name\":\"$l\"}"
+  done
+  printf '{"number":%s,"state":"%s","stateReason":"COMPLETED","labels":[%s],"assignees":[],"comments":[]}\n' \
+    "${3:-7777}" "${GH_ISSUE_STATE:-OPEN}" "$labels"
+  exit 0
+fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   # `gh pr view N --json author --jq .author.login`: the author of a pull
   # request, by its number.
@@ -347,18 +369,44 @@ else
   bad "el shim se puede correr desde cualquier directorio" "rc=127"
 fi
 
-# --- 8) el codigo 11 (RESOLVED) NO lo produce el shim ----------------------
+# --- 8) el funnel: los tres casos que el arbitro no conoce -----------------
 echo
-echo "== el shim nunca devuelve 11 (RESOLVED) =="
+echo "== el funnel: issue inexistente, issue cerrado y label excluida =="
 
-# The arbiter has no RESOLVED: the issue that is not open any more is the
-# publisher's check ("is the issue open?"), not the arbitration.
+# The arbiter decides WHO holds the claim. It does not decide whether the
+# issue is still worth working on: that is the funnel, and the guard of the
+# loop reads the three answers the original rule gave and the arbiter does
+# not know about.
+#
+# WHY (2026-11-18): without them the shim said OK for an issue that was
+# closed or that carried an excluded label, and the guard took it. The
+# contract of the shim is the contract of the rule it replaced.
+
+# (a) the issue does not exist: there is nothing to work on.
 write_fixture '500|Old|Fixes #7777'
-shim 7777
-if [ "$RC" != "11" ]; then
-  ok "un issue tomado -> $RC (no 11)"
+GH_ISSUE_404=1 shim 7777
+if [ "$RC" = "11" ] && printf '%s' "$OUT" | grep -q "REASON=issue-not-found"; then
+  ok "un issue que no existe -> 11 (issue-not-found)"
 else
-  bad "un issue tomado -> no 11" "rc=11"
+  bad "un issue que no existe -> 11 (issue-not-found)" "rc=$RC $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
+fi
+
+# (b) the issue is CLOSED: the work is moot.
+write_fixture '500|Old|Fixes #7777'
+GH_ISSUE_STATE="CLOSED" shim 7777
+if [ "$RC" = "11" ] && printf '%s' "$OUT" | grep -q "REASON=issue-closed"; then
+  ok "un issue cerrado -> 11 (issue-closed)"
+else
+  bad "un issue cerrado -> 11 (issue-closed)" "rc=$RC $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
+fi
+
+# (c) the issue carries an excluded label: the work would be thrown away.
+write_fixture '500|Old|Fixes #7777'
+GH_ISSUE_LABELS="bug area:kernel" shim 7777
+if [ "$RC" = "11" ] && printf '%s' "$OUT" | grep -q "REASON=excluded-label"; then
+  ok "un issue con label excluida -> 11 (excluded-label)"
+else
+  bad "un issue con label excluida -> 11 (excluded-label)" "rc=$RC $(printf '%s' "$OUT" | head -2 | tr '\n' ' ')"
 fi
 
 # --- the verdict ----------------------------------------------------------
