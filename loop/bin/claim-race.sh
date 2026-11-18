@@ -309,15 +309,40 @@ fi
 
 # The label of a claim IS one of the excluded ones (the issue is being worked
 # on): in the funnel, an issue that carries it cannot be claimed AGAIN.
-LABEL_LOWER="$(printf '%s' "$ISSUE_LABEL_LIST" | tr 'A-Z' 'a-z')"
+# The comparison is on the NORMALIZED label: the excluded labels come from
+# a comma-separated list and some of them carry a space ("in progress",
+# "status:decision"), and a label of an issue can carry one too ("area:kernel"
+# does not, "in progress" does). Comparing the raw strings compared "in
+# progress" with "inprogress" and never matched.
+normalize_label() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//'; }
+
+LABELS_NORMALIZED=""
+while IFS= read -r raw; do
+  norm="$(normalize_label "$raw")"
+  [ -n "$norm" ] || continue
+  LABELS_NORMALIZED="$LABELS_NORMALIZED$norm
+"
+done <<EOF
+$(printf '%s' "$EXCLUDED_LABELS" | tr ',' '\n')
+EOF
+
+ISSUE_LABELS_NORMALIZED=""
+while IFS= read -r raw; do
+  norm="$(normalize_label "$raw")"
+  [ -n "$norm" ] || continue
+  ISSUE_LABELS_NORMALIZED="$ISSUE_LABELS_NORMALIZED$norm
+"
+done <<EOF
+$(printf '%s' "$ISSUE_LABEL_LIST" | tr ',' '\n')
+EOF
+
 while IFS= read -r excl; do
-  excl="$(printf '%s' "$excl" | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
   [ -n "$excl" ] || continue
-  if printf '%s\n' "$LABEL_LOWER" | grep -qxF "$excl"; then
+  if printf '%s' "$ISSUE_LABELS_NORMALIZED" | grep -qxF "$excl"; then
     emit_resolved "excluded-label" "$ISSUE_STATE"
   fi
 done <<EOF
-$(printf '%s' "$EXCLUDED_LABELS" | tr ',' '\n')
+$LABELS_NORMALIZED
 EOF
 
 rm -f "$ISSUE_RECORD" "$ISSUE_ERR"
