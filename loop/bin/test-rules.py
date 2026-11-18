@@ -127,30 +127,14 @@ case "$1 $2" in
     if [ -z "$jq_filter" ]; then
       printf '%s\\n' "$LOOP_TEST_PRS"; exit 0
     fi
-    printf '%s' "$LOOP_TEST_PRS" | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-if not isinstance(data, list):
-    sys.exit(0)
-for item in data:
-    out = []
-    for part in sys.argv[1].split("."):
-        if part == "":
-            continue
-        if isinstance(item, list):
-            item = item[int(part)] if len(item) > int(part) else None
-        elif isinstance(item, dict):
-            item = item.get(part)
-        else:
-            item = None
-        if item is None:
-            break
-        out.append(item)
-    print(out[-1] if out else "")
-' "$jq_filter"
+    # The REAL jq: the program of the arbiter has a regex, strips the noise
+    # of upstream and drops the references to other repositories. A stub
+    # that only walks the fields would answer different questions.
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "the stub of gh needs jq to honor --jq like the real gh" >&2
+      exit 1
+    fi
+    printf '%s' "$LOOP_TEST_PRS" | jq -r "$jq_filter"
     exit 0
     ;;
 esac
@@ -3477,7 +3461,35 @@ case "${1:-}" in
           exit 0
         fi
       done
-      printf '%s' "${GUARD_PRS:-}"
+      # THE --jq IS HONORED (2026-11-18): the arbiter of the claim
+      # (bin/claim-verify.sh) filters the list SERVER-SIDE, with
+      # `gh pr list --jq`. A stub that ignores --jq returns the raw JSON,
+      # the arbiter parses it as if it were the filtered list, and every
+      # line of the JSON becomes a false competitor: the guard then says
+      # "the open PR(s) 111 hold the claim" for an issue that is FREE.
+      #
+      # The REAL jq is used, not an approximation: the program of the
+      # arbiter has a regex, strips the noise of upstream, drops the
+      # references to other repositories and excludes the pull request
+      # whose number IS the issue. A stub that only looks for a '#' would
+      # answer different questions than the real one, and a test that
+      # passes with the approximation would fail with the real filter.
+      jq_filter=""
+      prev=""
+      for a in "$@"; do
+        if [ "$prev" = "--jq" ]; then jq_filter="$a"; fi
+        case "$a" in --jq=*) jq_filter="${a#--jq=}" ;; esac
+        prev="$a"
+      done
+      if [ -z "$jq_filter" ]; then
+        printf '%s' "${GUARD_PRS:-}"
+        exit 0
+      fi
+      if ! command -v jq >/dev/null 2>&1; then
+        echo "the stub of gh needs jq to honor --jq like the real gh" >&2
+        exit 1
+      fi
+      printf '%s' "${GUARD_PRS:-}" | jq -r "$jq_filter"
       exit 0
     fi
     ;;

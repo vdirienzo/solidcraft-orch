@@ -295,7 +295,7 @@ DEADLINE=$(( $(date +%s) + BUDGET ))
 #
 # They are read with the default of the shell: an unbound variable must
 # never abort the gate (this script runs `set -uo pipefail`, without -e).
-GATE_QUICK_TARGET_DIR="${GATE_QUICK_TARGET_DIR:-${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}/targets/gate-quick}"
+GATE_QUICK_TARGET_DIR="${GATE_QUICK_TARGET_DIR:-/home/user/solidcraft-gate-quick/target}"
 # The memory of the scope. MEASURED (01-11-2026): the peak of a gate is
 # 23.7 GB. The high is 26G so that TWO gates at the same time fit in the 62
 # GB of the box (2 x 26 = 52 GB of high, and 2 x 23.7 = 47.4 GB of real
