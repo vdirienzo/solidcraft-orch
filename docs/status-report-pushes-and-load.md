@@ -86,11 +86,25 @@ Bucketed per 10 minutes this shows the build bursts AND which slot caused them. 
 
 **Why the builds are expensive:**
 
-    sccache --show-stats
+    bash bin/sccache-health.sh
 
 A hit rate near 0% means every crate recompiles from scratch; that cache is pure loss and is
 covered by the disk-hygiene rule (delete a cache whose hit rate is ~0). Quote the hit rate as
 the cause of the spikes, not as an aside.
+
+**But a cache that is at its cap is a different thing, and it looks the same.** When the cache
+is full, its LRU evicts, between builds, exactly what the next build needs: the hit rate stays
+at 0% and every gate pays the cold price forever. That cache is too small, not useless, and
+the fix is a bigger cap, not a deletion.
+
+MEASURED on this box (2026-11-17): one build of the two biggest crates in the `ci` profile
+leaves 5.6 GB of artifacts and the default sccache cap is 10 GiB. The cache was full after two
+builds and the hit rate was 0% (293 compiles, 0 hits, 0% avoided). The cap now lives in the
+machine's cargo config (`[env] SCCACHE_MAX_CACHE_SIZE = "60G"`), which holds ten builds.
+
+`bin/sccache-health.sh` tells the two apart: it prints the hit rate, the cache size, its cap
+and the free disk, and it says which of the two it is. Exit 1: too small (raise the cap). Exit
+2: not earning its disk (delete it). Exit 0: working.
 
 ## 5. Memory: used vs available, and rates not totals
 
