@@ -136,6 +136,28 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
 24. **No midas sobre una caja ocupada.** El experimento tiene que esperar a que la caja este libre
     en tres chequeos seguidos, y si no, el numero es una mezcla del reparto y de la competicion.
 
+### Sobre el trabajo que no esta en git
+
+25. **El gate compila el worktree del slot, o no compila.** La cola caia al checkout principal
+    cuando el worktree del slot no estaba (`cd "$WORKTREES_DIR/issue-$issue" || cd
+    "$SOLIDCRAFT_REPO"`): el gate compilaba un arbol que NO contenia el cambio y escribia un
+    veredicto que decia que si, y `bin/verify-pr.sh` lo leia como "el gate de este pull
+    request". El gate se niega (rc=5) y la cola tambien: un gate que va a fallar no se
+    lanza. Y la cola **no sale con 0** si no pudo gatear: un cron verde sobre gates que no
+    corrieron es peor que un rojo.
+26. **Una maquina empieza con `--bootstrap`, no con un `state.json` escrito a mano.** El
+    `--split` exige un `state/manifest.json` previo y, sin el, se negaba con un mensaje que
+    no decia como arreglarlo. `bin/merge-state.sh --bootstrap` crea el estado, el manifiesto,
+    un archivo por concepto (incluso los grupos vacios) y el hash, con los grupos en su
+    lugar: sin el manifiesto con los grupos puestos, TODAS las claves caen en `notes.json`
+    y el estado partido por concepto no sirve de nada. No pisa un estado que ya existe
+    (rc=3).
+27. **El trabajo que existe en una sola maquina es un commit que no existe para nadie.** El
+    gate de esto no es "la punta no es alcanzable desde `fork/main`" (da un numero > 0 para
+    un commit que esta en el fork bajo otro nombre): es **"el commit existe en algun ref del
+    fork?"**. `bash bin/branch-risk.sh` responde eso y sale con rc=1 si hay trabajo que solo
+    existe en ese disco.
+
 ---
 
 ## 3. Las reglas del repo que hay que respetar
@@ -155,7 +177,13 @@ git clone <este-repo> ~/.local/share/solidcraft-orch
 cd ~/.local/share/solidcraft-orch
 mkdir -p targets logs locks gates state reports briefs baseline
 cp bin/slot-target-dir.sh bin/ 2>/dev/null
+# el estado de una maquina nueva (idempotente: no pisa uno que ya exista)
+bash bin/merge-state.sh --bootstrap
+bash bin/merge-state.sh --check     # tiene que dar rc=0
 ```
+
+`--bootstrap` es el **unico** camino para empezar: antes habia que escribir el manifiesto a
+mano, y sin los grupos en su lugar todas las claves caian en `notes.json`. Ver la regla 26.
 
 ### ⚠ Falta la otra mitad: `$LOOP_DIR`
 
@@ -320,6 +348,11 @@ concreta, no codigo. El `state.json` se REGENERA desde `state/` con `bin/merge-s
 edicion manual del `state.json`. Sin `--prefer-artifact` gana `state/` (la fuente) y el
 `--split` muestra el diff antes de escribir: se ve que se descarta.
 
+Una maquina **nueva** no tiene nada de eso: `bash bin/merge-state.sh --bootstrap` lo crea
+(estado, manifiesto, un archivo por concepto y el hash). Si el estado ya existe, `--bootstrap`
+sale con rc=3 y no toca nada: una maquina que ya esta corriendo no pierde su estado por un
+comando de instalacion.
+
 ## 6. Pruebas
 
 Las suites tienen que dar rc=0 antes de commitear cualquier cambio del orquestador. Se
@@ -345,6 +378,33 @@ de salida que corresponde, la resolucion de un numero de PR a su head sha, y el 
 APLICA el `--jq` de verdad, como el gh real: un stub que lo ignorara mediria el stub y no la
 regla.
 
+`bin/test-portability.sh` mide la regla de **portabilidad**: todo script que use
+`ORCH_DIR`, `LOOP_DIR`, `SOLIDCRAFT_REPO`, `WORKTREES_DIR` o `HERMES_SCRIPTS` tiene que
+definirla con un default. Un script que usa una de esas variables sin definirla corre con una
+ruta VACIA en la otra PC, y falla ahi, no aca. El check mira tambien que el README y las
+reglas esten donde el codigo dice.
+
+### Los checks que no compilan
+
+Dos checks corren **antes** del gate pesado y ninguno de los dos compila:
+
+```bash
+bash bin/gate-structural.sh   # los checks ESTATICOS de upstream, sin compilar
+bash bin/rules-sync.sh        # las reglas de upstream que este repo cita, sin cambiar
+```
+
+`bin/gate-structural.sh` corre `cargo xtask layers`, `mesh-decisions`, `ui-containers`,
+`lists` y `skills`: analisis estatico (un parse, una lectura de archivo, un `cargo
+metadata`), segundos y no minutos. Son las reglas mas duras del proyecto —la tabla de capas,
+la regla de que una decision de modelo nunca sale de una malla de display, un solo contenedor
+de UI, los catalogos ordenados— y un PR que pasa el gate local y falla en el CI de upstream
+por `cargo xtask layers` encuentra el rojo en el momento mas caro: cuando el trabajo ya esta
+hecho. Lo que NO corre aca es `cargo xtask shared` y `cargo xtask wasm`, que si compilan.
+
+`bin/rules-sync.sh` verifica el snapshot de `rules-snapshot/SHA256SUMS`: si un hash se movio,
+upstream cambio una regla que el orquestador esta citando. Sin esto, un agente que sigue una
+regla vieja produce pull requests que el CI de upstream rechaza.
+
 ## 7. Estructura
 
 ```
@@ -366,10 +426,18 @@ son el estado de una máquina concreta y se regeneran en cada PC (ver §5).
 ## 8. Donde esta la fuente de verdad de cada cosa
 
 - El grafo del proceso: `workflow.yaml`.
-- El estado: `state/` (y `state.json` se reconstruye desde ahi).
+- Los crones: `bin/crons.txt` (y la tabla del README tiene que coincidir: lo comprueba
+  `bin/workflow-validate.py`).
+- El estado: `state/` (y `state.json` se reconstruye desde ahi). Una maquina nueva se crea
+  con `bash bin/merge-state.sh --bootstrap`.
 - La cola de gates: `gates/queue.txt`.
 - Los veredictos: `$LOOP_DIR/gates/<slot>/scope.verdict` (crudo) y `scope.effective.verdict` (el que cuenta).
 - Las reglas y los traps: `docs/` y `RULES.md`.
+- Las reglas de upstream que este repo cita: `rules-snapshot/` (lo verifica
+  `bash bin/rules-sync.sh`).
+- La mitad LOOP, que **no esta en git**: [`docs/la-otra-mitad.md`](docs/la-otra-mitad.md).
+  Que falta en esta maquina: `bash bin/preflight.sh`.
 - El trabajo que solo existe en una maquina: [`docs/work-at-risk.md`](docs/work-at-risk.md).
   El gate que lo dice: `bash bin/branch-risk.sh` (rc=1 = hay commits que solo estan en
   ese disco).
+- Los briefs para las otras maquinas: `briefs/`.
