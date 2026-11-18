@@ -1,6 +1,6 @@
 # Trabajo que vive en una sola maquina
 
-**Fecha:** 2026-11-17
+**Fecha:** 2026-11-18
 
 Este repo tiene una regla que el propio `HANDOFF.md` enuncia: *"el estado tiene que ser
 cierto, no completo"* y *"GitHub manda; el disco se corrige"*. Y otra, de `README.md`:
@@ -9,13 +9,18 @@ cierto, no completo"* y *"GitHub manda; el disco se corrige"*. Y otra, de `READM
 Esta pagina es el inventario de lo que **no** esta en GitHub. Es corta a proposito: si
 crece, algo anda mal.
 
-**Actualizado el 2026-11-18: hoy el inventario esta VACIO.** Las 83 ramas que el script
-de riesgo reportaba estan a salvo en el fork (bajo `archive/`), y el script de riesgo
-dejo de mentir (ver la seccion 1).
+**Actualizado el 2026-11-18: de este checkout, el inventario esta VACIO.** Las 83 ramas
+que el script de riesgo reportaba estan a salvo en el fork (bajo `archive/`), y el script
+de riesgo dejo de mentir (ver la seccion 1).
+
+**Queda UNA cosa, y no esta en esta maquina**: la rama
+`perf/issue-3892-browser-tree-hover` del fork de SolidCraft vive solo en la laptop del
+mantenedor. El script no la ve (no esta en este checkout) y por eso dice 0: son dos
+hechos distintos, no una contradiccion. Ver "La rama que se creia perdida".
 
 ---
 
-## 1. El fork de SolidCraft: hoy, nada en riesgo
+## 1. El fork de SolidCraft: de este checkout, nada en riesgo
 
 **El 2026-11-18 el script de riesgo reportaba 83 ramas "en riesgo". Todas estaban a
 salvo despues de empujarlas al fork** (`git push fork <sha>:refs/heads/archive/<rama>`,
@@ -65,14 +70,6 @@ La auditoria del propio repo (`reports/loop-codigo.md`, seccion 3.2, 2026-11-02)
 estan en el fork** (verificado hoy contra `vdirienzo/solidcraft`): el trabajo esta a
 salvo.
 
-La version anterior de esta pagina decia que **dos** ramas estaban en riesgo. **Estaba
-mal en una de las dos**, y el error era del metodo, no de los datos:
-
-| Rama | Commit | Que es |
-|---|---|---|
-| `perf/issue-3892-browser-tree-hover` | `2211fd87a` | "perf(#3892): index the hidden joints and folders" — 1 commit |
-| `fix/issue-5505-sketch-constraint-dof` | `77665cb5b` | "fix(#5505): a zero dimension keeps constraining" — 3 commits |
-
 **Verificado el 2026-11-17 contra las 237 ramas de `vdirienzo/solidcraft`:**
 
 - **`fix/issue-5505-sketch-constraint-dof` NO esta en riesgo.** El commit `77665cb5b`
@@ -87,6 +84,11 @@ mal en una de las dos**, y el error era del metodo, no de los datos:
   quedo sin iteraciones; el orquestador encontro la causa raiz y lo redespacho. El issue
   #3892 esta **cerrado como COMPLETED** en upstream (por el PR #3894, de otro autor), asi
   que no bloquea a nadie: lo que se pierde es un intento descartado, no un fix pendiente.
+
+  **Por que el script dice 0 en riesgo y esta pagina dice que hay una**: el script ve las
+  ramas **de este checkout**, y esa rama no esta en este checkout (esta en la laptop del
+  mantenedor). No es una contradiccion: son dos hechos distintos. El script no puede
+  ver lo que no esta en la maquina donde corre.
 
 **Como recuperarla** (desde la maquina del mantenedor, donde si existe):
 
@@ -117,13 +119,15 @@ bash bin/branch-risk.sh          # la lista, y rc=1 si hay trabajo solo en este 
 
 Dice tres cosas, y no las confunde: **EN RIESGO** (el commit no esta en ningun ref del
 fork: existe solo en este disco), **SALVADA** (el commit esta en GitHub bajo otro
-nombre: el trabajo esta a salvo, el nombre no), y **mergeada** (ya esta en
-`fork/main`). Cada rama en riesgo sale con el comando exacto que la salva.
+nombre: el trabajo esta a salvo, el nombre no), y **mergeada** (ya esta en el `main` del
+**upstream**, que es la base de la comparacion: ver la seccion 1). Cada rama en riesgo
+sale con el comando exacto que la salva.
 
-**Ademas, el `main` del fork esta 415 commits atras del upstream.** Es la consecuencia de
-la estrategia de merge (`git merge tangency-labs:main`): el `main` del fork es un merge, no
-un fast-forward. No es un problema de trabajo perdido, pero explica por que el `main` del
-fork no se parece al upstream.
+**Ademas, el `main` del fork esta miles de commits atras del upstream** (6034 medidos el
+2026-11-18). Es la consecuencia de la estrategia de merge (`git merge tangency-labs:main`):
+el `main` del fork es un merge, no un fast-forward. No es un problema de trabajo perdido,
+pero explica por que el `main` del fork no se parece al upstream, y por que la base de la
+comparacion NO puede ser el `main` del fork.
 
 ---
 
