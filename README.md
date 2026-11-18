@@ -152,11 +152,16 @@ Cada punto es una.leccion con su porque. Esta lista es la parte que hay que leer
     lugar: sin el manifiesto con los grupos puestos, TODAS las claves caen en `notes.json`
     y el estado partido por concepto no sirve de nada. No pisa un estado que ya existe
     (rc=3).
-27. **El trabajo que existe en una sola maquina es un commit que no existe para nadie.** El
-    gate de esto no es "la punta no es alcanzable desde `fork/main`" (da un numero > 0 para
-    un commit que esta en el fork bajo otro nombre): es **"el commit existe en algun ref del
-    fork?"**. `bash bin/branch-risk.sh` responde eso y sale con rc=1 si hay trabajo que solo
-    existe en ese disco.
+27. **El trabajo que existe en una sola maquina es un commit que no existe para nadie.** La
+    pregunta es **"este trabajo MIO esta en el fork?"**, y la base de la comparacion es el
+    `main` del **upstream**, no el del fork: el `fork/main` esta miles de commits atrasado
+    (el fork solo recibe lo que uno mergea en el), asi que medir contra el fork contaba
+    toda la historia del upstream como trabajo nuestro — 83 ramas "en riesgo" con 4323
+    commits cada una, cuando el trabajo real eran 5 commits de una. `bash
+    bin/branch-risk.sh` dice las tres cosas sin confundirlas: **EN RIESGO** (el commit no
+    esta en ningun ref del fork: existe solo en ese disco), **SALVADA** (el commit esta en
+    GitHub bajo otro nombre: el trabajo esta a salvo, el nombre no) y **mergeada**. Sale con
+    rc=1 si hay trabajo que solo existe en ese disco.
 
 ---
 
@@ -439,5 +444,7 @@ son el estado de una máquina concreta y se regeneran en cada PC (ver §5).
   Que falta en esta maquina: `bash bin/preflight.sh`.
 - El trabajo que solo existe en una maquina: [`docs/work-at-risk.md`](docs/work-at-risk.md).
   El gate que lo dice: `bash bin/branch-risk.sh` (rc=1 = hay commits que solo estan en
-  ese disco).
+  ese disco). La base de la comparacion es el `main` del **upstream**, no el del fork: el
+  `fork/main` esta miles de commits atrasado y medir contra el contaba la historia entera
+  del upstream como trabajo nuestro.
 - Los briefs para las otras maquinas: `briefs/`.
