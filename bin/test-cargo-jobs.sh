@@ -53,6 +53,22 @@ conc_with_table() {
     | sed -n 's/.*concurrent_compilations=\([0-9]*\).*/\1/p'
 }
 
+# The cores of THIS machine. The rule is about the box: with one compilation
+# it asks for the whole box, with two for half of it. The numbers were
+# written for the orchestrator's 16 cores, and the suite failed on every
+# other box (12 cores here, 2 on the runner of the CI).
+CORES="$(nproc 2>/dev/null || echo 4)"
+
+# The jobs the rule asks for with N compilations: CORES/N, at least 4 and
+# never more than the box.
+jobs_for() {
+  local n="$1" j
+  j=$(( CORES / n ))
+  [ "$j" -lt 4 ] && j=4
+  [ "$j" -gt "$CORES" ] && j="$CORES"
+  printf '%s' "$j"
+}
+
 echo "== cada cargo cuenta, sea cual sea su nombre =="
 
 # 1. A clippy IS a compilation (before the fix it was invisible).
@@ -64,7 +80,7 @@ else
 fi
 
 # 2. A nextest IS a compilation.
-out="$(conc_with_table '/home/user/.cargo/bin/cargo-nextest nextest run -p solidcraft-doc')"
+out="$(conc_with_table '/usr/bin/cargo-nextest nextest run -p solidcraft-doc')"
 if [ "$out" = "1" ]; then
   ok "un nextest cuenta como una compilación"
 else
@@ -84,29 +100,32 @@ echo "== los jobs siguen a las compilaciones =="
 
 # 4. One compilation: the whole box.
 out="$(jobs_with_table '/usr/bin/cargo')"
-if [ "$out" = "16" ]; then
-  ok "una compilación: los 16 cores"
+want="$(jobs_for 1)"
+if [ "$out" = "$want" ]; then
+  ok "una compilación: todos los cores ($want)"
 else
-  bad "una compilación: los 16 cores" "esperado 16, obtenido $out"
+  bad "una compilación: todos los cores" "esperado $want, obtenido $out"
 fi
 
 # 5. Two compilations: half of the box.
 out="$(jobs_with_table '/usr/bin/cargo
-/home/user/.cargo/bin/cargo-nextest nextest run')"
-if [ "$out" = "8" ]; then
-  ok "dos compilaciones: la mitad de los cores"
+/usr/bin/cargo-nextest nextest run')"
+want="$(jobs_for 2)"
+if [ "$out" = "$want" ]; then
+  ok "dos compilaciones: la mitad de los cores ($want)"
 else
-  bad "dos compilaciones: la mitad de los cores" "esperado 8, obtenido $out"
+  bad "dos compilaciones: la mitad de los cores" "esperado $want, obtenido $out"
 fi
 
 # 6. Three compilations: a third of the box.
 out="$(jobs_with_table '/usr/bin/cargo
-/home/user/.cargo/bin/cargo-nextest nextest run
+/usr/bin/cargo-nextest nextest run
 timeout --kill-after=30 1080 cargo clippy -p solidcraft')"
-if [ "$out" = "5" ]; then
-  ok "tres compilaciones: un tercio de los cores"
+want="$(jobs_for 3)"
+if [ "$out" = "$want" ]; then
+  ok "tres compilaciones: un tercio de los cores ($want)"
 else
-  bad "tres compilaciones: un tercio de los cores" "esperado 5, obtenido $out"
+  bad "tres compilaciones: un tercio de los cores" "esperado $want, obtenido $out"
 fi
 
 # 7. Many compilations: the floor of 4 jobs.
@@ -128,8 +147,8 @@ echo
 echo "== lo que NO es una compilación =="
 
 # 8. The script itself is not counted (it would divide forever).
-out="$(conc_with_table 'bash /home/user/.local/share/solidcraft-orch/bin/cargo-jobs.sh
-/usr/bin/cargo')"
+out="$(conc_with_table "bash $CARGO_JOBS
+/usr/bin/cargo")"
 if [ "$out" = "1" ]; then
   ok "el propio cargo-jobs.sh no cuenta como compilación"
 else
@@ -145,7 +164,7 @@ else
 fi
 
 # 10. A rustc alone is not a compilation (it is the child of one).
-out="$(conc_with_table '/home/user/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name solidcraft_engine')"
+out="$(conc_with_table '/usr/bin/rustc --crate-name solidcraft_engine')"
 if [ "$out" = "1" ]; then
   ok "un rustc suelto no infla el conteo"
 else
