@@ -97,10 +97,20 @@ is full, its LRU evicts, between builds, exactly what the next build needs: the 
 at 0% and every gate pays the cold price forever. That cache is too small, not useless, and
 the fix is a bigger cap, not a deletion.
 
-MEASURED on this box (2026-11-17): one build of the two biggest crates in the `ci` profile
-leaves 5.6 GB of artifacts and the default sccache cap is 10 GiB. The cache was full after two
-builds and the hit rate was 0% (293 compiles, 0 hits, 0% avoided). The cap now lives in the
-machine's cargo config (`[env] SCCACHE_MAX_CACHE_SIZE = "60G"`), which holds ten builds.
+MEASURED on this box (2026-11-17, the `ci` profile of solidcraft-io + solidcraft-engine):
+
+| build | hit rate | time |
+|---|---|---|
+| the first one (the cache had no artifacts of this profile) | 0% (293 compiles, 0 hits) | **22m11s** |
+| the next one | 95.1% | 13m22s |
+| the next one, everything from the cache | 97.6% | **6m03s** |
+
+So the 0% was a COLD cache for that profile, not a broken one: the same build three times
+later is 3.7 times faster. The cap is the other half of it: the default 10 GiB holds two
+builds of this size, so a second profile (the `dev` one) evicts the first one's artifacts and
+the next `ci` build is cold again. The cap now lives in the machine's cargo config
+(`[env] SCCACHE_MAX_CACHE_SIZE = "60G"`), which holds ten builds; the cache server reads it
+when it starts, so it has to be restarted (`sccache --stop-server`) after the change.
 
 `bin/sccache-health.sh` tells the two apart: it prints the hit rate, the cache size, its cap
 and the free disk, and it says which of the two it is. Exit 1: too small (raise the cap). Exit

@@ -77,8 +77,10 @@ fi
 # The cache is too small when it is FULL and it still misses everything: the
 # cap is below what a build needs, so the LRU evicts what comes next.
 if awk -v s="${size_gb:-0}" -v c="${cap_gb:-0}" 'BEGIN { exit !((c + 0) > 0 && (s + 0) >= (c + 0) * 0.9) }'; then
-  echo "VERDICT: the cache is too small: it is at its cap (${cap:-unknown}) and it still misses everything."
-  echo "  One build leaves about ${BUILD_GB} GB, so the cap has to hold at least two of them."
+  echo "VERDICT: the cache is at its cap (${cap:-unknown}) and it still misses everything."
+  echo "  Either the cap is too small for the builds that share it, or the artifacts of this"
+  echo "  profile were never cached: one build leaves about ${BUILD_GB} GB, so the cap has to"
+  echo "  hold at least two of them."
   echo "  Raise it in the machine's cargo config: [env] SCCACHE_MAX_CACHE_SIZE = \"60G\","
   echo "  then restart the cache: ${SCCACHE_BIN} --stop-server"
   exit 1
