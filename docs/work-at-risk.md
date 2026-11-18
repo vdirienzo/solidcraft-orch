@@ -34,11 +34,21 @@ razon: lo que se pregunta es "este trabajo MIO esta en el fork?", y la historia 
 upstream no es trabajo nuestro.
 
 **Lo que el numero NO dice (y hay que decirlo)**: 83 ramas en riesgo es una cota
-superior. La mitad son la MISMA idea en tres ramas (`backup/*`, `tmp-*`, `salvage/*`,
-`rebase/*` del mismo issue), y un squash-merge cambia el SHA: un commit ya mergeado
-upstream aparece como "propio" hasta que se compara por **patch-id** y no por SHA. Por
-eso las ramas se empujaron **todas**: empujar de mas no cuesta, empujar de menos pierde
-trabajo.
+superior, y ninguna medicion de "cuanto trabajo queda pendiente" sale de un solo numero:
+
+- La mitad son la MISMA idea en tres ramas (`backup/*`, `tmp-*`, `salvage/*`, `rebase/*`
+  del mismo issue).
+- Un **squash-merge cambia el SHA**: un commit ya mergeado upstream aparece como
+  "propio" hasta que se compara por **patch-id** y no por SHA. Medido: los 3 commits de
+  `fix/issue-2130-hover-pan` NO estan en `origin/main` por patch-id, aunque su PR
+  (#11886) esta mergeado como `23d61d702`.
+- Comparar por **contenido** (blob a blob) tampoco alcanza: `main` sigue avanzando, y
+  un fichero que el PR toco cambia despues por otros motivos, asi que da "contenido
+  propio" en 82 de las 83 ramas. El numero de "trabajo real pendiente" NO sale de ahi.
+
+Por eso las ramas se empujaron **todas**: empujar de mas no cuesta, empujar de menos
+pierde trabajo. El estado real de "cuanto queda" se lee issue por issue, no con un
+contador.
 
 ### La rama que se creia perdida
 
