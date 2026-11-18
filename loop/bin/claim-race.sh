@@ -73,8 +73,14 @@
 #     CLAIM_EXCLUDED_LABELS), and the funnel is decided where the issues
 #     are PICKED, not where a claim is arbitrated.
 #   * the MODE (selection|race|funnel) is accepted for the callers that pass
-#     it, but the arbiter has ONE rule: the union of the two rules of the
-#     upstream. The mode does not change the answer here.
+#     it, and it says which QUESTION is asked: the funnel ("may a new claim
+#     be made on this issue?"), the selection (the same question, seen from
+#     the record of the issue) or the race ("did our own pull request win
+#     the race?"). The arbiter has ONE rule and it arbitrates the claim in
+#     the three of them; what the mode changes is the pull request of ours
+#     that is being published (in the funnel it is excluded only when it is
+#     really ours) and whether the TIMELINE of the issue holds the claim
+#     on its own (in the race the answer is the one of the arbiter).
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -199,6 +205,20 @@ case "$MODE" in
   *) echo "claim-race: the mode has to be selection, race or funnel: '$MODE'" >&2; exit 2 ;;
 esac
 
+# The MODE that decides the QUESTION that is asked:
+#   funnel     the triage: may a NEW claim be made on this issue?
+#   selection  the same question, seen from the record of the issue
+#   race       did our own pull request win the race of the issue?
+# 'auto' (and the mode that is not given) is resolved here: the race when
+# we have a pull request of our own and the selection otherwise. The brake
+# resolves it the same way before it asks.
+EFFECTIVE_MODE="$MODE"
+case "$EFFECTIVE_MODE" in
+  ""|auto)
+    if [ -n "$OUR_PR" ]; then EFFECTIVE_MODE="race"; else EFFECTIVE_MODE="selection"; fi
+    ;;
+esac
+
 # --- the repository where the claims live -----------------------------------
 # The order is the one of the rule of the loop: the --repo of the caller
 # wins; then SC_REPO and UPSTREAM of the config.env of the loop; then the
@@ -221,6 +241,13 @@ PR_LIMIT="$(cfg_get SC_PR_LIMIT "$LOOP_DIR/config.env")"
 [ -n "$PR_LIMIT" ] || PR_LIMIT="${SC_PR_LIMIT:-}"
 [ -n "$PR_LIMIT" ] || PR_LIMIT="$(cfg_get CLAIM_PR_LIMIT "$LOOP_DIR/config.env")"
 [ -n "$PR_LIMIT" ] || PR_LIMIT="${CLAIM_PR_LIMIT:-}"
+# The default is the one of the arbiter (2000): the list that the shim
+# reads and the list that the arbiter reads are the SAME list, and a
+# truncation is measured against the limit of that list.
+[ -n "$PR_LIMIT" ] || PR_LIMIT="2000"
+case "$PR_LIMIT" in
+  ''|*[!0-9]*) PR_LIMIT="2000" ;;
+esac
 
 # Who we are: the arbiter needs it to apply the rule of the same author. It
 # resolves it on its own (the environment, then the config.env of the loop,
@@ -252,11 +279,75 @@ FORK_OWNER="${FORK_OWNER:-}"
 EXCLUDED_LABELS="$(cfg_get CLAIM_EXCLUDED_LABELS "$LOOP_DIR/config.env")"
 [ -n "$EXCLUDED_LABELS" ] || EXCLUDED_LABELS="in progress,kernel-paused,status:decision,needs-info,area:kernel"
 
-ISSUE_RECORD="$(mktemp "${TMPDIR:-/tmp}/claim-race-issue.XXXXXX")"
-ISSUE_ERR="$(mktemp "${TMPDIR:-/tmp}/claim-race-issue-err.XXXXXX")"
+# --- the working directory of the shim ---------------------------------------
+# The files of the work (the record of the issue, the list of the open pull
+# requests, the timeline, the answer of the arbiter) live in a directory of
+# their own that is removed when the shim ends, whatever the verdict is.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/claim-race.XXXXXX")" || exit 12
+cleanup() { rm -rf "$WORK"; }
+trap cleanup EXIT
+
+ISSUE_RECORD="$WORK/issue.json"
+ISSUE_ERR="$WORK/issue.err"
+
+# --- the gh of the arbiter: one that HONORS --jq ---------------------------
+#
+# WHY (2026-11-18): the arbiter asks gh for the list of the open pull
+# requests FILTERED: the filter IS the rule of the claim (the title that
+# names the issue and the body that closes it). A gh that IGNORES the
+# filter answers with the raw JSON, the arbiter reads the digits of that
+# JSON as numbers of pull requests and the rule says TAKEN for an issue
+# that is FREE (and UNKNOWN for an issue that nobody holds).
+#
+# The gh of the machine honors the filter. This WRAPPER makes the rule
+# work with a gh that does not (a stub of the tests, an old version): it
+# applies the SAME program that the arbiter asked for, so the rule of the
+# claim is NOT written twice and the arbiter stays the only one that says
+# who holds the claim.
+GH_REAL="$(command -v gh 2>/dev/null || true)"
+GH_CMD="gh"
+if [ -n "$GH_REAL" ]; then
+  GH_CMD="$WORK/gh"
+  cat >"$GH_CMD" <<'WRAPPER'
+#!/usr/bin/env bash
+# A gh that HONORS --jq, even when the gh of the machine does not.
+set -uo pipefail
+REAL_GH="${CLAIM_GH_REAL:?}"
+filter=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--jq" ]; then filter="$a"; fi
+  case "$a" in --jq=*) filter="${a#--jq=}" ;; esac
+  prev="$a"
+done
+out="$("$REAL_GH" "$@")"
+rc=$?
+# The answer is JSON: the gh ignored the filter and the program is
+# applied HERE, with the same program the caller asked for.
+if [ -n "$filter" ] && [ -n "$out" ]; then
+  case "$out" in
+    "["*|"{"*)
+      if command -v jq >/dev/null 2>&1; then
+        filtered="$(printf '%s' "$out" | jq -r "$filter" 2>/dev/null)"
+        if [ $? -eq 0 ]; then
+          printf '%s\n' "$filtered"
+          exit "$rc"
+        fi
+      fi
+      ;;
+  esac
+fi
+printf '%s\n' "$out"
+exit "$rc"
+WRAPPER
+  chmod +x "$GH_CMD"
+  export CLAIM_GH_REAL="$GH_REAL"
+  # The arbiter asks ITS gh (GH_BIN): it is the wrapper.
+  export GH_BIN="$GH_CMD"
+fi
 
 read_issue_record() {
-  gh issue view "$ISSUE" --repo "$REPO" \
+  "$GH_CMD" issue view "$ISSUE" --repo "$REPO" \
      --json number,state,stateReason,labels,assignees,comments >"$ISSUE_RECORD" 2>"$ISSUE_ERR"
 }
 
@@ -347,6 +438,165 @@ EOF
 
 rm -f "$ISSUE_RECORD" "$ISSUE_ERR"
 
+# --- the list of the open pull requests and the timeline of the issue ------
+#
+# WHY THE SHIM READS THEM (2026-11-18): the arbiter decides WHO holds the
+# claim. There are three questions that it does not answer and that the
+# guard of the loop needs:
+#
+#   * the TIMELINE of the issue: the pull requests that CROSS-REFERENCED
+#     it. The mentions made in the comments of a pull request are only
+#     there, and the upstream looks for the claim in the timeline. The
+#     oldest OPEN one wins.
+#   * whether the list is TRUNCATED: a list of N pull requests when the
+#     limit is N is not a list. The guard does NOT know and says so (the
+#     arbiter would answer "nobody holds it", and that is the most
+#     expensive direction there is).
+#   * whether GitHub ANSWERED at all: an empty answer is not an empty
+#     list.
+#
+# The list is read with the numbers and the authors only: the bodies are
+# the business of the arbiter.
+OPEN_JSON="$WORK/open.json"
+if ! "$GH_CMD" pr list --repo "$REPO" --state open --limit "$PR_LIMIT" \
+      --json number,author >"$OPEN_JSON" 2>"$WORK/open.err"; then
+  emit_unknown "unknown-github"
+fi
+if [ ! -s "$OPEN_JSON" ]; then
+  # An empty answer is not an empty list: GitHub did not answer.
+  emit_unknown "unknown-github"
+fi
+
+# The timeline of the issue: the pull requests that cross-referenced it.
+# The answer is a list of numbers (the filter of gh) and it can also be
+# the list of the events (a gh that does not honor the filter): both are
+# read here.
+TIMELINE_FILE="$WORK/timeline.txt"
+if ! "$GH_CMD" api "repos/$REPO/issues/$ISSUE/timeline?per_page=100" --paginate \
+      --jq '.[] | select(.event=="cross-referenced")
+             | select(.source.issue.pull_request != null)
+             | .source.issue.number' >"$TIMELINE_FILE" 2>/dev/null; then
+  emit_unknown "unknown-github"
+fi
+
+# WHO WE ARE: the author of our own pull requests. The same order as the
+# arbiter (the environment, then the config.env of the loop, then the
+# authenticated user of gh).
+OUR_AUTHOR="$FORK_OWNER"
+if [ -z "$OUR_AUTHOR" ]; then
+  OUR_AUTHOR="$("$GH_CMD" api user --jq .login 2>/dev/null | head -1)"
+fi
+
+# The pull request that is being published is OURS only when its author is
+# ours or UNKNOWN: a pull request that demonstrably belongs to somebody
+# else keeps the claim (the guard of the loop says so, and it is right:
+# the number of a pull request is not a proof of who wrote it).
+#
+# The three questions are answered by ONE pass over the two lists.
+CLAIM_INFO="$(python3 - "$OPEN_JSON" "$TIMELINE_FILE" "$OUR_PR" \
+                     "$OUR_AUTHOR" "$PR_LIMIT" <<'PY'
+import json
+import sys
+
+open_path, timeline_path, our_pr, our_author, limit = sys.argv[1:6]
+
+with open(open_path, encoding="utf-8") as fh:
+    prs = json.load(fh)
+if not isinstance(prs, list):
+    sys.exit(1)
+
+numbers = []
+authors = {}
+for pr in prs:
+    if not isinstance(pr, dict):
+        continue
+    number = str(pr.get("number") or "").strip()
+    if not number:
+        continue
+    numbers.append(number)
+    author = pr.get("author")
+    if isinstance(author, dict):
+        authors[number] = str(author.get("login") or "")
+
+# The list of N pull requests when the limit is N is not a list.
+truncated = "1" if len(prs) >= int(limit) else "0"
+
+ours_author = authors.get(our_pr, "") if our_pr else ""
+
+# The pull request that is being published is OURS only when its author is
+# ours or UNKNOWN: a pull request that demonstrably belongs to somebody
+# else keeps the claim.
+exclude_ours = "yes"
+if our_pr and ours_author and our_author:
+    if ours_author.lower() != our_author.lower():
+        exclude_ours = "no"
+
+# The timeline: the pull requests that cross-referenced the issue. The
+# answer is a list of numbers (the filter of gh) or the list of the
+# events (a gh that does not honor the filter): both are read here.
+with open(timeline_path, encoding="utf-8") as fh:
+    raw = fh.read()
+timeline = []
+data = None
+try:
+    data = json.loads(raw)
+except ValueError:
+    data = None
+if isinstance(data, list):
+    flat = []
+    for item in data:
+        if isinstance(item, list):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    for item in flat:
+        if isinstance(item, dict):
+            if item.get("event") != "cross-referenced":
+                continue
+            source = item.get("source") or {}
+            issue = source.get("issue") or {}
+            if not issue.get("pull_request"):
+                continue
+            number = issue.get("number")
+        else:
+            number = item
+        if number is not None:
+            timeline.append(str(number).strip())
+else:
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            timeline.append(line)
+
+# The holders of the timeline: the cross-referenced pull requests that are
+# STILL OPEN (a closed pull request does not hold a claim) and that are
+# not the pull request of ours that is being published.
+open_numbers = set(numbers)
+holders = []
+for number in timeline:
+    if not number.isdigit() or number not in open_numbers:
+        continue
+    if our_pr and exclude_ours == "yes" and number == our_pr:
+        continue
+    if number not in holders:
+        holders.append(number)
+holders.sort(key=int)
+
+holder = holders[0] if holders else ""
+holder_author = authors.get(holder, "") if holder else ""
+print("%s|%s|%s|%s|%s|%s" % (len(prs), ours_author, exclude_ours, holder,
+                             holder_author, truncated))
+PY
+)" || emit_unknown "unknown-github"
+
+IFS='|' read -r OPEN_COUNT OURS_PR_AUTHOR EXCLUDE_OURS TIMELINE_HOLDER \
+     TIMELINE_HOLDER_AUTHOR TRUNCATED <<< "$CLAIM_INFO"
+
+if [ "$TRUNCATED" = "1" ]; then
+  # The list came back truncated: the guard does NOT know.
+  emit_unknown "unknown-truncated"
+fi
+
 # --- the arbitration --------------------------------------------------------
 ARBITER="$(find_arbiter)" || ARBITER=""
 if [ -z "$ARBITER" ]; then
@@ -359,13 +609,17 @@ if [ -z "$ARBITER" ]; then
   exit 12
 fi
 
-OUTFILE="$(mktemp "${TMPDIR:-/tmp}/claim-race.out.XXXXXX")"
-ERRFILE="$(mktemp "${TMPDIR:-/tmp}/claim-race.err.XXXXXX")"
-cleanup() { rm -f "$OUTFILE" "$ERRFILE"; }
-trap cleanup EXIT
+OUTFILE="$WORK/arbiter.out"
+ERRFILE="$WORK/arbiter.err"
 
 ARBITER_ARGS=("$ISSUE")
-[ -n "$OUR_PR" ] && ARBITER_ARGS+=(--our-pr "$OUR_PR")
+# The pull request of ours is only EXCLUDED from the competition when it
+# is really ours (the funnel: may a NEW claim be made on this issue?). In
+# the race the answer is the one of the arbiter: our pull request
+# competes, whatever its author says.
+if [ -n "$OUR_PR" ] && { [ "$EFFECTIVE_MODE" != "funnel" ] || [ "$EXCLUDE_OURS" = "yes" ]; }; then
+  ARBITER_ARGS+=(--our-pr "$OUR_PR")
+fi
 
 # The stdout and the stderr of the arbiter are captured and put back out
 # AS THEY ARE: the caller has to see WHICH issue and WHICH pull request were
@@ -408,7 +662,7 @@ fi
 # not decide anything: it only says who wrote the pull request that the
 # arbitro already chose.
 if [ -z "$HOLDER_AUTHOR" ] && [ -n "$HOLDER" ]; then
-  HOLDER_AUTHOR="$(timeout 30 gh pr view "$HOLDER" --repo "$REPO" \
+  HOLDER_AUTHOR="$(timeout 30 "$GH_CMD" pr view "$HOLDER" --repo "$REPO" \
                     --json author --jq '.author.login' 2>/dev/null)" || HOLDER_AUTHOR=""
   HOLDER_AUTHOR="$(first_line "$HOLDER_AUTHOR")"
 fi
@@ -439,6 +693,24 @@ case "$ARBITER_RC" in
     ;;
 esac
 
+# The TIMELINE, the third source of the claim: a pull request that
+# CROSS-REFERENCED the issue holds it too, even when it does not name the
+# issue in its title or in its body (the mentions made in the comments of
+# a pull request are only there, and the upstream looks for the claim
+# there).
+#
+# It is the question of the TRIAGE ("may a new claim be made on this
+# issue?"), not the question of the RACE ("who won the race?"): in the
+# race the answer is the one of the arbiter, that competes with our pull
+# request.
+if [ "$VERDICT" = "OK" ] && [ -n "$TIMELINE_HOLDER" ] \
+   && [ "$EFFECTIVE_MODE" != "race" ]; then
+  VERDICT="TAKEN"
+  REASON="mentioned-by-pr"
+  HOLDER="$TIMELINE_HOLDER"
+  HOLDER_AUTHOR="$TIMELINE_HOLDER_AUTHOR"
+fi
+
 HOLDER_OURS=""
 if [ -n "$HOLDER" ] && [ -n "$HOLDER_AUTHOR" ] && [ -n "$FORK_OWNER" ]; then
   if [ "${HOLDER_AUTHOR,,}" = "${FORK_OWNER,,}" ]; then HOLDER_OURS="yes"; else HOLDER_OURS="no"; fi
@@ -465,9 +737,12 @@ printf 'ISSUE=%s\n' "$ISSUE"
 cat "$OUTFILE"
 cat "$ERRFILE" >&2
 
-case "$ARBITER_RC" in
-  0) exit 0 ;;
-  1) exit 10 ;;
-  2) exit 12 ;;
+# The exit code is the exit code of the VERDICT and not the one of the
+# arbiter: the timeline can hold the claim on its own (the arbiter does
+# not know it), and the verdict says TAKEN.
+case "$VERDICT" in
+  OK) exit 0 ;;
+  TAKEN|LOST) exit 10 ;;
+  RESOLVED) exit 11 ;;
   *) exit 12 ;;
 esac

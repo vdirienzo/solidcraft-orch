@@ -1681,7 +1681,21 @@ FMT_MIN_SLICE="${FMT_MIN_SLICE:-900}"
 case "$FMT_MIN_SLICE" in ''|*[!0-9]*) FMT_MIN_SLICE=900 ;; esac
 if [ "$FMT_MIN_SLICE" -lt 600 ]; then FMT_MIN_SLICE=600; fi
 FMT_SLICE=$(( BUDGET * 2 / 100 ))
-if [ "$FMT_SLICE" -lt "$FMT_MIN_SLICE" ]; then FMT_SLICE="$FMT_MIN_SLICE"; fi
+if [ "$FMT_SLICE" -lt "${FMT_MIN_SLICE:-0}" ]; then FMT_SLICE="${FMT_MIN_SLICE:-0}"; fi
+# The floor is a MINIMUM of the fmt phase, not a share of the budget: a
+# budget that does not pay for it (a run of a minute, a test) leaves the
+# floor out and the fmt takes its percentage.
+#
+# WHY (2026-11-18): the floor of 900 s ate a budget of 60 s WHOLE. The
+# slice of the tests went NEGATIVE, the check of the workspace (whose
+# "does it fit?" is compared with the slice of the tests) ran with the
+# money of the tests, and the scope was judged WITHOUT its tests: the
+# gate published a scope that was never tested. The floor is applied
+# only when it does not take more than half of the budget: the phases
+# that decide the scope always keep a share that can be run.
+if [ "${FMT_MIN_SLICE:-0}" -gt "$(( BUDGET / 2 ))" ]; then
+  FMT_SLICE=$(( BUDGET * 2 / 100 ))
+fi
 # The slice of the RETRY of the fmt phase: when the first attempt is cut
 # by its timeout the phase runs AGAIN with a bigger slice (the deadline of
 # the run still caps it: the retry never outlives the budget).
