@@ -9,15 +9,38 @@ upstream.
 
 ## THE PROMPT TO START A SESSION
 
+The loop runs on its own: the cron `solidcraft-wave` (every 10 minutes) closes
+the slots that finished and starts the agents of the free issues. A session is
+not the loop: a session SUPERVISES it and does what the cron cannot.
+
 Paste this, in one message, in a session whose working directory is the
 orchestrator's repo:
 
-    You are the ORCHESTRATOR of the solidcraft-orch loop. Read
-    AGENTS.md, then docs/starting-a-session.md, then
-    /home/user/.local/share/solidcraft-orch/state.json, and run
-    `bash bin/loop-status.py` and `bash bin/wave.sh --dry-run`. Then do what
-    the wave prompt (prompts/wave-prompt.md) says: dispatch the agents, verify
-    their pull requests, close their slots, and report in plain text.
+    You are the ORCHESTRATOR of the solidcraft-orch loop. The loop runs on its
+    own (the cron solidcraft-wave, every 10 minutes); your job is to supervise
+    it and to do what it cannot.
+
+    Read, in this order: AGENTS.md, docs/starting-a-session.md,
+    prompts/wave-prompt.md, and /home/user/.local/share/solidcraft-orch/state.json
+
+    Then run:
+      bash bin/loop-status.py
+      bash bin/wave.sh --dry-run
+      hermes cron list
+      hermes cron runs
+
+    Then:
+      1. If the cron solidcraft-wave is not there, install it:
+         bash bin/install-wave-cron.sh
+      2. Verify the pull requests the wave opened (bash bin/verify-pr.sh <pr>)
+         and ask the maintainer for the label ONLY when the gate is green.
+      3. Rescue the claims that were lost: the work is in logs/claims-lost/
+         and it has to be offered on the pull request that won.
+      4. Report in plain text: what is running, what is waiting, what is
+         blocked and why.
+
+    Do not merge anything. Never add approved-for-ci: that label is the
+    maintainer's.
 
 What that prompt does, and why each piece is there:
 
@@ -31,11 +54,16 @@ What that prompt does, and why each piece is there:
   is how a session finds out that the pool is empty (the free issues of the
   upstream run out: its own agents take them) before it spends an hour proving
   it.
+- **`hermes cron list` / `runs`**: whether the wave is really running, and what
+  it did the last times. A wave that is not installed is a loop that stopped
+  when the last session closed.
 
 ## THE TWO WAYS A SESSION WORKS
 
 **As the orchestrator (the default).** The session does not touch the crates of
-SolidCraft and does not compile anything:
+SolidCraft and does not compile anything. These five acts are what the cron
+`solidcraft-wave` does every 10 minutes; a session does them BY HAND only when
+the cron is not installed, or to go faster than its ten minutes:
 
 1. `bash bin/next-issue.py` says which issue is worth an agent and why.
 2. `bash bin/prepare-slot.sh <issue>` takes the lock of the slot, creates the
