@@ -16,6 +16,17 @@ RESTORES by re-installing the canonical prompt. It never writes anything else, i
 touches the code, and it prints one line so the cron log says what happened.
 
 Exit codes: 0 = in sync (or restored), 1 = could not restore (needs a human).
+
+THE JOB IS LOOKED UP BY NAME (2026-11-19): the id of the wave cron changes every
+time the cron is installed, so the id that was written here (347ba559cc10) became
+stale and the guard cried "job not found" every five minutes on a machine whose
+wave was fine. `bin/install-wave-cron.sh` already looks the job up by name; this
+script does the same.
+
+A WAVE THAT RUNS AS A SCRIPT HAS NO PROMPT: the wave of this machine is a
+no-agent cron (the script stdout is the turn), so there is no prompt that a
+stale copy could break. In that case there is nothing to guard and the guard
+says so, with exit code 0.
 """
 
 from __future__ import annotations
@@ -26,7 +37,7 @@ import os
 import subprocess
 import sys
 
-JOB_ID = "347ba559cc10"
+JOB_NAME = "solidcraft-wave"
 ORCH_DIR = os.environ.get("ORCH_DIR", "/home/user/.local/share/solidcraft-orch")
 CANONICAL = os.path.join(ORCH_DIR, "prompts", "wave-prompt.md")
 JOBS_JSON = os.path.join(os.environ.get("HERMES_HOME", "/home/user/.hermes"), "cron", "jobs.json")
@@ -47,20 +58,25 @@ def sha(text: str) -> str:
     return hashlib.sha256(text.strip().encode()).hexdigest()[:12]
 
 
-def read_job_prompt() -> str | None:
+def find_job() -> tuple[str | None, str | None]:
+    """The wave job, by NAME, and its prompt (None when it runs as a script)."""
     try:
         with open(JOBS_JSON, encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"wave-prompt-guard: cannot read {JOBS_JSON}: {exc}")
-        return None
+        return None, None
     jobs = data.get("jobs", data) if isinstance(data, dict) else data
     for job in jobs:
-        if job.get("id") == JOB_ID:
+        if job.get("name") == JOB_NAME:
             prompt = job.get("prompt")
-            return prompt if isinstance(prompt, str) else None
-    print(f"wave-prompt-guard: job {JOB_ID} not found in {JOBS_JSON}")
-    return None
+            if not isinstance(prompt, str) or not prompt.strip():
+                # A script cron has no prompt (or an empty one): there is
+                # nothing that a stale copy could break.
+                return job.get("id"), None
+            return job.get("id"), prompt
+    print(f"wave-prompt-guard: the job {JOB_NAME} is not in {JOBS_JSON}")
+    return None, None
 
 
 def main() -> int:
@@ -69,9 +85,14 @@ def main() -> int:
         return 1
     with open(CANONICAL, encoding="utf-8") as fh:
         canonical = fh.read()
-    current = read_job_prompt()
-    if current is None:
+    job_id, current = find_job()
+    if job_id is None:
         return 1
+    if current is None:
+        # The wave runs as a script cron (no-agent): it has no prompt, so there
+        # is nothing that a stale copy could break.
+        print("wave-prompt-guard: the wave runs as a script cron (no prompt): nothing to guard")
+        return 0
 
     missing = [m for m in REQUIRED_MARKERS if m not in current]
     if sha(current) == sha(canonical) and not missing:
@@ -85,7 +106,7 @@ def main() -> int:
     )
     try:
         proc = subprocess.run(
-            [HERMES, "cron", "edit", JOB_ID, "--prompt", canonical],
+            [HERMES, "cron", "edit", job_id, "--prompt", canonical],
             capture_output=True, text=True, timeout=120,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -95,7 +116,7 @@ def main() -> int:
         print(f"wave-prompt-guard: restore FAILED rc={proc.returncode}: {(proc.stderr or '').strip()[:400]}")
         return 1
 
-    after = read_job_prompt()
+    _, after = find_job()
     if after is None or sha(after) != sha(canonical):
         print("wave-prompt-guard: restore did not take effect (verify manually)")
         return 1
