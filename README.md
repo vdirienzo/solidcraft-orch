@@ -248,6 +248,7 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 | solidcraft-gc-disk | 15 min | gc-disk.sh | limpia el disco: artefactos y targets muertos |
 | solidcraft-loop-status | 15 min | loop-status.py | el estado del loop en el chat, sin LLM |
 | solidcraft-wave-prompt-guard | 5 min | wave-prompt-guard.py | el prompt del cron de la wave tiene que ser el canonico |
+| solidcraft-wave | 10 min | wave.sh | la wave: cierra los slots terminados y arranca los agentes libres |
 
 **`bin/crons.txt` es la fuente de esta tabla.** El grafo dice a qué nodo pertenece cada
 cron y `bin/workflow-validate.py` comprueba que los dos digan lo mismo: un cron que
@@ -262,6 +263,31 @@ hermes cron create --name solidcraft-gate-queue --schedule '*/3 * * * *' \
 hermes cron create --name solidcraft-pipeline --schedule '*/5 * * * *' \
   --script pipeline.py --no-agent --deliver local
 ```
+
+### La wave: el loop que corre sin nadie
+
+El cron `solidcraft-wave` es la parte del loop que **no necesita a una
+persona**: cada 10 minutos cierra los slots cuyo trabajo ya es un pull request
+y arranca un agente en el siguiente issue libre. Se instala con un script
+(que copia el script del cron a `~/.hermes/scripts/`, igual que los demas, y
+registra el job):
+
+```bash
+bash bin/install-wave-cron.sh            # instala la copia y el cron
+bash bin/install-wave-cron.sh --dry-run  # dice lo que haria
+bash bin/install-wave-cron.sh --remove   # saca el cron
+```
+
+La copia del cron es byte-identica a `bin/wave.sh` (el preflight avisa si no
+lo es: un cron que corre codigo viejo hace lo que puede, en silencio). Los
+**otros** scripts de la wave no se copian: `wave.sh` los busca en el bin del
+orquestador (`ORCH_BIN`), asi que el cron siempre corre el codigo que esta
+en el repo.
+
+Lo que la wave NO toca: un slot cuyo agente esta trabajando. "El PR existe"
+no es "el trabajo esta terminado": un agente que abrio el PR sigue
+trabajando en el (el gate, la evidencia). La vivencia se comprueba con
+`bin/slot-busy.sh`: un proceso dentro del worktree del slot o de su target.
 
 Los scripts que los crons ejecutan viven en `HERMES_SCRIPTS` (`~/.hermes/scripts/`): el cron
 los busca ahi, y el script tiene que existir ANTES de que el job se cree.
