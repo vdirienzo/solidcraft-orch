@@ -52,6 +52,24 @@ VETO_LABELS = {
 # The areas an agent can work on alone: the document layer, the commands, the
 # sketch, the files, the tools. The UI needs a screen the box does not have.
 AREAS = ("area:doc", "area:sketch", "area:io", "area:infra", "area:ui", "area:assemblies")
+# The subjects whose cause lives in the PARKED code, even when the issue does
+# not carry a paused label (filter 1: "an area the maintainer parked").
+#
+# WHY (2026-11-19): the STEP/IGES reader is `crates/kernel/src/step_in/`, and
+# the kernel is PAUSED (RULES.md: no issue or pull request that touches
+# crates/kernel - booleans, fillets, chamfers, shell, offsets, sweeps, lofts,
+# threads, holes, STEP/IGES, tessellation). The upstream labels a STEP issue
+# `area:io` more often than not, so the LABELS do not park it: the selector
+# offered #19570 ("a half-sphere end cap is read inside out") to a wave. The
+# honest outcome for an issue whose cause is in the parked code is to skip it,
+# not to work around it (docs/issue-selection.md, "a filter that is about the
+# CODE, not the issue text").
+#
+# "STEP" is matched in UPPER CASE on purpose: a lowercase "step" is a geometry
+# step (the wall of a step), not the format.
+PAUSED_SUBJECTS = ("STEP", "IGES")
+# The subjects that ARE the parked code, by the way the upstream titles them.
+PAUSED_PREFIXES = ("solidcore:", "Local operation", "Tessellation")
 # The phrases in a triage that mean DEAD (filter 3).
 DEAD_PHRASES = (
     "could not be reproduced",
@@ -143,6 +161,12 @@ def classify(issue):
     vetoed = labels & VETO_LABELS
     if vetoed:
         return False, "vetado por etiqueta: " + ", ".join(sorted(vetoed))
+    for subject in PAUSED_SUBJECTS:
+        if subject in title:
+            return False, f"el asunto esta en el codigo aparcado ({subject})"
+    for prefix in PAUSED_PREFIXES:
+        if title.startswith(prefix):
+            return False, f"el asunto esta en el codigo aparcado ({prefix})"
     if issue.get("assignees"):
         return False, "ya tiene asignado a " + ", ".join(a["login"] for a in issue["assignees"])
     if title.strip().startswith("[RFC]"):

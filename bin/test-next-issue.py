@@ -63,6 +63,12 @@ ISSUES = [
     issue(6, "libre y con causa", body=SCRIPT),
     issue(7, "[RFC] algo nuevo", body=SCRIPT),
     issue(8, "tiene asignado", body=SCRIPT, assignees=["alguien"]),
+    # The STEP reader is `crates/kernel/src/step_in/` and the kernel is PAUSED:
+    # an issue about the format is dropped even when the label does not say so.
+    issue(9, "STEP import: a half-sphere end cap is read inside out", body=SCRIPT),
+    # A lowercase "step" is a geometry step (the wall of a step), not the
+    # format: this one is kept.
+    issue(0, "Sketch: the corner lookup refuses a clip at a step wall's edge", body=SCRIPT),
 ]
 
 
@@ -147,6 +153,7 @@ def main():
         (5, "necesita hardware"),
         (7, "es un RFC"),
         (8, "tiene asignado"),
+        (9, "el STEP esta en el codigo aparcado"),
     ):
         line = [l for l in listing.splitlines() if l.startswith(f"#{number} ")]
         if line and "SE DEJA" in line[0]:
@@ -158,6 +165,12 @@ def main():
         ok("#6 se toma (libre, con causa y verificable headless)")
     else:
         no("#6 se toma (libre, con causa y verificable headless)", line[0] if line else "no esta en la lista")
+
+    line = [l for l in listing.splitlines() if l.startswith("#0 ")]
+    if line and "SE TOMA" in line[0]:
+        ok("#0 se toma (un 'step' en minusculas es la geometria, no el formato)")
+    else:
+        no("#0 se toma (un 'step' en minusculas es la geometria, no el formato)", line[0] if line else "no esta en la lista")
 
     done = run()
     if done.returncode == 0 and done.stdout.strip() == "6":
