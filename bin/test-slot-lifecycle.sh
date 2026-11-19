@@ -202,6 +202,23 @@ else
 fi
 kill "$BUSY_PID" 2>/dev/null
 wait "$BUSY_PID" 2>/dev/null
+# Un proceso que SOLO MENCIONA el worktree (un ls, un grep) NO esta
+# trabajando en el: la primera version de slot-busy.sh lo contaba y un slot
+# vivo nunca se cerraba (7 GB que nadie libera).
+mkdir -p "$TMP/mentado"
+( sleep 120 ) >/dev/null 2>&1 &
+MENT_PID=$!
+# El comando del proceso menciona el path, pero no trabaja ahi.
+( exec -a "ls -d $TMP/mentado" sleep 120 ) &
+MENT_PID=$!
+sleep 1
+if bash "$REPO_ROOT/bin/slot-busy.sh" "$TMP/mentado" "" >/dev/null 2>&1; then
+  no "slot-busy dice LIBRE cuando un proceso solo menciona el worktree"
+else
+  ok "slot-busy dice LIBRE cuando un proceso solo menciona el worktree"
+fi
+kill "$MENT_PID" 2>/dev/null
+wait "$MENT_PID" 2>/dev/null
 
 # --- 6. slot-prs.py: el PR de cada slot ------------------------------------
 cat > "$TMP/slots.json" <<'JSON'
@@ -227,6 +244,40 @@ if printf '%s\n' "$MATCH" | grep -q "^9003	333	fix-9003	other$"; then
   ok "slot-prs dice que el PR es de otro (el claim se perdio)"
 else
   no "slot-prs dice que el PR es de otro (el claim se perdio)" "$MATCH"
+fi
+
+# --- 7. state-set --merge no borra lo que ya estaba -------------------------
+python3 "$REPO_ROOT/bin/state-set.py" slots "9004" '{"branch":"fix-9004","worktree":"/tmp/wt-9004"}' >/dev/null 2>&1
+python3 "$REPO_ROOT/bin/state-set.py" --merge slots "9004" '{"status":"running"}' >/dev/null 2>&1
+if python3 - "$ORCH/state.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+slot = (data.get("slots") or {}).get("9004") or {}
+raise SystemExit(0 if slot.get("status") == "running" and slot.get("branch") == "fix-9004" else 1)
+PY
+then
+  ok "state-set --merge cambia una clave y deja las otras"
+else
+  no "state-set --merge cambia una clave y deja las otras"
+fi
+python3 "$REPO_ROOT/bin/state-set.py" --delete slots "9004" >/dev/null 2>&1
+
+# --- 8. close-slot borra un worktree que no es del repo ----------------------
+# Un agente que reconstruyo su worktree (un clon suelto) deja un directorio
+# que "git worktree remove" no conoce: se quedan 7 GB.
+mkdir -p "$WORKTREES_DIR/issue-9005"
+echo "trabajo" > "$WORKTREES_DIR/issue-9005/apuntes.txt"
+python3 "$REPO_ROOT/bin/state-set.py" slots "9005" "{\"issue\": 9005, \"status\": \"running\", \"worktree\": \"$WORKTREES_DIR/issue-9005\"}" >/dev/null 2>&1
+cat > "$TMP/pr9005.json" <<JSON
+[{"number":90051,"title":"nuestro (#9005)","body":"Fixes #9005","author":{"login":"vdirienzo"},"headRefName":"fix-9005","isDraft":true}]
+JSON
+export GH_FAKE_LIST="$TMP/pr9005.json"
+bash "$REPO_ROOT/bin/close-slot.sh" 9005 90051 >/dev/null 2>&1
+if [ ! -d "$WORKTREES_DIR/issue-9005" ]; then
+  ok "close-slot borra un worktree que no es un worktree del repo"
+else
+  no "close-slot borra un worktree que no es un worktree del repo" "$WORKTREES_DIR/issue-9005 sigue"
 fi
 
 printf '\n%d casos, %d fallan\n' "$((PASS + FAIL))" "$FAIL"
