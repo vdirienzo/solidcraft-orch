@@ -20,6 +20,9 @@ go/
 # no codigo. Los reports que SI son evidencia (una medicion, una captura
 # revisada) van a evidence/ y a los PRs, no ahi.
 reports/latest.md
+# los briefs que la wave escribe para cada agente: son estado de la maquina,
+# no codigo (el que es codigo es prompts/agent-brief.md, la plantilla)
+prompts/agent-[0-9]*.md
 reports/daily-*.md
 reports/cron-prompt-actual.txt
 # backups de parches
