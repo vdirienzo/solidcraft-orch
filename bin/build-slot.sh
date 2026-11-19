@@ -34,6 +34,16 @@
 set -uo pipefail
 
 LOCK_DIR="${BUILD_SLOT_DIR:-/home/user/.local/share/solidcraft-loop/build-slots}"
+# The number of slots is the POLICY of the machine, not a number written in the
+# code: the box with 15 GB fits ONE heavy build (two builds of the engine ask
+# for ~10 GB of rustc between them) and the box with 62 GB fits two. The policy
+# lives in the config.env of the machine (the same file the loop reads); the
+# environment still wins over it.
+POLICY_FILE="${POLICY_FILE:-$HOME/.local/share/solidcraft-loop/config.env}"
+if [ -z "${BUILD_SLOTS:-}" ] && [ -r "$POLICY_FILE" ]; then
+  BUILD_SLOTS="$(grep -E '^[[:space:]]*(export[[:space:]]+)?BUILD_SLOTS=' "$POLICY_FILE" 2>/dev/null \
+    | tail -n 1 | cut -d= -f2- | cut -d'#' -f1 | tr -d '"'"'" | tr -d '[:space:]')"
+fi
 SLOTS="${BUILD_SLOTS:-2}"
 STALE_MIN="${BUILD_STALE_MIN:-180}"
 

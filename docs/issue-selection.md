@@ -14,8 +14,12 @@ Apply them in this order and stop at the first one that rejects the issue.
    IGES reader is `crates/kernel/src/step_in/`, and the kernel is paused, so an issue whose
    title names the format is off-limits even when the upstream labels it `area:io`. The
    selector vetoes the subjects `STEP` and `IGES` (in upper case: a lowercase "step" is a
-   geometry step, not the format) and the titles that ARE the parked code (`solidcore:`,
-   `Local operation`, `Tessellation`).
+   geometry step, not the format) and the titles that ARE the parked code: the kernel's own
+   operations (`Boolean`, `Spline Boolean`, `Fillet`, `Chamfer`, `Shell`, `Sweep`, `Loft`,
+   `Thread`, `Hole`, `Offset Face`, `Local operation`, `solidcore`, `Tessellation`) and the
+   render workspace (`Render`). The upstream labels most of those `area:sketch` or `area:io`
+   instead of `area:kernel`, so the labels do not park them: five "Spline Boolean" issues
+   were in the pool before the subject veto.
 2. **Claimed by an open PR.** Any open PR whose title or body names the issue. The lowest
    numbered open PR wins, so a higher-numbered one of ours loses the claim.
 3. **DEAD, by the triage comments.** A comment that says the bug could not be reproduced, that

@@ -66,6 +66,9 @@ ISSUES = [
     # The STEP reader is `crates/kernel/src/step_in/` and the kernel is PAUSED:
     # an issue about the format is dropped even when the label does not say so.
     issue(9, "STEP import: a half-sphere end cap is read inside out", body=SCRIPT),
+    # The kernel's own operations are parked too, and the upstream labels most
+    # of them `area:sketch`: the subject is what parks them.
+    issue(10, "Spline Boolean: a pocket returns two small cylinders", body=SCRIPT),
     # A lowercase "step" is a geometry step (the wall of a step), not the
     # format: this one is kept.
     issue(0, "Sketch: the corner lookup refuses a clip at a step wall's edge", body=SCRIPT),
@@ -154,6 +157,7 @@ def main():
         (7, "es un RFC"),
         (8, "tiene asignado"),
         (9, "el STEP esta en el codigo aparcado"),
+        (10, "el Boolean es una operacion del kernel aparcado"),
     ):
         line = [l for l in listing.splitlines() if l.startswith(f"#{number} ")]
         if line and "SE DEJA" in line[0]:

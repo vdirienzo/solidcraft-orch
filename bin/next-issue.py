@@ -69,7 +69,30 @@ AREAS = ("area:doc", "area:sketch", "area:io", "area:infra", "area:ui", "area:as
 # step (the wall of a step), not the format.
 PAUSED_SUBJECTS = ("STEP", "IGES")
 # The subjects that ARE the parked code, by the way the upstream titles them.
-PAUSED_PREFIXES = ("solidcore:", "Local operation", "Tessellation")
+# The kernel's own operations are parked too (RULES.md: booleans, fillets,
+# chamfers, shell, offsets, sweeps, lofts, threads, holes), and the upstream
+# labels most of them `area:sketch` or `area:io` instead of `area:kernel`, so
+# the labels do not park them either: "Spline Boolean: a pocket returns two
+# small cylinders" was in the pool with five more of its family.
+#
+# "Offset Plane" is NOT in the list: a plane is a datum, not a kernel offset.
+PAUSED_PREFIXES = (
+    "solidcore",
+    "Local operation",
+    "Tessellation",
+    "Boolean",
+    "Spline Boolean",
+    "Fillet",
+    "Chamfer",
+    "Shell",
+    "Sweep",
+    "Loft",
+    "Thread",
+    "Hole",
+    "Offset Face",
+    "OffsetFacesFeature",
+    "Render",
+)
 # The phrases in a triage that mean DEAD (filter 3).
 DEAD_PHRASES = (
     "could not be reproduced",
