@@ -29,6 +29,8 @@ HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 GH_BIN = os.environ.get("GH_BIN") or "gh"
 LOCKS = f"{ORCH_DIR}/locks"
 STATE = f"{ORCH_DIR}/state.json"
+# The worktrees of the slots: the cwd of the sessions of the agents of the loop.
+WORKTREES = os.environ.get("WORKTREES_DIR", os.path.expanduser("~/solidcraft-wt"))
 DB = f"{HERMES_HOME}/state.db"
 REPORTS = f"{ORCH_DIR}/reports"
 TZ = datetime.timezone(datetime.timedelta(hours=-3))
@@ -94,13 +96,15 @@ def agents():
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
         c.row_factory = sqlite3.Row
         for r in c.execute(
-            "select id, title, parent_session_id, last_activity_at "
-            "from sessions where source='subagent' and ended_at is null order by started_at desc"
+            "select id, source, title, cwd, parent_session_id, last_activity_at "
+            "from sessions where ended_at is null and cwd is not null and cwd like ? "
+            "order by started_at desc",
+            (f"{WORKTREES}/issue-%",),
         ):
             out.append(
                 {
                     "id": r["id"],
-                    "title": str(r["title"] or "")[:70],
+                    "title": (str(r["title"] or "") or str(r["cwd"] or ""))[:70],
                     "parent": str(r["parent_session_id"] or "")[:12],
                     "age": (now_ar().timestamp() - float(r["last_activity_at"])) / 60.0,
                 }
@@ -193,22 +197,36 @@ def main():
     lineas.append(f"SolidCraft - estado del loop ({ahora})")
 
     # 1. Lo que esta trabajando ahora
+    #
+    # LOS AGENTES DEL LOOP SON LAS SESIONES CON EL WORKTREE COMO CWD
+    # (2026-11-19): el agente del loop se lanza con `hermes --in <worktree>`
+    # y su sesion queda con ese cwd, pero su `source` NO es 'subagent' (es
+    # 'oneshot'), asi que la consulta de antes no lo veia nunca: el estado
+    # decia "Agentes vivos: 0 (el loop esta parado)" con un agente
+    # compilando en el slot 19523. La sesion abierta no prueba que el proceso
+    # siga vivo (una sesion queda abierta para poder reanudarla), asi que la
+    # linea dice sesiones, no vida: el que dice si el loop esta parado son los
+    # slots del estado.
+    running = [s for s in sl if s[1] == "running"]
     if ag_error:
         # The database could NOT be read: the number of live agents is
         # UNKNOWN. It is not 0 and it is not 1 (D5).
         lineas.append("")
-        lineas.append(f"Agentes vivos: ? (no se pudo leer la base: {ag_error})")
+        lineas.append(f"Agentes: ? (no se pudo leer la base: {ag_error})")
     elif ag:
         lineas.append("")
-        lineas.append(f"Agentes vivos: {len(ag)}")
+        lineas.append(f"Agentes (sesiones abiertas del loop): {len(ag)}")
         for a in ag:
             linea = f"  · {a['title']}"
             if a["age"] >= 1:
                 linea += f" (hace {a['age']:.0f}m)"
             lineas.append(linea)
+    elif running:
+        lineas.append("")
+        lineas.append("Agentes: 0 sesiones abiertas (hay slots corriendo)")
     else:
         lineas.append("")
-        lineas.append("Agentes vivos: 0 (el loop esta parado)")
+        lineas.append("Agentes: 0 (no hay ninguna sesion abierta del loop)")
 
     if sl:
         lineas.append("")
