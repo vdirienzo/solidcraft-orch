@@ -197,6 +197,28 @@ PY
   fi
   if [ "$AGE" -ge "$STALE_MIN" ]; then
     echo "wave: el slot $ISSUE no tiene PR y su lock tiene ${AGE} min: se reapa (el trabajo queda en la rama y en el worktree)"
+    # THE BRANCH GOES TO THE FORK BEFORE THE LOCK IS GIVEN BACK (2026-11-19).
+    #
+    # WHY: the wave assumed that the branch of a dead slot was already in the
+    # fork ("its branch is in the fork: the work is not thrown away"). That
+    # assumption broke twice on 19-11-2026: two agents of the slot 19523 ended
+    # their turn without pushing, and the RED test with the fix died with the
+    # worktree. So the wave pushes it itself, when it reaps a slot with no pull
+    # request: a branch in the fork is the work that survives; a branch in a
+    # worktree is the work that dies with the box.
+    if [ -z "$DRY" ]; then
+      _wt="$WORKTREES_DIR/issue-$ISSUE"
+      _br="$(git -C "$_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      if [ -n "$_br" ] && [ "$_br" != "HEAD" ] && [ "$_br" != "master" ] && [ "$_br" != "main" ]; then
+        if git -C "$_wt" push --quiet fork "$_br":"$_br" >/dev/null 2>&1; then
+          echo "wave: la rama $_br del slot $ISSUE esta en el fork (el trabajo no se pierde)"
+        else
+          git -C "$_wt" push --quiet --force-with-lease fork "$_br":"$_br" >/dev/null 2>&1 \
+            && echo "wave: la rama $_br del slot $ISSUE se pusheo al fork con --force-with-lease (la del fork era otra)" \
+            || echo "wave: NO se pudo pushear la rama $_br del slot $ISSUE: el trabajo sigue solo en el worktree"
+        fi
+      fi
+    fi
     [ -n "$DRY" ] || bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --reap --older-than "$STALE_MIN" >/dev/null 2>&1
   elif [ -n "$SINCE" ]; then
     echo "wave: el slot $ISSUE no tiene PR todavia (lock de ${AGE} min): se lo deja"

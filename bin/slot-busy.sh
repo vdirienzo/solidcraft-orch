@@ -59,6 +59,20 @@ for proc in /proc/[0-9]*; do
   pid="${proc##*/}"
   [ "$pid" = "$$" ] && continue
 
+  cmd="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null)"
+
+  # LOS RESTOS DE UN TURNO QUE YA TERMINO (2026-11-19).
+  #
+  # El agente levanta su propio display virtual (Xvfb) y hermes levanta el
+  # sandbox del turno (hermes_kernel_runner.py). Los dos tienen su directorio
+  # de trabajo DENTRO del worktree del slot, y los dos sobreviven al turno que
+  # los creo: el Xvfb de un slot finished mantuvo el slot "vivo" durante horas
+  # (la wave no arrancaba nada: free_slots=0) y el kernel runner huesped del
+  # agente que murio hacia lo mismo. Un resto no es trabajo.
+  case "$cmd" in
+    *Xvfb*|*Xorg*|*hermes_kernel_runner.py*) continue ;;
+  esac
+
   # 1. EL DIRECTORIO DE TRABAJO: el agente (hermes) esta ahi.
   cwd="$(readlink "$proc/cwd" 2>/dev/null || true)"
   if [ -n "$cwd" ] && inside "$cwd"; then
@@ -67,7 +81,6 @@ for proc in /proc/[0-9]*; do
   fi
 
   # 2. LA LINEA DE COMANDO: solo como filtro de los que hay que mirar.
-  cmd="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null)"
   case "$cmd" in
     *slot-busy.sh*) continue ;;
   esac

@@ -202,6 +202,20 @@ else
 fi
 kill "$BUSY_PID" 2>/dev/null
 wait "$BUSY_PID" 2>/dev/null
+# Un RESTO de un turno que ya termino (el Xvfb que el agente levanto, el
+# sandbox de hermes) tiene su directorio de trabajo DENTRO del worktree y
+# sobrevive al turno: no es trabajo, y un slot con un resto NO esta vivo.
+mkdir -p "$TMP/restos"
+( cd "$TMP/restos" && exec -a "Xvfb :99 -screen 0 1400x800x24" sleep 120 ) &
+RESTO_PID=$!
+sleep 1
+if bash "$REPO_ROOT/bin/slot-busy.sh" "$TMP/restos" "" >/dev/null 2>&1; then
+  no "slot-busy dice LIBRE un worktree con solo restos de un turno terminado"
+else
+  ok "slot-busy dice LIBRE un worktree con solo restos de un turno terminado"
+fi
+kill "$RESTO_PID" 2>/dev/null
+wait "$RESTO_PID" 2>/dev/null
 # Un proceso que SOLO MENCIONA el worktree (un ls, un grep) NO esta
 # trabajando en el: la primera version de slot-busy.sh lo contaba y un slot
 # vivo nunca se cerraba (7 GB que nadie libera).

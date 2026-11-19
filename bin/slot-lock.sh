@@ -117,6 +117,23 @@ OWNER=""
 # IT IS RESOLVED AFTER THE OPTIONS ARE PARSED: the owner (the label of the
 # caller) arrives in the --owner option, and it is what names the token.
 MAX_HEAVY_TOKENS="${MAX_HEAVY_TOKENS:-2}"
+# The age a heavy token can reach before it is taken away from its dead owner:
+# a gate that runs longer than its own ceiling (120 min) is already dead, and
+# a token that nobody releases blocks every gate of the box.
+HEAVY_STALE_MIN="${HEAVY_STALE_MIN:-180}"
+# The number of heavy phases at the same time is the POLICY of the machine, not
+# a number written in the code: the default of 2 is the one of the box with
+# 62 GB, and this box has 15 GB, where two builds of the engine ask for ~10 GB
+# of rustc between them and the OOM killer takes the agent's turn with them. The
+# policy lives in the config.env of the machine; the environment still wins.
+if [ -z "${MAX_HEAVY_TOKENS:-}" ]; then
+  POLICY_FILE="${POLICY_FILE:-$HOME/.local/share/solidcraft-loop/config.env}"
+  if [ -r "$POLICY_FILE" ]; then
+    _mht="$(grep -E '^[[:space:]]*(export[[:space:]]+)?MAX_HEAVY_TOKENS=' "$POLICY_FILE" 2>/dev/null \
+      | tail -n 1 | cut -d= -f2- | cut -d'#' -f1 | tr -d '"'"'" | tr -d '[:space:]')"
+    [ -n "$_mht" ] && MAX_HEAVY_TOKENS="$_mht"
+  fi
+fi
 OLDER_THAN="${SLOT_LOCK_STALE_MIN:-240}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -198,6 +215,22 @@ if [ "$MODE" = "heavy" ]; then
   d="$(heavy_dir)"
   case "$ACTION" in
     take)
+      # LOS TOKENS VIEJOS SE APARTAN ANTES DE CONTAR (2026-11-19).
+      #
+      # Un token pesado cuyo dueño murió (el agente que tomo el token y
+      # murio con el turno) bloquea TODOS los gates hasta que alguien lo
+      # aparta a mano: con un solo token pesado, como el de esta caja, eso es
+      # la fase pesada parada para siempre. El criterio es la EDAD, el mismo
+      # que el de los locks de slot (el PID del token es el del script que lo
+      # tomo, y ese script sale de inmediato).
+      for _t in "$LOCK_DIR"/heavy-token-*; do
+        [ -d "$_t" ] || continue
+        _tage="$(lock_age_min "$_t")"
+        if [ "$_tage" -ge 0 ] && [ "$_tage" -ge "$HEAVY_STALE_MIN" ]; then
+          printf 'reaped: %s (owner %s, %s min old)\n' "${_t##*/}" "$(lock_owner "$_t")" "$_tage" >&2
+          rm -rf "$_t" 2>/dev/null || true
+        fi
+      done
       # The token that this caller takes is remembered in the heavy dir, so
       # the release frees exactly that one.
       _tok=""
@@ -253,6 +286,17 @@ if [ "$MODE" = "heavy" ]; then
         printf 'reaped: heavy (orphan without "since": the lock of an older script)\n'
         rm -rf "$d" 2>/dev/null || true
       fi
+      # LOS TOKENS SUELTOS (2026-11-19): el dir "heavy" puede irse (lo suelta
+      # un --release) y dejar el token tomados. El token es el lock, no el dir:
+      # sin apartarlo, no hay token libre y ningun gate arranca.
+      for _t in "$LOCK_DIR"/heavy-token-*; do
+        [ -d "$_t" ] || continue
+        _tage="$(lock_age_min "$_t")"
+        if [ "$_tage" -ge 0 ] && [ "$_tage" -ge "$OLDER_THAN" ]; then
+          printf 'reaped: %s (owner %s, %s min old)\n' "${_t##*/}" "$(lock_owner "$_t")" "$_tage"
+          rm -rf "$_t" 2>/dev/null || true
+        fi
+      done
       exit 0
       ;;
     status)

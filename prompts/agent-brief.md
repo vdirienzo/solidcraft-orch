@@ -54,8 +54,13 @@ the PR that won, and report it. The work of a lost claim is never thrown away.
    `solidcraft-cli --help` for `script`, `run`, `bench-open`, `mcp`). Say the load
    of the machine in every measurement.
 2. Write the test that fails, RUN IT, and see it fail. Commit the test alone.
-3. Implement the fix. Commit it alone.
-4. The model that comes out has to be THE SAME model: the same bodies, the same
+3. **PUSH THE BRANCH TO THE FORK NOW** (`git push fork <branch>`), with the RED test
+   in it. A branch that is in the fork is what survives the death of this turn: on
+   19-11-2026 two agents of the same slot died with the RED test and the fix only
+   in the worktree, and the work was lost with them. A turn that ends with the work
+   unpushed has not delivered anything, whatever its report says.
+4. Implement the fix. Commit it alone. Push it again.
+5. The model that comes out has to be THE SAME model: the same bodies, the same
    timeline, the same numbers. You are making the work cheaper, not the result
    different. If the result changes, you are not fixing a performance problem,
    you are changing behaviour: that needs a decision, not a PR.
