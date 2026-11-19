@@ -57,6 +57,18 @@ if [ -z "$SLOT" ]; then
   echo "close-slot: el slot $ISSUE no esta en el estado: se cierra por la convencion" >&2
 fi
 
+# El worktree del slot se borra. A veces NO es un worktree del repo: un
+# agente que reconstruyo el suyo (un clon) deja un directorio que
+# "git worktree remove" no conoce, y se quedan 7 GB sin que nadie los diga.
+remove_worktree() {
+  local wt="$1"
+  [ -n "$wt" ] || return 0
+  git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1 || true
+  if [ -d "$wt" ]; then
+    rm -rf "$wt" >/dev/null 2>&1 || true
+  fi
+}
+
 BRANCH="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('branch',''))" "$SLOT")"
 WT="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('worktree',''))" "$SLOT")"
 TD="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('target_dir',''))" "$SLOT")"
@@ -95,7 +107,7 @@ La oferta está en el comentario del PR ganador.
 EOF
   python3 "$ORCH_BIN/state-set.py" --delete slots "$ISSUE" >/dev/null 2>&1
   [ -n "$TD" ] && rm -rf "$TD"
-  [ -n "$WT" ] && git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1
+  remove_worktree "$WT"
   bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
   echo "close-slot: #$ISSUE perdió el claim contra el #$WINNER; el trabajo quedó en $SAVE y ofrecido en el PR ganador"
   exit 0
@@ -124,7 +136,7 @@ fi
 
 python3 "$ORCH_BIN/state-set.py" --delete slots "$ISSUE" >/dev/null 2>&1
 [ -n "$TD" ] && rm -rf "$TD"
-[ -n "$WT" ] && git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1
+remove_worktree "$WT"
 bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
 echo "close-slot: #$ISSUE cerrado (PR #$OUR_PR); el target y el worktree fueron, la rama y el PR quedan"
 exit 0

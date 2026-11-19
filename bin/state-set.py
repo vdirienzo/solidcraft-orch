@@ -24,7 +24,12 @@
 #
 # USAGE:
 #   bash bin/state-set.py <concept> <key> <json value>
+#   bash bin/state-set.py --merge <concept> <key> <json value>
 #   bash bin/state-set.py --delete <concept> <key>
+#
+# --merge adds the keys of the value to the entry that is already there (and
+# does not touch the other keys): a slot keeps its branch and its worktree
+# when a phase of it changes.
 #
 # EXIT CODES:
 #   0  the state was written and the artifact rebuilt
@@ -88,14 +93,18 @@ def entry_key(entry):
 def main():
     args = sys.argv[1:]
     delete = False
+    merge = False
     if args and args[0] == "--delete":
         delete = True
+        args = args[1:]
+    elif args and args[0] == "--merge":
+        merge = True
         args = args[1:]
     if delete and len(args) != 2:
         print("state-set: usage: state-set.py --delete <concept> <key>", file=sys.stderr)
         return 2
     if not delete and len(args) != 3:
-        print("state-set: usage: state-set.py <concept> <key> <json value>", file=sys.stderr)
+        print("state-set: usage: state-set.py [--merge] <concept> <key> <json value>", file=sys.stderr)
         return 2
     concept, key = args[0], args[1]
     raw = "" if delete else args[2]
@@ -127,10 +136,18 @@ def main():
             container.pop(key, None)
         else:
             try:
-                container[key] = json.loads(raw)
+                value = json.loads(raw)
             except json.JSONDecodeError as error:
                 print(f"state-set: the value is not JSON: {error}", file=sys.stderr)
                 return 2
+            if merge and isinstance(value, dict) and isinstance(container.get(key), dict):
+                # The keys that are already there stay: a slot keeps its
+                # branch and its worktree when its phase changes.
+                merged = dict(container[key])
+                merged.update(value)
+                container[key] = merged
+            else:
+                container[key] = value
         data[concept] = container
     if delete and key != concept:
         # A key that the merge adopted at the top level of the file (a key

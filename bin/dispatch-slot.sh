@@ -53,5 +53,17 @@ setsid nohup env \
   bash -c "cd '$WT' && hermes --in '$WT' -z \"\$(cat '$BRIEF')\"" \
   > "$LOG" 2>&1 < /dev/null &
 
+# El estado: el slot deja de estar "preparado" y pasa a "corriendo". Una
+# sesion que llega despues ve que hay un agente en vuelo.
+python3 "$ORCH_BIN/state-set.py" --merge slots "$ISSUE" "$(python3 - "$ISSUE" <<'PY'
+import json, sys
+print(json.dumps({
+    "issue": int(sys.argv[1]),
+    "status": "running",
+    "phase": "el agente arranco con el brief del slot",
+}))
+PY
+)" >/dev/null 2>&1
+
 echo "$LOG"
 exit 0

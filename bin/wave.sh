@@ -113,6 +113,30 @@ for line in lines:
     elif not entry["since"]:
         entry["since"] = since
 
+# The worktrees ON DISK are the third source of slots: an agent that released
+# its lock but died before deleting its worktree leaves 7 GB nobody knows
+# about. The worktree is the proof that the slot existed.
+try:
+    for name in sorted(os.listdir(worktrees)):
+        if not name.startswith("issue-"):
+            continue
+        try:
+            issue = int(name[len("issue-"):])
+        except ValueError:
+            continue
+        if issue in slots:
+            continue
+        slots[issue] = {
+            "issue": issue,
+            "branch": "",
+            "worktree": os.path.join(worktrees, name),
+            "target_dir": "",
+            "since": "",
+            "in_state": False,
+        }
+except OSError:
+    pass
+
 with open(out_path, "w", encoding="utf-8") as fh:
     json.dump([slots[k] for k in sorted(slots)], fh)
 PY
@@ -156,22 +180,28 @@ PY
   fi
 
   if [ -n "$PR" ] && [ "$OWNER" = "other" ]; then
+    # El claim lo tiene otro PR: nuestro trabajo (sin PR nuestro) se ofrece
+    # en el PR que gano. El worktree se deja: ahi esta el trabajo.
     echo "wave: el slot $ISSUE lo tiene el PR #$PR de otro: el claim se perdio, se reapa el lock"
     [ -n "$DRY" ] || bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --reap --older-than 0 >/dev/null 2>&1
     continue
   fi
 
-  # Sin PR: el slot esta muerto. Si el lock es viejo, el lock se reapa.
+  # Sin PR: el slot esta muerto. El lock viejo se reap; el WORKTREE NO se
+  # borra: ahi esta el trabajo sin publicar y una sesion lo puede rescatar
+  # (docs/agent-handover.md).
   AGE=999999
   if [ -n "$SINCE" ]; then
     T="$(date -u -d "$SINCE" +%s 2>/dev/null || echo 0)"
     [ "$T" -gt 0 ] && AGE=$(( ( $(date -u +%s) - T ) / 60 ))
   fi
   if [ "$AGE" -ge "$STALE_MIN" ]; then
-    echo "wave: el slot $ISSUE no tiene PR y su lock tiene ${AGE} min: se reapa (el trabajo queda en la rama)"
+    echo "wave: el slot $ISSUE no tiene PR y su lock tiene ${AGE} min: se reapa (el trabajo queda en la rama y en el worktree)"
     [ -n "$DRY" ] || bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --reap --older-than "$STALE_MIN" >/dev/null 2>&1
-  else
+  elif [ -n "$SINCE" ]; then
     echo "wave: el slot $ISSUE no tiene PR todavia (lock de ${AGE} min): se lo deja"
+  else
+    echo "wave: el worktree del slot $ISSUE esta huerfano (sin lock y sin PR): se lo deja para que una sesion lo rescate"
   fi
 done < "$TMP/matched.tsv"
 
