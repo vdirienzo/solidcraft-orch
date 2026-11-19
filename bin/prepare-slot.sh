@@ -67,11 +67,23 @@ if [ ! -f "$TEMPLATE" ]; then
 fi
 git -C "$REPO" fetch origin >/dev/null 2>&1
 if [ ! -d "$WT" ]; then
-  git -C "$REPO" worktree add -q -b "$BRANCH" "$WT" origin/main >/dev/null 2>&1 || {
-    echo "prepare-slot: no se pudo crear el worktree: $WT" >&2
-    bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
-    exit 5
-  }
+  # THE BRANCH THAT IS ALREADY THERE (the rescue of a slot whose work was
+  # saved): `git worktree add -b` FAILS when the branch exists, and the work of
+  # the rescued slot (the RED test, the fix a medias) would stay in a branch
+  # that nobody checks out. The worktree is attached to the branch as it is.
+  if git -C "$REPO" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
+    git -C "$REPO" worktree add -q "$WT" "$BRANCH" >/dev/null 2>&1 || {
+      echo "prepare-slot: no se pudo crear el worktree sobre la rama $BRANCH: $WT" >&2
+      bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
+      exit 5
+    }
+  else
+    git -C "$REPO" worktree add -q -b "$BRANCH" "$WT" origin/main >/dev/null 2>&1 || {
+      echo "prepare-slot: no se pudo crear el worktree: $WT" >&2
+      bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
+      exit 5
+    }
+  fi
 fi
 
 # 4. EL TARGET DIR DEL SLOT.

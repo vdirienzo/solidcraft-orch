@@ -188,7 +188,11 @@ def classify(issue):
         if subject in title:
             return False, f"el asunto esta en el codigo aparcado ({subject})"
     for prefix in PAUSED_PREFIXES:
-        if title.startswith(prefix):
+        # The upstream writes the same subject in lower case, in caps and in
+        # mixed case ("FILLET: SMLib fillet: operation: the blend failed" is
+        # 950 issues), so the comparison cannot be case sensitive. The
+        # SUBJECTS above are: there a lowercase "step" is a geometry step.
+        if title.lower().startswith(prefix.lower()):
             return False, f"el asunto esta en el codigo aparcado ({prefix})"
     if issue.get("assignees"):
         return False, "ya tiene asignado a " + ", ".join(a["login"] for a in issue["assignees"])
