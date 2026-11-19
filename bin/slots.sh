@@ -165,7 +165,11 @@ if [ -x "$BIN_DIR/slot-lock.sh" ] || [ -f "$BIN_DIR/slot-lock.sh" ]; then
   # 'grep -c' with no match exits 1 and prints 0: the || true keeps the
   # pipeline from failing and the count is never empty.
   while IFS=$'\t' read -r _name _since _owner; do
-    case "$_name" in heavy|''|'#'*) continue ;; esac
+    # The heavy phase is NOT a slot: the heavy lock is a set of tokens
+    # (heavy-token-N) and the tokens do not eat an implement slot. The
+    # watchdog of the stuck slots (bin/slot-stale.sh) skips them too: the
+    # two have to count the same locks.
+    case "$_name" in heavy|heavy-*|''|'#'*) continue ;; esac
     age=-1
     if [ -n "$_since" ]; then
       t="$(date -u -d "$_since" +%s 2>/dev/null || echo 0)"
