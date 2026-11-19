@@ -2,6 +2,14 @@
 
 **Fecha:** 2026-11-17
 
+> **ACTUALIZADO (2026-11-19):** este inventario describe la mitad LOOP como algo que
+> **no está en git**. Ya no es así: desde `149f7fa` la mitad LOOP está **versionada en este
+> repo**, en [`loop/`](../loop/) (`loop/bin/`, `loop/prompts/` y la plantilla
+> `loop/config.env.example`). Lo que sigue fuera de git es el **runtime de cada máquina**
+> (`$LOOP_DIR/gates/`, los logs, los worktrees y el `config.env` real). El README dice cómo
+> apuntar el runtime al código versionado. El inventario de abajo se conserva como la lista
+> de **qué necesita la mitad ORCH** (esa parte sigue siendo verdad).
+
 Este repo (`vdirienzo/solidcraft-orch`) es **la mitad ORCH** del orquestador. La otra
 mitad —**LOOP**— vive en `$LOOP_DIR` (por defecto
 `/home/user/.local/share/solidcraft-loop`), **no está en git**, y **no se puede

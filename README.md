@@ -190,17 +190,36 @@ bash bin/merge-state.sh --check     # tiene que dar rc=0
 `--bootstrap` es el **unico** camino para empezar: antes habia que escribir el manifiesto a
 mano, y sin los grupos en su lugar todas las claves caian en `notes.json`. Ver la regla 26.
 
-### ⚠ Falta la otra mitad: `$LOOP_DIR`
+### La otra mitad: `$LOOP_DIR` (dónde está el código y dónde el runtime)
 
-Este repo es **la mitad ORCH**. La mitad **LOOP** —el publisher (`agent-issue.sh`), el
-árbitro del claim (`claim-race.sh`), el freno (`claim-brake.sh`), el rescate
-(`claim-salvage.sh`), el gate que compila (`gate-quick.sh`), el validador del body
-(`pr-defaults-line.sh`), el GC de disco y el supervisor— vive en `$LOOP_DIR` y **no está en
-git**.
+La mitad **LOOP** —el publisher (`agent-issue.sh`), el árbitro del claim
+(`claim-race.sh`), el freno (`claim-brake.sh`), el rescate (`claim-salvage.sh`), el gate que
+compila (`gate-quick.sh`), el validador del body (`pr-defaults-line.sh`) y el GC de disco—
+**está versionada en este repo**, en [`loop/`](loop/) (desde `149f7fa`, 2026-11-18: antes vivía
+fuera de git, en `$LOOP_DIR`, y no se podía reconstruir).
 
-Sin él, este repo **no publica, no gatea y no arbitra**: `bin/gate.sh:53` sale con rc=2
-("the gate script is not there"). El inventario completo de esa mitad, qué la necesita y
-qué se rompe sin ella está en [`docs/la-otra-mitad.md`](docs/la-otra-mitad.md).
+Lo que sigue siendo **de cada máquina** es el runtime: los veredictos del gate
+(`$LOOP_DIR/gates/`), los logs, los worktrees de los slots y el `config.env` (la política de
+esta máquina: labels, techos, presupuesto del gate). Por eso `$LOOP_DIR` sigue siendo una
+variable con default, y por eso el runtime tiene que **apuntar** al código versionado. En una
+máquina nueva, una vez:
+
+```bash
+LOOP_DIR="${LOOP_DIR:-$HOME/.local/share/solidcraft-loop}"
+mkdir -p "$LOOP_DIR"
+ln -s "$ORCH_DIR/loop/bin"     "$LOOP_DIR/bin"      # el codigo versionado
+ln -s "$ORCH_DIR/loop/prompts" "$LOOP_DIR/prompts"  # los prompts del loop
+cp "$ORCH_DIR/loop/config.env.example" "$LOOP_DIR/config.env"   # la politica de la maquina
+```
+
+Sin esos enlaces (o sin el `config.env`) el orquestador **no publica, no gatea y no arbitra**:
+`bin/gate.sh` sale con rc=2, `bin/publish-pr.sh` con rc=6 ("el check de la linea de los
+defaults no esta ahi") y el árbitro del claim no aparece. `bash bin/preflight.sh` dice qué
+falta (en esta maquina: "todo lo necesario esta").
+
+El inventario completo de esa mitad, qué la necesita y qué se rompe sin ella está en
+[`docs/la-otra-mitad.md`](docs/la-otra-mitad.md) (es el inventario del 2026-11-17, cuando la
+mitad todavía no estaba en git).
 
 Para comprobar qué falta en una máquina:
 
