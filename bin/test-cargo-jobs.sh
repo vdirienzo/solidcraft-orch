@@ -19,6 +19,11 @@ set -uo pipefail
 ORCH_DIR="${ORCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CARGO_JOBS="$ORCH_DIR/bin/cargo-jobs.sh"
 
+# The paths of this machine appear in the table of processes that the fake ps
+# prints: they describe a process as it is SEEN, so they follow the machine.
+CARGO_NEXTEST="${CARGO_NEXTEST:-$(command -v cargo-nextest 2>/dev/null || echo /home/user/.cargo/bin/cargo-nextest)}"
+RUSTC="${RUSTC:-$(command -v rustc 2>/dev/null || echo /home/user/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc)}"
+
 pass=0
 fail=0
 
@@ -64,7 +69,7 @@ else
 fi
 
 # 2. A nextest IS a compilation.
-out="$(conc_with_table '/home/user/.cargo/bin/cargo-nextest nextest run -p solidcraft-doc')"
+out="$(conc_with_table "$CARGO_NEXTEST nextest run -p solidcraft-doc")"
 if [ "$out" = "1" ]; then
   ok "un nextest cuenta como una compilación"
 else
@@ -91,8 +96,8 @@ else
 fi
 
 # 5. Two compilations: half of the box.
-out="$(jobs_with_table '/usr/bin/cargo
-/home/user/.cargo/bin/cargo-nextest nextest run')"
+out="$(jobs_with_table "/usr/bin/cargo
+$CARGO_NEXTEST nextest run")"
 if [ "$out" = "8" ]; then
   ok "dos compilaciones: la mitad de los cores"
 else
@@ -100,9 +105,9 @@ else
 fi
 
 # 6. Three compilations: a third of the box.
-out="$(jobs_with_table '/usr/bin/cargo
-/home/user/.cargo/bin/cargo-nextest nextest run
-timeout --kill-after=30 1080 cargo clippy -p solidcraft')"
+out="$(jobs_with_table "/usr/bin/cargo
+$CARGO_NEXTEST nextest run
+timeout --kill-after=30 1080 cargo clippy -p solidcraft")"
 if [ "$out" = "5" ]; then
   ok "tres compilaciones: un tercio de los cores"
 else
@@ -128,8 +133,8 @@ echo
 echo "== lo que NO es una compilación =="
 
 # 8. The script itself is not counted (it would divide forever).
-out="$(conc_with_table 'bash /home/user/.local/share/solidcraft-orch/bin/cargo-jobs.sh
-/usr/bin/cargo')"
+out="$(conc_with_table "bash $CARGO_JOBS
+/usr/bin/cargo")"
 if [ "$out" = "1" ]; then
   ok "el propio cargo-jobs.sh no cuenta como compilación"
 else
@@ -145,7 +150,7 @@ else
 fi
 
 # 10. A rustc alone is not a compilation (it is the child of one).
-out="$(conc_with_table '/home/user/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc --crate-name solidcraft_engine')"
+out="$(conc_with_table "$RUSTC --crate-name solidcraft_engine")"
 if [ "$out" = "1" ]; then
   ok "un rustc suelto no infla el conteo"
 else
