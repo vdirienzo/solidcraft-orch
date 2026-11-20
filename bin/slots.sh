@@ -53,8 +53,35 @@ MEM_AVAIL_GB="$(awk '/MemAvailable/ {printf "%d", $2/1024/1024}' /proc/meminfo)"
 
 # A gate of the scoped kind wants GATE_MEMORY_HIGH=32G; leave a margin so the
 # agent itself (and the desktop) keep working while it runs.
-GATE_MEMORY_NEEDED_GB=32
-MIN_FREE_MEMORY_FOR_GATE_GB=$((GATE_MEMORY_NEEDED_GB + 8))
+#
+# LA MEMORIA DEL GATE TAMBIEN ES LA POLITICA DE LA MAQUINA (2026-11-20).
+#
+# GATE_MEMORY_NEEDED_GB era 32 (la caja de 62 GB) con un margen de 8: en esta
+# caja de 15 GB eso pedia 40 GB de memoria libre, y el gate NUNCA podia
+# arrancar (gate_may_start=0 para siempre, con la caja entera libre). El
+# cinturon real de esta caja esta en su config.env: GATE_MEMORY_HIGH=8G,
+# GATE_MEMORY_MAX=11G (el OOM se lleva el scope del gate, no la maquina).
+# El margen es un cuarto de lo que pide el gate, y nunca menos de 4 GB.
+GATE_MEMORY_NEEDED_GB="${GATE_MEMORY_NEEDED_GB:-}"
+if [ -z "$GATE_MEMORY_NEEDED_GB" ]; then
+  POLICY_FILE="${POLICY_FILE:-$HOME/.local/share/solidcraft-loop/config.env}"
+  if [ -r "$POLICY_FILE" ]; then
+    _gmh="$(grep -E '^[[:space:]]*(export[[:space:]]+)?GATE_MEMORY_HIGH=' "$POLICY_FILE" 2>/dev/null \
+      | tail -n 1 | cut -d= -f2- | cut -d'#' -f1 | tr -d '"'"'" | tr -d '[:space:]')"
+    case "$_gmh" in
+      *G) _gmh="${_gmh%G}" ;;
+      *M) _gmh=$(( ${_gmh%M} / 1024 )) ;;
+    esac
+    case "$_gmh" in
+      ''|*[!0-9]*) _gmh="" ;;
+      *) GATE_MEMORY_NEEDED_GB="$_gmh" ;;
+    esac
+  fi
+fi
+[ -n "$GATE_MEMORY_NEEDED_GB" ] || GATE_MEMORY_NEEDED_GB=32
+GATE_MEMORY_MARGIN_GB="${GATE_MEMORY_MARGIN_GB:-$(( GATE_MEMORY_NEEDED_GB / 4 ))}"
+[ "$GATE_MEMORY_MARGIN_GB" -lt 4 ] && GATE_MEMORY_MARGIN_GB=4
+MIN_FREE_MEMORY_FOR_GATE_GB=$(( GATE_MEMORY_NEEDED_GB + GATE_MEMORY_MARGIN_GB ))
 
 # Free cores: a compile of one crate wants ~4, so 4 free cores per slot.
 CORES_PER_SLOT="${CORES_PER_SLOT:-3}"

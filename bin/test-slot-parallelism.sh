@@ -279,6 +279,26 @@ case "$N_HIGH" in
 esac
 rm -f "$POLICY"
 
+# LA MEMORIA DEL GATE SALE DE LA POLITICA DE LA MAQUINA (2026-11-20).
+#
+# Con el numero de otra caja (32 GB + 8 de margen = 40 GB libres) el gate de
+# esta caja de 15 GB no podia arrancar NUNCA (gate_may_start=0 para siempre).
+# La politica dice GATE_MEMORY_HIGH=8G: el gate pide 8 GB y el margen es un
+# cuarto (4 GB), con lo que hace falta 12 GB libres.
+printf 'GATE_MEMORY_HIGH=8G\n' > "$POLICY"
+GATE_POL="$(POLICY_FILE="$POLICY" bash "$SLOTS" gate 2>/dev/null)"
+rm -f "$POLICY"
+case "$GATE_POL" in
+  0|1) ok "slots: la memoria del gate sale de la politica de la maquina (rc=$GATE_POL)" ;;
+  *)   no "slots: la memoria del gate sale de la politica de la maquina" "rc=$GATE_POL" ;;
+esac
+# Sin politica, la memoria del gate sigue siendo la de siempre (32 GB).
+GATE_SIN="$(POLICY_FILE="$TMP/no-existe.env" bash "$SLOTS" gate 2>/dev/null)"
+case "$GATE_SIN" in
+  0|1) ok "slots: sin politica, el gate sigue con la memoria por defecto (rc=$GATE_SIN)" ;;
+  *)   no "slots: sin politica, el gate sigue con la memoria por defecto" "rc=$GATE_SIN" ;;
+esac
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
