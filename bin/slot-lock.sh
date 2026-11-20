@@ -95,7 +95,15 @@ heavy_dir() {
 # that this caller takes is remembered in "$d" (the heavy dir), so the
 # release knows which one to free.
 heavy_free_token() {
-  local t=0
+  local t=0 used=0 _d
+  # LOS TOKENS QUE EXISTEN CUENTAN CONTRA EL TECHO (2026-11-20): no solo
+  # los indices 0..MAX-1. Una fase que tomo el token 1 (porque el 0 estaba
+  # ocupado) sigue siendo una fase pesada: con el techo en 1 y un token 1
+  # tomado, la caja esta ocupada y el que llega espera.
+  for _d in "$LOCK_DIR"/heavy-token-*; do
+    [ -d "$_d" ] && used=$(( used + 1 ))
+  done
+  [ "$used" -ge "$MAX_HEAVY_TOKENS" ] && return 1
   while [ "$t" -lt "$MAX_HEAVY_TOKENS" ]; do
     if mkdir "$LOCK_DIR/heavy-token-$t" 2>/dev/null; then
       printf '%s\n' "$LOCK_DIR/heavy-token-$t"
@@ -116,7 +124,7 @@ OWNER=""
 # them), and the third one waits.
 # IT IS RESOLVED AFTER THE OPTIONS ARE PARSED: the owner (the label of the
 # caller) arrives in the --owner option, and it is what names the token.
-MAX_HEAVY_TOKENS="${MAX_HEAVY_TOKENS:-2}"
+MAX_HEAVY_TOKENS="${MAX_HEAVY_TOKENS:-}"
 # The age a heavy token can reach before it is taken away from its dead owner:
 # a gate that runs longer than its own ceiling (120 min) is already dead, and
 # a token that nobody releases blocks every gate of the box.
@@ -126,6 +134,11 @@ HEAVY_STALE_MIN="${HEAVY_STALE_MIN:-180}"
 # 62 GB, and this box has 15 GB, where two builds of the engine ask for ~10 GB
 # of rustc between them and the OOM killer takes the agent's turn with them. The
 # policy lives in the config.env of the machine; the environment still wins.
+#
+# EL DEFAULT VA AL FINAL (2026-11-20): con el default puesto antes, la variable
+# NUNCA estaba vacia y la politica de la maquina no se leia NUNCA: esta caja
+# (MAX_HEAVY_TOKENS=1 en su config.env) tomaba DOS fases pesadas a la vez, con
+# los ~10 GB de rustc de dos builds del motor encima.
 if [ -z "${MAX_HEAVY_TOKENS:-}" ]; then
   POLICY_FILE="${POLICY_FILE:-$HOME/.local/share/solidcraft-loop/config.env}"
   if [ -r "$POLICY_FILE" ]; then
@@ -134,6 +147,7 @@ if [ -z "${MAX_HEAVY_TOKENS:-}" ]; then
     [ -n "$_mht" ] && MAX_HEAVY_TOKENS="$_mht"
   fi
 fi
+[ -n "$MAX_HEAVY_TOKENS" ] || MAX_HEAVY_TOKENS=2
 OLDER_THAN="${SLOT_LOCK_STALE_MIN:-240}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -306,10 +320,10 @@ if [ "$MODE" = "heavy" ]; then
       # that takes a token to see if there is one has a race with a real
       # caller that takes it at the same time.
       _used=0
-      _t=0
-      while [ "$_t" -lt "$MAX_HEAVY_TOKENS" ]; do
-        [ -d "$LOCK_DIR/heavy-token-$_t" ] && _used=$(( _used + 1 ))
-        _t=$(( _t + 1 ))
+      # Los tokens que EXISTEN cuentan, no solo los indices 0..MAX-1 (2026-11-20):
+      # una fase que corre con el token 1 es una fase pesada corriendo.
+      for _l in "$LOCK_DIR"/heavy-token-*; do
+        [ -d "$_l" ] && _used=$(( _used + 1 ))
       done
       # The lock of the old version of this script (a single dir) also
       # counts: it is a heavy phase that is running.
