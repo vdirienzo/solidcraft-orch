@@ -208,6 +208,23 @@ def main():
     # linea dice sesiones, no vida: el que dice si el loop esta parado son los
     # slots del estado.
     running = [s for s in sl if s[1] == "running"]
+    # LA CAJA PARADA (2026-11-20): un lock de slot con NADIE trabajando en el
+    # es un agente que se fue y un lock que come la caja. La noche del 19-11 al
+    # 20-11 la caja estuvo tres horas y pico asi, con doce nucleos libres, y
+    # el estado decia "todo bien". Ahora el estado lo dice en voz alta.
+    stalled = []
+    for name, owner, age in ls:
+        if not name.startswith("slot-"):
+            continue
+        issue = name[len("slot-"):]
+        wt = os.path.join(WORKTREES, f"issue-{issue}")
+        td = f"{ORCH_DIR}/targets/slot-{issue}"
+        done = subprocess.run(
+            ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "slot-busy.sh"), wt, td],
+            capture_output=True, text=True, timeout=60,
+        )
+        if done.returncode != 0:
+            stalled.append((issue, owner, age))
     if ag_error:
         # The database could NOT be read: the number of live agents is
         # UNKNOWN. It is not 0 and it is not 1 (D5).
@@ -246,6 +263,12 @@ def main():
             if age:
                 linea += f" - {age}"
             lineas.append(linea)
+    if stalled:
+        lineas.append("")
+        lineas.append("PARADO: la caja esta esperando por un slot cuyo agente NO esta:")
+        for issue, owner, age in stalled:
+            lineas.append(f"  · slot {issue} (lock de {age}, owner {owner}): nadie trabaja en el")
+        lineas.append("  la wave suelta ese lock en su proximo paso (10 min)")
 
     if gt:
         lineas.append("")

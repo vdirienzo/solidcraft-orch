@@ -195,30 +195,79 @@ PY
     T="$(date -u -d "$SINCE" +%s 2>/dev/null || echo 0)"
     [ "$T" -gt 0 ] && AGE=$(( ( $(date -u +%s) - T ) / 60 ))
   fi
+  # THE BRANCH GOES TO THE FORK BEFORE THE LOCK IS GIVEN BACK (2026-11-19).
+  #
+  # WHY: the wave assumed that the branch of a dead slot was already in the
+  # fork ("its branch is in the fork: the work is not thrown away"). That
+  # assumption broke twice on 19-11-2026: two agents of the slot 19523 ended
+  # their turn without pushing, and the RED test with the fix died with the
+  # worktree. So the wave pushes it itself, when it reaps a slot with no pull
+  # request: a branch in the fork is the work that survives; a branch in a
+  # worktree is the work that dies with the box.
+  push_slot_branch() {
+    [ -n "$DRY" ] && return 0
+    _wt="$WORKTREES_DIR/issue-$1"
+    _br="$(git -C "$_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    [ -n "$_br" ] || return 0
+    [ "$_br" = "HEAD" ] && return 0
+    [ "$_br" = "master" ] && return 0
+    [ "$_br" = "main" ] && return 0
+    if git -C "$_wt" push --quiet fork "$_br":"$_br" >/dev/null 2>&1; then
+      echo "wave: la rama $_br del slot $1 esta en el fork (el trabajo no se pierde)"
+    else
+      git -C "$_wt" push --quiet --force-with-lease fork "$_br":"$_br" >/dev/null 2>&1 \
+        && echo "wave: la rama $_br del slot $1 se pusheo al fork con --force-with-lease (la del fork era otra)" \
+        || echo "wave: NO se pudo pushear la rama $_br del slot $1: el trabajo sigue solo en el worktree"
+    fi
+  }
+
+  # EL SLOT APARECE COMO "GUARDADO", NO COMO "CORRIENDO" (2026-11-20).
+  #
+  # POR QUE: un slot reapado sin PR que queda en el estado como "running"
+  # no lo retoma nadie: el paso 3b solo busca los slots "saved". Y el estado
+  # decia "corriendo" con un agente que llevaba horas muerto: la memoria
+  # del loop mintiendo es peor que la memoria vacia.
+  mark_saved() {
+    [ -n "$DRY" ] && return 0
+    _wt="$WORKTREES_DIR/issue-$1"
+    _br="$(git -C "$_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    _sha="$(git -C "$_wt" rev-parse HEAD 2>/dev/null || true)"
+    [ -n "$_sha" ] || return 0
+    python3 "$ORCH_BIN/state-set.py" --merge slots "$1" "$(python3 - "$_br" "$_sha" <<'PY'
+import json, sys
+print(json.dumps({
+    "status": "saved",
+    "phase": "el agente se fue sin pull request: la rama y el commit quedan en el fork, el worktree sigue para retomarlo",
+    "rescue": {"branch": sys.argv[1], "sha": sys.argv[2]},
+}))
+PY
+)" >/dev/null 2>&1 || true
+  }
+
+  # NADIE TRABAJA EN EL Y NO HAY PR: EL AGENTE SE FUE, EL LOCK SE SUELTA YA.
+  #
+  # POR QUE (2026-11-20): la EDAD (240 min) era la regla que dejaba la caja
+  # PARADA cuatro horas por cada agente que moria. El 19-11 el slot 19523
+  # dejo el lock tomado a las 13:16 y la wave no despacho NADA hasta las
+  # 20:10; el 20-11 el slot 19690 dejo la caja idle desde las 23:09 hasta
+  # las 00:20. Tres horas y pico de noche sin procesar un solo issue, con la
+  # maquina con 12 nucleos libres.
+  #
+  # La EDAD era para los slots VIVOS cuyo lock no se refresca; ese caso ya
+  # esta arriba (el check de "alguien trabaja en el" se fue por el `continue`).
+  # Aqui nadie esta trabajando: el proceso del agente no existe, y un lock
+  # sin proceso es un lock que come la caja.
+  if [ "$AGE" -lt "$STALE_MIN" ]; then
+    echo "wave: el slot $ISSUE no tiene PR y NADIE trabaja en el (lock de ${AGE} min): se suelta el lock ya, el agente se fue"
+    push_slot_branch "$ISSUE"
+    mark_saved "$ISSUE"
+    [ -n "$DRY" ] || bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --reap --older-than 0 >/dev/null 2>&1
+    continue
+  fi
   if [ "$AGE" -ge "$STALE_MIN" ]; then
     echo "wave: el slot $ISSUE no tiene PR y su lock tiene ${AGE} min: se reapa (el trabajo queda en la rama y en el worktree)"
-    # THE BRANCH GOES TO THE FORK BEFORE THE LOCK IS GIVEN BACK (2026-11-19).
-    #
-    # WHY: the wave assumed that the branch of a dead slot was already in the
-    # fork ("its branch is in the fork: the work is not thrown away"). That
-    # assumption broke twice on 19-11-2026: two agents of the slot 19523 ended
-    # their turn without pushing, and the RED test with the fix died with the
-    # worktree. So the wave pushes it itself, when it reaps a slot with no pull
-    # request: a branch in the fork is the work that survives; a branch in a
-    # worktree is the work that dies with the box.
-    if [ -z "$DRY" ]; then
-      _wt="$WORKTREES_DIR/issue-$ISSUE"
-      _br="$(git -C "$_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-      if [ -n "$_br" ] && [ "$_br" != "HEAD" ] && [ "$_br" != "master" ] && [ "$_br" != "main" ]; then
-        if git -C "$_wt" push --quiet fork "$_br":"$_br" >/dev/null 2>&1; then
-          echo "wave: la rama $_br del slot $ISSUE esta en el fork (el trabajo no se pierde)"
-        else
-          git -C "$_wt" push --quiet --force-with-lease fork "$_br":"$_br" >/dev/null 2>&1 \
-            && echo "wave: la rama $_br del slot $ISSUE se pusheo al fork con --force-with-lease (la del fork era otra)" \
-            || echo "wave: NO se pudo pushear la rama $_br del slot $ISSUE: el trabajo sigue solo en el worktree"
-        fi
-      fi
-    fi
+    push_slot_branch "$ISSUE"
+    mark_saved "$ISSUE"
     [ -n "$DRY" ] || bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --reap --older-than "$STALE_MIN" >/dev/null 2>&1
   elif [ -n "$SINCE" ]; then
     echo "wave: el slot $ISSUE no tiene PR todavia (lock de ${AGE} min): se lo deja"
@@ -260,6 +309,9 @@ for name, slot in (data.get("slots") or {}).items():
 PY
   ); do
     [ -n "$SAVED" ] || continue
+    # LA CAJA MIDE: un slot libre, un agente. Esta caja cabe UNO (mem_slots=1),
+    # asi que el trabajo a medias se retoma de a uno, no de a dos.
+    [ "${FREE:-0}" -gt 0 ] || break
     if [ -n "$DRY" ]; then
       echo "wave: (seco) retomaría el slot $SAVED (el trabajo está a medias en el fork)"
       FREE=$((FREE - 1))
@@ -279,7 +331,6 @@ PY
     FREE=$((FREE - 1))
   done
 fi
-exit 0
 
 # --- 4. EMPEZAR LOS SLOTS QUE ESTAN LIBRES ----------------------------------
 FREE="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
