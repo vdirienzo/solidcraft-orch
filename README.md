@@ -283,6 +283,23 @@ hermes cron create --name solidcraft-pipeline --schedule '*/5 * * * *' \
   --script pipeline.py --no-agent --deliver local
 ```
 
+O, mejor, **los diez de una vez**, desde el registro, con sus copias al día:
+
+```bash
+bash bin/install-crons.sh          # copia cada script de bin/ a ~/.hermes/scripts/ y
+                                   # deja cada job con su horario (--dry-run dice qué haría)
+```
+
+Los crons de hermes corren **copias** de los scripts de `bin/`, en `~/.hermes/scripts/`
+(hermes no acepta una ruta que salga de ahí). Nada las sincronizaba: un cambio en
+`bin/` llegaba a los crons solo si alguien se acordaba de copiar el fichero, y un cron
+que corre código viejo hace lo contrario de lo que dice el repo, **en silencio**. El
+20-11-2026 la wave llevaba horas corriendo la copia vieja de `wave.sh` (la que no
+pushea la rama de un slot muerto al fork) y el único aviso era el de
+`bin/preflight.sh`, impreso debajo de un "todo lo necesario está" que se lee como un
+ok. Por eso `install-crons.sh` es el camino normal, y `preflight.sh` dice en voz alta
+si hay avisos.
+
 ### La wave: el loop que corre sin nadie
 
 El cron `solidcraft-wave` es la parte del loop que **no necesita a una
