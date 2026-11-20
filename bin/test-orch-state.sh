@@ -310,9 +310,19 @@ fi
 # The command the HANDOFF documents ("bin/orch-state.sh history 10") died
 # with a SyntaxError: the Python was in single quotes and the f-string used
 # escaped double quotes, which is a SyntaxError before Python 3.12.
-mkdir -p "$ORCH_DIR"
-printf '{"at":"2026-11-17T10:00:00Z","action":"algo paso"}\n{"at":"2026-11-17T11:00:00Z","action":"otra cosa"}\n' > "$ORCH_DIR/history.jsonl"
-out="$(ORCH_DIR="$ORCH_DIR" bash "$ORCH_DIR/bin/orch-state.sh" history 5 2>&1)"; rc=$?
+#
+# EL HISTORIAL SE LEE EN EL DIRECTORIO DE PRUEBA, NUNCA EN EL REAL (2026-11-20).
+#
+# POR QUE: esta suite escribia su fixture sobre "$ORCH_DIR/history.jsonl", y
+# ORCH_DIR es el directorio del orquestador de verdad (en esta maquina el repo
+# del orquestador y el directorio del loop son el mismo fichero). La suite
+# BORRABA el historial del loop cada vez que se corria, y el repo manda
+# correr la suite antes de cada commit: las dos entradas de la sesion
+# anterior (13:48) se perdieron asi el 20-11-2026. Un test que borra la
+# memoria del loop es peor que un test que no existe.
+mkdir -p "$ORCH"
+printf '{"at":"2026-11-17T10:00:00Z","action":"algo paso"}\n{"at":"2026-11-17T11:00:00Z","action":"otra cosa"}\n' > "$ORCH/history.jsonl"
+out="$(ORCH_DIR="$ORCH" bash "$ORCH_STATE" history 5 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "algo paso" && ! printf '%s' "$out" | grep -qi "SyntaxError"; then
   ok "the history is readable and prints the actions"
 else
