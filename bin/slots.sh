@@ -143,6 +143,37 @@ MAX_IMPLEMENT_SLOTS="${MAX_IMPLEMENT_SLOTS:-6}"
 IMPLEMENT_SLOTS=$cpu_slots
 [ "$mem_slots" -lt "$IMPLEMENT_SLOTS" ] && IMPLEMENT_SLOTS=$mem_slots
 
+# EL TECHO DE SLOTS DE IMPLEMENTACION ES LA POLITICA DE LA MAQUINA (2026-11-20).
+#
+# POR QUE: la escalera de memoria de arriba esta escrita para una caja de 62 GB
+# (el gate pide 32 GB). En una caja de 15 GB, mem_slots es SIEMPRE 1, asi que
+# el loop jamas puede correr el segundo agente, que es el BARATO (lee, escribe
+# y corre UN test dirigido), aunque la caja tenga 10 GB libres y 12 nucleos
+# ociosos: el techo de implementacion quedaba atado a la memoria del gate, que
+# es otra cosa. Por eso el techo se lee del config.env de la maquina
+# (IMPLEMENT_SLOTS), como los otros numeros de la politica (BUILD_SLOTS,
+# MAX_HEAVY_TOKENS), y no del codigo.
+#
+# LO QUE PUEDE BAJARLO: los NUCLEOS libres (una caja saturada no lleva ni dos
+# agentes). LO QUE NO PUEDE: la escalera de memoria, que es de otra caja. El
+# gate sigue siendo exclusivo (MAX_CONCURRENT_GATES) y la fase pesada sigue
+# siendo de a una (los tokens pesados).
+POLICY_FILE="${POLICY_FILE:-$HOME/.local/share/solidcraft-loop/config.env}"
+IMPL_CEIL=""
+if [ -r "$POLICY_FILE" ]; then
+  _is="$(grep -E '^[[:space:]]*(export[[:space:]]+)?IMPLEMENT_SLOTS=' "$POLICY_FILE" 2>/dev/null \
+    | tail -n 1 | cut -d= -f2- | cut -d'#' -f1 | tr -d '"'"'" | tr -d '[:space:]')"
+  case "$_is" in
+    ''|*[!0-9]*) IMPL_CEIL="" ;;
+    *) IMPL_CEIL="$_is" ;;
+  esac
+fi
+if [ -n "$IMPL_CEIL" ]; then
+  IMPLEMENT_SLOTS="$IMPL_CEIL"
+  [ "$cpu_slots" -lt "$IMPLEMENT_SLOTS" ] && IMPLEMENT_SLOTS="$cpu_slots"
+  [ "$IMPLEMENT_SLOTS" -lt 1 ] && IMPLEMENT_SLOTS=1
+fi
+
 # --- the slots that are already taken ----------------------------------------
 # A slot whose lock is taken is owned by somebody else (another session, a
 # cron wave). It is NOT free and it is NOT to be touched.

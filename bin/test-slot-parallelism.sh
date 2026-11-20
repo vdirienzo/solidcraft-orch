@@ -240,6 +240,45 @@ case "$GATE" in
   *)   bad "slots: the gate is a boolean" "got: '$GATE'" ;;
 esac
 
+# EL TECHO DE IMPLEMENTACION VIENE DE LA POLITICA DE LA MAQUINA (2026-11-20).
+#
+# La escalera de memoria de slots.sh esta escrita para una caja de 62 GB (el
+# gate pide 32 GB): en una caja de 15 GB decia 1 slot PARA SIEMPRE, y el loop
+# no podia correr el segundo agente ni con la caja ociosa. El techo se lee
+# ahora del config.env de la maquina (IMPLEMENT_SLOTS), y los nucleos libres
+# pueden bajarlo.
+POLICY="$TESTDIR/policy.env"
+printf 'IMPLEMENT_SLOTS=1   # un slot\n' > "$POLICY"
+N_POLICY="$(POLICY_FILE="$POLICY" bash "$SLOTS" implement 2>/dev/null)"
+if [ "$N_POLICY" = "1" ]; then
+  ok "slots: el techo de la politica manda (IMPLEMENT_SLOTS=1 -> 1 slot)"
+else
+  bad "slots: el techo de la politica manda (IMPLEMENT_SLOTS=1 -> 1 slot)" "got: '$N_POLICY'"
+fi
+# Un valor que no es un numero se IGNORA (no rompe el calibrador).
+printf 'IMPLEMENT_SLOTS=abc\n' > "$POLICY"
+N_BROKEN="$(POLICY_FILE="$POLICY" bash "$SLOTS" implement 2>/dev/null)"
+case "$N_BROKEN" in
+  ''|*[!0-9]*) bad "slots: un techo que no es un numero no rompe el calibrador" "got: '$N_BROKEN'" ;;
+  *) [ "$N_BROKEN" -ge 1 ] && ok "slots: un techo que no es un numero se ignora (got $N_BROKEN)" \
+                           || bad "slots: un techo que no es un numero se ignora" "got: '$N_BROKEN'" ;;
+esac
+# El techo NUNCA sube por encima de lo que permiten los nucleos libres.
+printf 'IMPLEMENT_SLOTS=99\n' > "$POLICY"
+N_HIGH="$(POLICY_FILE="$POLICY" bash "$SLOTS" implement 2>/dev/null)"
+case "$N_HIGH" in
+  ''|*[!0-9]*) bad "slots: un techo alto sigue siendo un numero" "got: '$N_HIGH'" ;;
+  *)
+    CORES_N2="$(nproc 2>/dev/null || echo 4)"
+    CPU_MAX2=$(( CORES_N2 / 3 )); [ "$CPU_MAX2" -lt 1 ] && CPU_MAX2=1
+    if [ "$N_HIGH" -le "$CPU_MAX2" ]; then
+      ok "slots: el techo no sube por encima de los nucleos libres (got $N_HIGH, nucleos permiten $CPU_MAX2)"
+    else
+      bad "slots: el techo no sube por encima de los nucleos libres" "got: $N_HIGH, nucleos permiten $CPU_MAX2"
+    fi ;;
+esac
+rm -f "$POLICY"
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
