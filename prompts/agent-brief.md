@@ -81,6 +81,16 @@ the PR that won, and report it. The work of a lost claim is never thrown away.
   `CARGO_TARGET_DIR={{TARGET_DIR}}` (your own directory, never the checkout's).
 - Never build the kernel in release: that profile fills 66 GB. Everything is
   `--profile ci`.
+- NEVER compile the whole workspace yourself (2026-11-20): no `cargo build`,
+  no `cargo check --workspace`, no `cargo test` without `-p`. The box has
+  15 GB of RAM and one heavy build at a time: a workspace build pulls in the
+  kernel and solidcore (the kernel is PAUSED), it takes the RAM that the other
+  slot's agent needs, and it is what left the box with 0 GB free on 20-11.
+  For a directed test use ONE crate and ONE test in your own target
+  directory; for the gate use the token and the queue (below).
+- If the cause of the issue is in the kernel or in solidcore: MEASURE it and
+  report it as an issue in `tangency-labs/solidcore`, and say so in the
+  report. That IS a deliverable. Do not build the kernel to prove it.
 - A test that fails and is NOT yours: verify it against the parent commit
   (`git stash` or `git checkout HEAD~1 -- <file>`) and count it as pre-existing.
 

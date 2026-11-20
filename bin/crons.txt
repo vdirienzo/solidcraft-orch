@@ -25,14 +25,39 @@
 #
 # A cron that is registered here but not installed on this machine is not
 # an error of the graph: bin/preflight.sh says what is missing.
+#
+# ---------------------------------------------------------------------------
+# LOS HORARIOS NO CAEN TODOS A LA VEZ (2026-11-20)
+#
+# POR QUE: cada corrida de un cron escribe en el state.db de hermes (la
+# entrega de la salida, el registro de la corrida). Diez crons que caen en
+# el MISMO minuto abren diez escritores a la vez sobre un SQLite de 256 MB, y
+# el mutex de escritura se queda tomado segundos ("writer mutex
+# unavailable ... held for 12.4s"). Con el mutex tomado, el bucle de eventos
+# del gateway deja de responder, su watchdog lo mata ("missed 3 consecutive
+# liveness probes ... exiting with code 75") y el supervisor lo reinicia: se
+# van los crons, las sesiones de los agentes y sus turnos ("session turn
+# lease lost"). El 20-11 el gateway se reinicio 6 veces y los turnos de los
+# agentes se cortaron asi, sin que nada pareciera de memoria.
+#
+# COMO SE ARREGLA: cada cron tiene sus propios minutos y ningun par de
+# crons cae en el mismo minuto. Y los crons que no necesitan ir rapido van
+# mas lento: el que baja la prioridad de las compilaciones paso de cada 2
+# minutos a cada 10, el estado del loop y la limpieza de disco de cada 15 a
+# cada 30, y el guard del prompt de cada 5 a cada 15. Los que importan
+# conservan su ritmo: la wave cada 10, la cola de gates cada 5 (minutos 3,
+# 8, 13...), el pipeline cada 5 (minutos 2, 7, 12...), que ademas quedan
+# DESPUES de la wave: la wave despacha a los :00, el pipeline encola los
+# gates a los :02 y la cola los saca a los :03.
+# ---------------------------------------------------------------------------
 
-solidcraft-gate-queue       | */3 * * * *       | bin/gate-queue.sh       | gate-queue    | drena la cola de gates (2 a la vez)
-solidcraft-pipeline         | */5 * * * *       | bin/pipeline.py         | pipeline      | corrige bodies, encola gates, pasa a ready
-solidcraft-comment-watch    | */15 * * * *      | bin/comment_watch.py    | comment-watch | lee los comentarios del maintainer y arma la cola de tareas
-solidcraft-nice-compilations| */2 * * * *       | bin/nice-compilations.sh| -             | baja la prioridad de las compilaciones nuevas
-solidcraft-ping-ready       | */30 * * * *      | bin/ping-ready.sh       | -             | pide el approved-for-ci en los PRs listos
-solidcraft-reporte-diario   | 0 10,22 * * *     | bin/daily-report.py     | -             | el reporte diario, sin LLM
-solidcraft-gc-disk            | */15 * * * *       | bin/gc-disk.sh         | -             | limpia el disco: artefactos y targets muertos
-solidcraft-loop-status        | */15 * * * *       | bin/loop-status.py      | -             | el estado del loop en el chat, sin LLM
-solidcraft-wave-prompt-guard  | */5 * * * *        | bin/wave-prompt-guard.py| -             | el prompt del cron de la wave tiene que ser el canonico
-solidcraft-wave               | */10 * * * *       | bin/wave.sh           | -             | la wave: cierra los slots terminados y arranca los agentes libres
+solidcraft-gate-queue       | 3,8,13,18,23,28,33,38,43,48,53,58 * * * * | bin/gate-queue.sh       | gate-queue    | drena la cola de gates (2 a la vez)
+solidcraft-pipeline         | 2,7,12,17,22,27,32,37,42,47,52,57 * * * * | bin/pipeline.py         | pipeline      | corrige bodies, encola gates, pasa a ready
+solidcraft-comment-watch    | 4,19,34,49 * * * *   | bin/comment_watch.py    | comment-watch | lee los comentarios del maintainer y arma la cola de tareas
+solidcraft-nice-compilations| 1,11,21,31,41,51 * * * * | bin/nice-compilations.sh| -             | baja la prioridad de las compilaciones nuevas
+solidcraft-ping-ready       | 25,55 * * * *       | bin/ping-ready.sh       | -             | pide el approved-for-ci en los PRs listos
+solidcraft-reporte-diario   | 16,46 * * * *       | bin/daily-report.py     | -             | el reporte diario, sin LLM
+solidcraft-gc-disk          | 14,44 * * * *       | bin/gc-disk.sh         | -             | limpia el disco: artefactos y targets muertos
+solidcraft-loop-status      | 6,36 * * * *        | bin/loop-status.py      | -             | el estado del loop en el chat, sin LLM
+solidcraft-wave-prompt-guard| 9,24,39,54 * * * *  | bin/wave-prompt-guard.py| -             | el prompt del cron de la wave tiene que ser el canonico
+solidcraft-wave             | */10 * * * *        | bin/wave.sh           | -             | la wave: cierra los slots terminados y arranca los agentes libres

@@ -258,16 +258,26 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 
 | cron | cada | script | para que |
 |---|---|---|---|
-| solidcraft-gate-queue | 3 min | gate-queue.sh | drena la cola de gates (2 a la vez) |
-| solidcraft-pipeline | 5 min | pipeline.py | corrige bodies, encola gates, pasa a ready |
-| solidcraft-comment-watch | 15 min | comment_watch.py | lee los comentarios del maintainer y arma la cola de tareas |
-| solidcraft-nice-compilations | 2 min | nice-compilations.sh | baja la prioridad de las compilaciones nuevas |
-| solidcraft-ping-ready | 30 min | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
-| solidcraft-reporte-diario | 10 y 22 | daily-report.py | el reporte, sin LLM |
-| solidcraft-gc-disk | 15 min | gc-disk.sh | limpia el disco: artefactos y targets muertos |
-| solidcraft-loop-status | 15 min | loop-status.py | el estado del loop en el chat, sin LLM |
-| solidcraft-wave-prompt-guard | 5 min | wave-prompt-guard.py | el prompt del cron de la wave tiene que ser el canonico |
-| solidcraft-wave | 10 min | wave.sh | la wave: cierra los slots terminados y arranca los agentes libres |
+| solidcraft-gate-queue | 5 min (3,8,13…) | gate-queue.sh | drena la cola de gates (2 a la vez) |
+| solidcraft-pipeline | 5 min (2,7,12…) | pipeline.py | corrige bodies, encola gates, pasa a ready |
+| solidcraft-comment-watch | 15 min (4,19,34,49) | comment_watch.py | lee los comentarios del maintainer y arma la cola de tareas |
+| solidcraft-nice-compilations | 10 min (1,11,21…) | nice-compilations.sh | baja la prioridad de las compilaciones nuevas |
+| solidcraft-ping-ready | 30 min (25,55) | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
+| solidcraft-reporte-diario | 16 y 46 | daily-report.py | el reporte, sin LLM |
+| solidcraft-gc-disk | 30 min (14,44) | gc-disk.sh | limpia el disco: artefactos y targets muertos |
+| solidcraft-loop-status | 30 min (6,36) | loop-status.py | el estado del loop en el chat, sin LLM |
+| solidcraft-wave-prompt-guard | 15 min (9,24,39,54) | wave-prompt-guard.py | el prompt del cron de la wave tiene que ser el canonico |
+| solidcraft-wave | 10 min (0,10,20…) | wave.sh | la wave: cierra los slots terminados y arranca los agentes libres |
+
+**Ningún par de crons cae en el mismo minuto** (2026-11-20): cada corrida de un cron
+escribe en el `state.db` de hermes, y diez escritores a la vez sobre un SQLite de 256 MB
+dejan el mutex de escritura tomado segundos. Con el mutex tomado el bucle de eventos
+del gateway deja de responder, su watchdog lo mata (`exiting with code 75`) y el
+supervisor lo reinicia: se van los crons, las sesiones de los agentes y sus turnos
+(`session turn lease lost`). Los horarios están escalonados para que eso no pase, y los
+crons que no necesitan ir rápido van más lento. El orden dentro del ciclo también
+importa: la wave despacha a los `:00`, el pipeline encola los gates a los `:02` y la cola
+los saca a los `:03`.
 
 **`bin/crons.txt` es la fuente de esta tabla.** El grafo dice a qué nodo pertenece cada
 cron y `bin/workflow-validate.py` comprueba que los dos digan lo mismo: un cron que
@@ -277,9 +287,9 @@ grafos — el que `workflow.yaml` declaraba (2 crons) y el que el loop ejecutaba
 nadie lo comprobaba.
 
 ```bash
-hermes cron create --name solidcraft-gate-queue --schedule '*/3 * * * *' \
+hermes cron create --name solidcraft-gate-queue --schedule '3,8,13,18,23,28,33,38,43,48,53,58 * * * *' \
   --script gate-queue.sh --no-agent --deliver local
-hermes cron create --name solidcraft-pipeline --schedule '*/5 * * * *' \
+hermes cron create --name solidcraft-pipeline --schedule '2,7,12,17,22,27,32,37,42,47,52,57 * * * *' \
   --script pipeline.py --no-agent --deliver local
 ```
 
