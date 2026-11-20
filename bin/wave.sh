@@ -227,6 +227,60 @@ PY
   fi
 done < "$TMP/matched.tsv"
 
+# --- 3b. EL TRABAJO A MEDIAS, ANTES QUE LO NUEVO -----------------------------
+#
+# Un slot con el trabajo YA en el fork y sin pull request vale mas que un
+# issue nuevo: el test RED ya esta escrito, el analisis ya esta hecho y el
+# upstream no nos lo va a dar otra vez (el claim de 14 dias). El 20-11-2026
+# los slots 19523 y 19690 tenian el trabajo a medias (el RED con sus numeros,
+# el fix sin verificar, el analisis del fallo en solidcore) y la wave los
+# esquivaba para despacho issues nuevos, que son casi todos de causa del
+# kernel (aparcado).
+#
+# Asi que primero se termina lo que esta a medias: el slot se vuelve a
+# preparar (el worktree y la rama ya estan, no se tocan) y se despacha.
+FREE_SAVED="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
+FREE="${FREE_SAVED:-0}"
+if [ "${FREE:-0}" -gt 0 ]; then
+  for SAVED in $(python3 - "$ORCH_DIR/state.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    raise SystemExit(0)
+for name, slot in (data.get("slots") or {}).items():
+    if not isinstance(slot, dict):
+        continue
+    if slot.get("status") != "saved":
+        continue
+    if slot.get("pr"):
+        continue
+    print(name)
+PY
+  ); do
+    [ -n "$SAVED" ] || continue
+    if [ -n "$DRY" ]; then
+      echo "wave: (seco) retomaría el slot $SAVED (el trabajo está a medias en el fork)"
+      FREE=$((FREE - 1))
+      continue
+    fi
+    BRIEF="$(bash "$ORCH_BIN/prepare-slot.sh" "$SAVED" "wave-$$" 2>/dev/null)"
+    if [ -z "$BRIEF" ]; then
+      echo "wave: el slot $SAVED no se pudo preparar: se sigue con los issues nuevos"
+      continue
+    fi
+    LOG="$(bash "$ORCH_BIN/dispatch-slot.sh" "$SAVED" 2>/dev/null)"
+    if [ -z "$LOG" ]; then
+      echo "wave: el agente del slot $SAVED no arrancó"
+      continue
+    fi
+    echo "wave: el agente del slot $SAVED arrancó con el trabajo a medias (log: $LOG)"
+    FREE=$((FREE - 1))
+  done
+fi
+exit 0
+
 # --- 4. EMPEZAR LOS SLOTS QUE ESTAN LIBRES ----------------------------------
 FREE="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
 FREE="${FREE:-0}"
@@ -255,4 +309,3 @@ while [ "${FREE:-0}" -gt 0 ]; do
   echo "wave: el agente del slot $ISSUE arrancó (log: $LOG)"
   FREE=$((FREE - 1))
 done
-exit 0

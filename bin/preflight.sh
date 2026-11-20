@@ -130,8 +130,15 @@ if [ ! -d "$ORCH_DIR" ]; then
 fi
 
 if [ "$missing" -eq 0 ]; then
-  echo "preflight: todo lo necesario esta"
-  [ "$warned" -gt 0 ] && exit 0
+  # El resumen dice si hay avisos: un "todo lo necesario esta" con avisos
+  # debajo se lee como un ok, y el aviso mas importante de este script es
+  # el de las copias de los crons (un cron que corre codigo viejo hace lo
+  # contrario de lo que dice el repo, en silencio).
+  if [ "$warned" -gt 0 ]; then
+    echo "preflight: todo lo necesario esta, pero hay $warned aviso(s) ARRIBA (leelos: un cron con codigo viejo hace lo contrario de lo que dice el repo)"
+  else
+    echo "preflight: todo lo necesario esta"
+  fi
   exit 0
 fi
 
