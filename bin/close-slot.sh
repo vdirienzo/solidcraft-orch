@@ -74,6 +74,43 @@ WT="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('worktree',
 TD="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('target_dir',''))" "$SLOT")"
 [ -n "$TD" ] || TD="$(bash "$ORCH_BIN/slot-target-dir.sh" --slot "$ISSUE" 2>/dev/null)"
 
+# EL GATE DEL SLOT NO SE CORRE DEBAJO DE UN CIERRE (2026-11-20).
+#
+# POR QUE: el gate compila en el worktree y en el target del slot. El chequeo
+# de "alguien trabaja en este slot" mira los PROCESOS con el cwd ahi, y entre
+# dos fases del gate no hay ninguno (el gate mata los sobras de cada fase
+# antes de la siguiente): la wave cerraba el slot en ese hueco, le borraba el
+# worktree y el target DEBAJO del gate, y el gate se moria con "Could not
+# locate working directory". El veredicto salia ROJO-SCOPE y un PR sano
+# parecia roto (le paso al PR #20017, del issue #19523, el 20-11-2026).
+#
+# EL SEÑAL: el gate del slot se invoca como "gate-quick.sh --slot <issue>",
+# asi que un proceso con ese argv ES un gate corriendo de ese slot. Y un gate
+# EN COLA (la cola de gates tiene la linea "<issue> <sha>") todavia no empezo
+# pero va a empezar: tambien necesita el worktree y el target del slot.
+gate_running() {
+  pgrep -f "gate-quick\.sh --slot ${ISSUE}( |$)" >/dev/null 2>&1 && return 0
+  pgrep -f "bin/gate\.sh ${ISSUE}( |$)" >/dev/null 2>&1 && return 0
+  local queue="$ORCH_DIR/gates/queue.txt"
+  [ -f "$queue" ] || return 1
+  grep -qE "^${ISSUE}[[:space:]]" "$queue" && return 0
+  return 1
+}
+
+# EL CERRADO: el target, el worktree y el lock. SOLO si no hay un gate
+# corriendo: si lo hay, el slot sigue vivo (el PR ya quedo anotado) y la wave
+# lo cierra en un turno posterior, cuando el gate haya escrito su veredicto.
+cleanup_slot() {
+  if gate_running; then
+    echo "close-slot: el slot $ISSUE tiene un gate corriendo: NO se borran el target ni el worktree" >&2
+    return 1
+  fi
+  [ -n "$TD" ] && rm -rf "$TD"
+  remove_worktree "$WT"
+  bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
+  return 0
+}
+
 # 1. EL ARBITRO DEL CLAIM, CON NUESTRO PR.
 VERDICT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" $OUR_PR 2>&1)"
 RC=$?
@@ -106,9 +143,7 @@ El trabajo queda acá: el diff, los commits y la rama.
 La oferta está en el comentario del PR ganador.
 EOF
   python3 "$ORCH_BIN/state-set.py" --delete slots "$ISSUE" >/dev/null 2>&1
-  [ -n "$TD" ] && rm -rf "$TD"
-  remove_worktree "$WT"
-  bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
+  cleanup_slot || true
   echo "close-slot: #$ISSUE perdió el claim contra el #$WINNER; el trabajo quedó en $SAVE y ofrecido en el PR ganador"
   exit 0
 fi
@@ -134,9 +169,13 @@ PY
 )" >/dev/null 2>&1
 fi
 
-python3 "$ORCH_BIN/state-set.py" --delete slots "$ISSUE" >/dev/null 2>&1
-[ -n "$TD" ] && rm -rf "$TD"
-remove_worktree "$WT"
-bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
-echo "close-slot: #$ISSUE cerrado (PR #$OUR_PR); el target y el worktree fueron, la rama y el PR quedan"
+if cleanup_slot; then
+  python3 "$ORCH_BIN/state-set.py" --delete slots "$ISSUE" >/dev/null 2>&1
+  echo "close-slot: #$ISSUE cerrado (PR #$OUR_PR); el target y el worktree fueron, la rama y el PR quedan"
+else
+  # EL GATE CORRIA: el slot sigue vivo. El PR ya quedo anotado arriba; el
+  # target y el worktree se quedan (el gate los esta usando) y la wave
+  # cierra el slot en un turno posterior.
+  echo "close-slot: #$ISSUE tiene un gate corriendo: el slot sigue vivo hasta que el gate escriba su veredicto" >&2
+fi
 exit 0

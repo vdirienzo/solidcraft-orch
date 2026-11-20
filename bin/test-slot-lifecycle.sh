@@ -294,6 +294,61 @@ else
   no "close-slot borra un worktree que no es un worktree del repo" "$WORKTREES_DIR/issue-9005 sigue"
 fi
 
+# --- 9. close-slot NO cierra un slot con un gate corriendo -------------------
+# El gate compila en el worktree y en el target del slot. Si la wave cierra el
+# slot mientras el gate corre, le borra el worktree DEBAJO y el gate se muere
+# con "Could not locate working directory": el veredicto sale ROJO-SCOPE y un
+# PR sano parece roto (le paso al PR #20017, del issue #19523, el 20-11).
+mkdir -p "$WORKTREES_DIR/issue-9006"
+echo "trabajo" > "$WORKTREES_DIR/issue-9006/apuntes.txt"
+python3 "$REPO_ROOT/bin/state-set.py" slots "9006" "{\"issue\": 9006, \"status\": \"running\", \"worktree\": \"$WORKTREES_DIR/issue-9006\"}" >/dev/null 2>&1
+cat > "$TMP/pr9006.json" <<JSON
+[{"number":90061,"title":"nuestro (#9006)","body":"Fixes #9006","author":{"login":"vdirienzo"},"headRefName":"fix-9006","isDraft":true}]
+JSON
+export GH_FAKE_LIST="$TMP/pr9006.json"
+# Un gate "corriendo" para ese slot: un proceso cuyo argv es el del gate.
+bash -c 'exec -a "bash /tmp/gate-quick.sh --slot 9006" sleep 60' &
+GATE_FAKE=$!
+sleep 1
+bash "$REPO_ROOT/bin/close-slot.sh" 9006 90061 >"$TMP/close9006.log" 2>&1
+OUT9="$(cat "$TMP/close9006.log")"
+if [ -d "$WORKTREES_DIR/issue-9006" ]; then
+  ok "close-slot NO borra el worktree de un slot con un gate corriendo"
+else
+  no "close-slot NO borra el worktree de un slot con un gate corriendo" "$WORKTREES_DIR/issue-9006 no sigue"
+fi
+# El lock del slot NO se suelta con un gate corriendo: el slot sigue vivo y
+# ningun otro agente puede tomarlo. "--status" sale 0 cuando el lock ESTA
+# libre (esa es la convencion del repo), asi que libre es rc=0.
+bash "$REPO_ROOT/bin/slot-lock.sh" --slot 9006 --take --owner test >/dev/null 2>&1
+bash "$REPO_ROOT/bin/close-slot.sh" 9006 90061 >"$TMP/close9006b.log" 2>&1
+if bash "$REPO_ROOT/bin/slot-lock.sh" --slot 9006 --status >/dev/null 2>&1; then
+  no "el lock de un slot con un gate corriendo NO se suelta" "el lock quedo libre: $(cat "$TMP/close9006b.log")"
+else
+  ok "el lock de un slot con un gate corriendo NO se suelta"
+fi
+bash "$REPO_ROOT/bin/slot-lock.sh" --slot 9006 --release >/dev/null 2>&1
+kill "$GATE_FAKE" >/dev/null 2>&1
+wait "$GATE_FAKE" >/dev/null 2>&1
+# Un gate EN COLA tambien protege al slot: todavia no empezo, pero va a
+# empezar y necesita el worktree y el target del slot.
+mkdir -p "$ORCH/gates"
+printf '9006 abcdef1234\n' > "$ORCH/gates/queue.txt"
+bash "$REPO_ROOT/bin/close-slot.sh" 9006 90061 >/dev/null 2>&1
+if [ -d "$WORKTREES_DIR/issue-9006" ]; then
+  ok "close-slot NO borra el worktree de un slot con un gate EN COLA"
+else
+  no "close-slot NO borra el worktree de un slot con un gate EN COLA" "$WORKTREES_DIR/issue-9006 no sigue"
+fi
+rm -f "$ORCH/gates/queue.txt"
+# Sin gate corriendo ni en cola, el worktree se borra.
+bash "$REPO_ROOT/bin/close-slot.sh" 9006 90061 >/dev/null 2>&1
+if [ ! -d "$WORKTREES_DIR/issue-9006" ]; then
+  ok "sin gate corriendo, close-slot borra el worktree y cierra el slot"
+else
+  no "sin gate corriendo, close-slot borra el worktree y cierra el slot" "$WORKTREES_DIR/issue-9006 sigue"
+fi
+
 printf '\n%d casos, %d fallan\n' "$((PASS + FAIL))" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
