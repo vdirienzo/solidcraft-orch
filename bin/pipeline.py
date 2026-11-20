@@ -76,6 +76,16 @@ REPO = "tangency-labs/solidcraft"
 FORK = "vdirienzo/solidcraft"
 MAX_INFLIGHT = int(os.environ.get("MAX_INFLIGHT", "6"))
 LOG = f"{ORCH}/logs/pipeline.log"
+# LOS WORKTREES DE LOS SLOTS (2026-11-20).
+#
+# Un gate necesita el worktree de su slot: sin el, el gate no puede correr
+# (bin/gate-queue.sh lo dice y no lo lanza). Y el PR en draft de un slot
+# cerrado se queda en la cola para siempre: el pipeline lo encolaba cada
+# cinco minutos y el cron de la cola lo sacaba cada tres, con lo que el
+# cron de solidcraft-gate-queue fallaba 108 veces el 20-11-2026 con una
+# condicion que no iba a cambiar (el PR #19492 es un draft cuyo slot esta
+# cerrado). Un cron rojo cada tres minutos esconde los avisos de verdad.
+WORKTREES_DIR = os.environ.get("WORKTREES_DIR", os.path.expanduser("~/solidcraft-wt"))
 
 
 def log(msg):
@@ -921,6 +931,17 @@ def main():
         if v is None:
             # 3. sin veredicto: encolar, salvo que la caja ya tenga enough trabajo
             if iss in queued:
+                continue
+            # EL WORKTREE DEL SLOT (2026-11-20): sin worktree el gate NO puede
+            # correr, y encolarlo hace que el cron de la cola falle cada tres
+            # minutos con una condicion que no va a cambiar. Se dice en el log
+            # (una vez por pasada) y no se encola: el gate se encolara solo
+            # cuando el slot vuelva a tener su worktree.
+            wt = os.path.join(WORKTREES_DIR, f"issue-{iss}")
+            if not os.path.isdir(wt):
+                log(f"  PR #{num} (issue #{iss}): el slot no tiene worktree ({wt}); el "
+                    f"gate no puede correr y no se encola (se encolara cuando el "
+                    f"slot tenga worktree)")
                 continue
             if pendientes + len(queued) >= MAX_INFLIGHT:
                 log(f"  PR #{num}: la cola ya tiene {len(queued) + pendientes} gates "

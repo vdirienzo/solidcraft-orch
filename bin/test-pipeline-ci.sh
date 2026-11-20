@@ -959,6 +959,46 @@ else
   ok "la reparacion NO usa 'Addresses' (el contrato del claim es 'Fixes')"
 fi
 
+# --- R: un slot SIN worktree no se encola (el gate no puede correr) ------
+# El 20-11-2026 el PR #19492 (un draft cuyo slot esta cerrado) hacia que el
+# pipeline reencolara su gate cada cinco minutos y el cron de la cola lo
+# sacara cada tres: el cron solidcraft-gate-queue fallo 108 veces con una
+# condicion que no iba a cambiar. Un slot sin worktree no se encola.
+echo "== un slot sin worktree no se encola: el gate no puede correr =="
+export MAX_INFLIGHT=5
+export WORKTREES_DIR="$TMP/wt"
+mkdir -p "$WORKTREES_DIR" "$ORCH_DIR/bin"
+cp "$HERE/gate-queue.sh" "$ORCH_DIR/bin/gate-queue.sh"
+SHASIN="aaaa1111bbbb2222cccc3333dddd4444eeee5555"
+set_pulls <<EOF
+14007|Sin worktree|1|$SHASIN|Arregla\n\nFixes #12418\n\nChanges a default: no\n|[]
+EOF
+rm -f "$ORCH_DIR/gates/queue.txt"
+: > "$TMP/calls.log"
+run_pipeline
+if [ -s "$ORCH_DIR/gates/queue.txt" ]; then
+  no "un PR cuyo slot NO tiene worktree NO se encola" "$(cat "$ORCH_DIR/gates/queue.txt")"
+else
+  ok "un PR cuyo slot NO tiene worktree NO se encola"
+fi
+if grep -q "no tiene worktree" "$TMP/out.log"; then
+  ok "el log dice que el slot no tiene worktree"
+else
+  no "el log dice que el slot no tiene worktree" "$(tail -3 "$TMP/out.log")"
+fi
+# CON el worktree del slot, el gate se encola (el caso normal).
+mkdir -p "$WORKTREES_DIR/issue-12418"
+rm -f "$ORCH_DIR/gates/queue.txt"
+: > "$TMP/calls.log"
+run_pipeline
+if grep -q "^12418 " "$ORCH_DIR/gates/queue.txt" 2>/dev/null; then
+  ok "con el worktree del slot, el gate se encola"
+else
+  no "con el worktree del slot, el gate se encola" "$(tail -3 "$TMP/out.log")"
+fi
+rm -rf "$WORKTREES_DIR"
+export MAX_INFLIGHT=0
+
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit 0
