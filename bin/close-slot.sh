@@ -25,9 +25,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
-# The siblings: the cron runs a COPY of this script from ~/.hermes/scripts/,
-# where the siblings are NOT. They live in the orchestrator's bin. When this
-# script runs from the repo, they are right here.
+# The siblings live next to this script: the crontab runs the scripts of the
+# repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
+# that runs outside bin/ without them.
 if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_BIN:-$ORCH_DIR/bin}"; fi
 REPO="${SOLIDCRAFT_REPO:-/home/user/Projects/solidcraft-orch}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-tangency-labs/solidcraft}"
@@ -133,7 +133,12 @@ cleanup_slot() {
 # 1. EL ARBITRO DEL CLAIM, CON NUESTRO PR.
 VERDICT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" $OUR_PR 2>&1)"
 RC=$?
-WINNER="$(printf '%s\n' "$VERDICT" | grep -oE '#([0-9]+)' | head -1 | tr -d '#')"
+# EL GANADOR (2026-11-21): la linea de PERDIDO es "el PR #<nuestro> perdio
+# contra el #<ganador>", asi que el primer #N era NUESTRO PR y el comentario
+# publico nombraba mal al ganador. Se lee el numero que sigue a "contra el" (o
+# a "gana el" de la linea del resumen); OCUPADO nombra al ganador primero.
+WINNER="$(printf '%s\n' "$VERDICT" | grep -oE '(contra|gana) el #?[0-9]+' | head -1 | grep -oE '[0-9]+')"
+[ -n "$WINNER" ] || WINNER="$(printf '%s\n' "$VERDICT" | grep -E '^VEREDICTO=OCUPADO' | grep -oE '#[0-9]+' | head -1 | tr -d '#')"
 
 if [ "$RC" = "1" ]; then
   # EL CLAIM SE PERDIÓ: se cierra nuestro PR, se guarda el trabajo y se ofrece.

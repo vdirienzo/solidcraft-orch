@@ -102,6 +102,9 @@ git -C "$UP" branch -q -D fix-9002
 
 # --- el ORCH_DIR de prueba --------------------------------------------------
 ORCH="$TMP/orch"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+source "$REPO_ROOT/bin/test-guard.sh"
+test_guard_orch_dir "$ORCH"
 mkdir -p "$ORCH/prompts" "$ORCH/logs" "$ORCH/bin"
 cp "$REPO_ROOT/prompts/agent-brief.md" "$ORCH/prompts/"
 cp "$REPO_ROOT/bin/merge-state.sh" "$ORCH/bin/" 2>/dev/null
@@ -207,6 +210,7 @@ unset GH_FAKE_LIST
 # Una caja propia para la wave: su ORCH_DIR, sus worktrees y sus stubs. Solo
 # wave.sh, state-set.py y merge-state.sh son los de verdad.
 W="$TMP/wave"
+test_guard_orch_dir "$W/orch"
 mkdir -p "$W/orch/bin" "$W/orch/prompts" "$W/wt"
 cp "$REPO_ROOT/bin/wave.sh" "$REPO_ROOT/bin/state-set.py" "$REPO_ROOT/bin/merge-state.sh" "$W/orch/bin/"
 WB="$W/orch/bin"

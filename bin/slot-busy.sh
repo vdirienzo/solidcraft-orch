@@ -63,17 +63,16 @@ for proc in /proc/[0-9]*; do
 
   # LOS RESTOS DE UN TURNO QUE YA TERMINO (2026-11-19).
   #
-  # El agente levanta su propio display virtual (Xvfb) y hermes levanta el
-  # sandbox del turno (hermes_kernel_runner.py). Los dos tienen su directorio
-  # de trabajo DENTRO del worktree del slot, y los dos sobreviven al turno que
-  # los creo: el Xvfb de un slot finished mantuvo el slot "vivo" durante horas
-  # (la wave no arrancaba nada: free_slots=0) y el kernel runner huesped del
-  # agente que murio hacia lo mismo. Un resto no es trabajo.
+  # El agente levanta su propio display virtual (Xvfb), con su directorio de
+  # trabajo DENTRO del worktree del slot, y el display sobrevive al turno que
+  # lo creo: el Xvfb de un slot finished mantuvo el slot "vivo" durante horas
+  # (la wave no arrancaba nada: free_slots=0). Un resto no es trabajo.
+  # (2026-11-21: el sandbox del agente viejo, hermes, ya no corre en la caja.)
   case "$cmd" in
-    *Xvfb*|*Xorg*|*hermes_kernel_runner.py*) continue ;;
+    *Xvfb*|*Xorg*) continue ;;
   esac
 
-  # 1. EL DIRECTORIO DE TRABAJO: el agente (hermes) esta ahi.
+  # 1. EL DIRECTORIO DE TRABAJO: el agente (opencode) esta ahi.
   cwd="$(readlink "$proc/cwd" 2>/dev/null || true)"
   if [ -n "$cwd" ] && inside "$cwd"; then
     echo "busy: pid $pid trabaja en $cwd"

@@ -42,7 +42,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ORCH_DIR="${ORCH_DIR:-$(dirname "$HERE")}"
+source "$HERE/test-guard.sh"
 ORCH_STATE="$HERE/orch-state.sh"
 SLOT_STALE="$HERE/slot-stale.sh"
 
@@ -62,6 +62,11 @@ ORCH="$TMP/orch"
 EMPTY="$TMP/empty"          # a WORKTREES_DIR and a REPO with nothing in them
 GH_DIR="$TMP/gh"            # the directory of the gh stub (OUTSIDE the PATH)
 mkdir -p "$ORCH/bin" "$EMPTY" "$GH_DIR"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+# ORCH_DIR ES el de prueba: un "$ORCH_DIR/..." de la suite escribe ahi y no
+# en el repo (asi se borro history.jsonl el 20-11-2026).
+export ORCH_DIR="$ORCH"
+test_guard_orch_dir
 
 # The gh stub. It lives in $TMP, NOT in the PATH of the machine (rule 4): it
 # is prepended to the PATH of the single command under test. It fails

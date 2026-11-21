@@ -16,6 +16,9 @@ trap 'rm -rf "$TMP"' EXIT
 
 ORCH_DIR="$TMP/orch"
 LOOP_DIR="$TMP/loop"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+source "$HERE/test-guard.sh"
+test_guard_orch_dir "$ORCH_DIR"
 mkdir -p "$ORCH_DIR/bin" "$ORCH_DIR/baseline" "$LOOP_DIR/gates"
 # The HOME is isolated: the filter reads the upstream catalogue
 # (tests/KNOWN_FAILING_TESTS) from $HOME/solidcraft, and the real one on this

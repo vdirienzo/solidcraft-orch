@@ -80,6 +80,9 @@ git -C "$UP" push -q origin main
 
 # --- el ORCH_DIR de prueba ---------------------------------------------------
 ORCH="$TMP/orch"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+source "$REPO_ROOT/bin/test-guard.sh"
+test_guard_orch_dir "$ORCH"
 mkdir -p "$ORCH/prompts" "$ORCH/logs"
 cp "$REPO_ROOT/prompts/agent-brief.md" "$ORCH/prompts/"
 cp "$REPO_ROOT/bin/merge-state.sh" "$ORCH/bin/merge-state.sh" 2>/dev/null || { mkdir -p "$ORCH/bin"; cp "$REPO_ROOT/bin/merge-state.sh" "$ORCH/bin/"; }
@@ -280,9 +283,9 @@ else
 fi
 kill "$BUSY_PID" 2>/dev/null
 wait "$BUSY_PID" 2>/dev/null
-# Un RESTO de un turno que ya termino (el Xvfb que el agente levanto, el
-# sandbox de hermes) tiene su directorio de trabajo DENTRO del worktree y
-# sobrevive al turno: no es trabajo, y un slot con un resto NO esta vivo.
+# Un RESTO de un turno que ya termino (el Xvfb que el agente levanto) tiene
+# su directorio de trabajo DENTRO del worktree y sobrevive al turno: no es
+# trabajo, y un slot con un resto NO esta vivo.
 mkdir -p "$TMP/restos"
 ( cd "$TMP/restos" && exec -a "Xvfb :99 -screen 0 1400x800x24" sleep 120 ) &
 RESTO_PID=$!

@@ -48,7 +48,9 @@ if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
 fi
 
 WORKTREE="${SC_WORKTREE:-${HOME}/solidcraft}"
-SCRATCH="${SC_SCRATCH:-${HOME}/.hermes/cache/scratch}"
+# El scratch de la corrida (2026-11-21): era el cache de hermes, que ya no
+# existe en la caja, y el mktemp de abajo fallaba. Ahora es el TMPDIR.
+SCRATCH="${SC_SCRATCH:-${TMPDIR:-/tmp}}"
 
 # El --head de publish-pr.sh viene como "vdirienzo:<branch>" (fork:branch).
 # Para el diff solo sirve la parte del branch.

@@ -6,22 +6,18 @@
 # a belt BURNED INTO the script (MemoryHigh=12G, MemoryMax=16G) on a box of
 # 15 GB. A belt bigger than the box is no belt: the scope could ask for more
 # RAM than the machine has, and the OOM killer would then take whatever it
-# found FIRST. That was the gateway, and with it every session of the box.
+# found FIRST.
 #
 # The rule this suite fixes:
 #   1. the scope of a slot reads its ceiling from the POLICY of the box
 #      (config.env), not from a number written in the script;
 #   2. no script of bin/ carries a memory ceiling of its own;
-#   3. the ceiling of the slot fits in the RAM of the box;
-#   4. the ceiling of the slot and the belt of the gateway fit TOGETHER.
+#   3. the ceiling of the slot fits in the RAM of the box.
 #
-# WHY 4 IS THE REAL ONE: the gateway of Hermes is ALWAYS running (every
-# session of the box lives in it) and the scope of a slot runs next to it.
-# The gateway has a belt of its own (MemoryHigh=8G, MemoryMax=infinity and
-# OOMPolicy=continue). The belt of the slot and the band of the gateway have
-# to fit in the RAM of the box: if they do not, the scope of the slot can
-# eat the band of the gateway, the kernel has to choose a victim, and the
-# choice is not ours. The gateway dying closes every session of the box.
+# (2026-11-21) A fourth check summed the slot and the belt of the hermes
+# gateway, the resident service every session lived in. hermes no longer
+# runs on the box (the agent is opencode, the scheduler the user crontab),
+# so the service does not exist and the check could only skip: it went.
 #
 # The ceiling of the GATE is not in this sum: the gate is exclusive (it runs
 # alone, with the heavy token) and its belt is the maximum of a run that is
@@ -101,7 +97,7 @@ for s in "${SLOT_SCRIPTS[@]}"; do
   fi
 done
 
-# 3 and 4. the ceiling of the slot and the belt of the gateway.
+# 3. the ceiling of the slot fits in the box.
 #
 # The box reads its RAM from /proc/meminfo: it is the truth of this machine,
 # and a policy written for another box has to say so loudly instead of
@@ -133,34 +129,6 @@ else
         "el slot pide $slot_max y la caja tiene ${box_gb} GB"
     else
       ok "el techo del slot cabe en la caja: $slot_max sobre ${box_gb} GB"
-    fi
-
-    # The belt of the gateway, as systemd sees it (the truth of the box).
-    gateway_high=""
-    gateway_max=""
-    if command -v systemctl >/dev/null 2>&1; then
-      gateway_high="$(systemctl --user show hermes-gateway.service \
-        -p MemoryHigh --value 2>/dev/null || true)"
-      gateway_max="$(systemctl --user show hermes-gateway.service \
-        -p MemoryMax --value 2>/dev/null || true)"
-    fi
-    # The band of the gateway is the one that counts: it is the memory the
-    # sessions hold before the kernel starts reclaiming. MemoryMax=infinity
-    # means the gateway has no hard ceiling, and then the band is all of it.
-    gateway_kib="$(to_kib "${gateway_high:-}")"
-    case "$gateway_max" in
-      ""|"infinite"|"infinity") ;;
-      *) gateway_kib="$(to_kib "$gateway_max")" ;;
-    esac
-
-    if [ "$gateway_kib" -gt 0 ]; then
-      if [ $(( slot_kib + gateway_kib )) -ge "$box_kb" ]; then
-        bad "el slot y el gateway caben juntos en la caja" \
-          "slot $slot_max + gateway $gateway_high sobre ${box_gb} GB: el slot se come la banda del gateway"
-      else
-        ok "el slot y el gateway caben juntos en la caja:" \
-          "$slot_max + gateway $gateway_high sobre ${box_gb} GB"
-      fi
     fi
   fi
 fi

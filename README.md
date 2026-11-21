@@ -444,7 +444,7 @@ APLICA el `--jq` de verdad, como el gh real: un stub que lo ignorara mediria el 
 regla.
 
 `bin/test-portability.sh` mide la regla de **portabilidad**: todo script que use
-`ORCH_DIR`, `LOOP_DIR`, `SOLIDCRAFT_REPO`, `WORKTREES_DIR` o `HERMES_SCRIPTS` tiene que
+`ORCH_DIR`, `LOOP_DIR`, `SOLIDCRAFT_REPO` o `WORKTREES_DIR` tiene que
 definirla con un default. Un script que usa una de esas variables sin definirla corre con una
 ruta VACIA en la otra PC, y falla ahi, no aca. El check mira tambien que el README y las
 reglas esten donde el codigo dice.

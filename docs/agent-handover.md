@@ -1,23 +1,27 @@
 # Handing work over from a dead agent to its replacement
 
-An agent that dies (iteration cap, interrupted delivery, session end) leaves its work in three
-places, and each one dies with it if you do not rescue it first. Rescue BEFORE dispatching the
+An agent that dies (the time ceiling, a turn cut by the OOM killer or a reboot) leaves its work
+in three places, and each one dies with it if you do not rescue it first. Rescue BEFORE dispatching the
 replacement: the replacement's brief is much stronger when it starts from a resolved design and a
 proven-red test than when it starts from the issue text.
 
 ## An INTERRUPTED agent is not a dead agent
-A delegation that ends as `status=interrupted` (the delivery was cut, the model was waiting for
-a response) leaves the worktree EXACTLY as the live agent left it: a wip commit here, an
-uncommitted diff there, and the lock still held by the interrupted owner. The rescue is the
-same, but the brief differs in one way that matters — see step 4.
+A turn that was cut (`timeout` exits with 124, a SIGTERM with 143) leaves the worktree EXACTLY
+as the live agent left it: a wip commit here, an uncommitted diff there, and the lock still
+held by the interrupted owner. The rescue is the same, but the brief differs in one way that
+matters — see step 4.
 
-The interrupted agent's own transcript names the command it was running when the delivery was
-cut. Read it before briefing: it tells you whether the agent was compiling, testing or
-publishing, and therefore what state the work is really in.
+The turn's own transcript names the command it was running when it was cut: the last events
+of `logs/<N>-wave.jsonl` (`opencode run --format json`), and the exit line of
+`bin/dispatch-slot.sh` in `logs/<N>-wave.log` ("techo de tiempo" when it was the ceiling,
+`AGENT_TIMEOUT_MIN`). Read it before briefing: it tells you whether the agent was compiling,
+testing or publishing, and therefore what state the work is really in.
 
-A truncated summary ("TRUNCATED: hit max_iterations") means the summary is NOT the result:
-the work may be half done, and the worktree is the truth. Go read the worktree, not the
-summary.
+A turn with no verdict means the verdict is NOT the result: the work may be half done, and the
+worktree is the truth. Go read the worktree, not the log. And do not `--continue` the cut
+session: after ~15 minutes its cache is cold, and upstream's `CONTRIBUTING.md` says not to
+resume one ("it re-reads the whole history at full price"). The replacement is a new turn with
+a new brief.
 
 ## 1. Rescue the notes
 Research, maps of the code and measurements live in scratch files that the next boot may wipe.
@@ -65,8 +69,9 @@ The dead agent's slot lock still has its owner recorded.
     bash bin/slot-lock.sh --list                              # who holds what
     bash bin/slot-lock.sh --slot <n> --reap --older-than <min>  # frees it, and says whose it was
 
-Reap only with the evidence that the owner is gone: no live process, no growing transcript, the
-delegation reported finished. Never reap a lock whose owner is alive.
+Reap only with the evidence that the owner is gone: no live process (`bash bin/slot-busy.sh
+<worktree>`), no growing `logs/<N>-wave.jsonl`, the exit line of the turn in `logs/<N>-wave.log`.
+Never reap a lock whose owner is alive.
 
 ## 4. Write the replacement's brief around what exists
 The replacement's brief must contain, as settled facts:
@@ -123,6 +128,10 @@ Say explicitly what NOT to re-derive. A replacement that re-investigates what it
 already settled will spend its whole budget investigating.
 
 ### The steer that unsticks a READING agent is concrete, and it gives away nothing
+(2026-11-21) A running `opencode run` cannot be steered: the steer is the repair note
+`prompts/repair-<N>.md`, which `bin/prepare-slot.sh` appends to the brief of the NEXT turn.
+The rules below are what that note has to say.
+
 A steer that names the artefact is NECESSARY but often NOT SUFFICIENT: "Write the failing test
 now" kept a reading agent reading, because it had the brief and kept checking whether the brief
 was complete. The steer that works is CONCRETE and hands over the PLAN, so the agent no longer
@@ -138,12 +147,12 @@ The mechanism: an agent that is reading is not searching for knowledge, it is lo
 permission to start. A steer that hands over the plan removes the need to find one.
 
 ### The symptom that an agent is one step from the budget
-The agent's last words are "let me read the remaining pieces I need for the RED test", and its
-worktree is still clean. It is one step away from the artefact and one step from the budget.
-Steer it with the artefact, not with advice.
+The agent's last events are "let me read the remaining pieces I need for the RED test", and its
+worktree is still clean. It is one step away from the artefact and one step from the ceiling.
+The repair note of the next turn names the artefact, not advice.
 
 ### The report has to fit: a long report is a lost report
-The delegation transcript truncates a long final report, and what the orchestrator needs is the
+A long final report gets cut or lost with the turn, and what the orchestrator needs is the
 numbers, not the prose. Ask for FIVE things and no more: the SHA, the `Changes a default:` line,
 the RED output, the GREEN output, and the gate verdict with its SHA. A report that says "see
 above" for the interesting part is a report that lost the interesting part. If it arrives

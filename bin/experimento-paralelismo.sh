@@ -27,7 +27,8 @@ set -u
 REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 CRATE_ARGS="-p solidcraft-sketch -p solidcraft-doc"
 PROFILE=ci
-T="$HOME/.hermes/cache/scratch/exp2"
+# El scratch del experimento (2026-11-21): era el cache de hermes, que ya no existe.
+T="${TMPDIR:-/tmp}/experimento-paralelismo"
 OUT="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}/reports/experimento-paralelismo.json"
 export SCCACHE_DIR="$T/sccache"
 export CARGO_INCREMENTAL=0

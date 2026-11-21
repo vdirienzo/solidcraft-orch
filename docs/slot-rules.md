@@ -125,21 +125,22 @@ took 337 s alone), and no thread count makes a single slow test faster. That is 
 gate needs 60 minutes and not 30, and why the throughput comes from more agents working
 while ONE gate runs, not from a faster gate.
 
-### The worker's own scope caps the memory: a big cargo test gets OOM-killed
-Hermes caps every worker scope at 4 GiB (`_WORKER_MEMORY_MAX_CAP_BYTES`) and the OOM killer
-takes the build down with SIGTERM (exit 143) and NO error message. That is why a `cargo test` of
-`solidcraft-ui-egui` in the `ci` profile dies with 143 and no error message: the agent reads it
-as a timeout and burns its budget on it again. Read `journalctl` and you will find `oom-kill`
-there, which is how the agent that confirmed it found it.
-The gateway scope itself is NOT capped (`MemoryMax=infinity` on hermes-gateway.service), so the
-fix is to run the heavy command in its own scope:
+### A big cargo test gets OOM-killed, with no error message
+(2026-11-21) The 4 GiB cap of the old hermes worker scope left with hermes; the limit now is the
+box (15 GB) and the belt of the slot. A heavy `cargo test` (`solidcraft-ui-egui` in the `ci`
+profile is the known one) still dies with SIGTERM (exit 143) and NO error message: the agent
+reads it as a timeout and burns its budget on it again. Read `journalctl` and you will find
+`oom-kill` there.
+The fix is to run the heavy command in its own scope, with the belt the policy of the box gives
+a slot (`SLOT_MEMORY_MAX` in `$LOOP_DIR/config.env`, never more than the box has):
     systemd-run --user --scope --quiet --unit=orch-<issue>-<what> \
-      -p MemoryMax=24G -p MemorySwapMax=0 -p OOMPolicy=continue \
+      -p MemoryMax="$SLOT_MEMORY_MAX" -p MemorySwapMax=0 -p OOMPolicy=continue \
       -- cargo test -p solidcraft-ui-egui --profile ci --lib <test>
-(24 GB is enough for solidcraft-ui-egui in the ci profile; the build takes about 7 minutes.)
-The gate already does this for itself (it has its own scope with MemoryMax=40G), which is why
-the gate survives a build that kills the agent's own cargo.
-Give this to the agents in the brief: a build that dies with 143 is the scope, not the code.
+`bin/run-issue-scope.sh` and `bin/launch-slot-service.sh` read that belt already, and the gate
+has its own (`GATE_MEMORY_MAX`), which is why the gate survives a build that kills the agent's
+own cargo. On the old 62 GB box `solidcraft-ui-egui` needed 24 GB in the `ci` profile: on this
+one it may not fit at all, and then that test is the job of the upstream CI, not of this box.
+Give this to the agents in the brief: a build that dies with 143 is memory, not the code.
 
 ### A cold slot target can be warmed from another slot's cache
 A slot whose target dir is empty pays the full build again (~11m40s measured). The `ci` profile
@@ -174,11 +175,11 @@ scope that died leaves ORPHAN compiler processes running with no owner: after an
 scope dies, look for live `cargo`/`rustc` and end them by PID.
 
 ### A lock with no worktree behind it is a lock that a DEAD agent left, and it eats a slot
-On 01-11-2026 an agent took the lock of the issue #9961 ("FLANGE: operation failed", `area:kernel`), and the kernel is PAUSED: the agent could not do anything and left the lock behind. There was no worktree, no branch and no commit: just the lock, taken, forever. The next agent for that slot would have found it busy and waited.
+On 01-11-2026 an agent took the lock of the issue #9961 ("FLANGE: operation failed", `area:kernel`), and the kernel was paused upstream then (today it is vetoed by this box, which cannot build it): the agent could not do anything and left the lock behind. There was no worktree, no branch and no commit: just the lock, taken, forever. The next agent for that slot would have found it busy and waited.
 
 The check before reaping: a lock whose owner is dead AND whose slot has no worktree and no branch is a lock to release. `slot-lock.sh --slot <N> --release` does it. The reap by age would also do it, but it waits for SLOT_LOCK_STALE_MIN (4 hours) for nothing.
 
-**The kernel pause has to be checked at the ISSUE level and at the FILE level, and they are not the same thing.** The issue #10719 ("A path flange doesn't actually follow the path") has NO `area:kernel` label, but `grep flange crates/` finds it in `crates/kernel/src/blend.rs`, `prism.rs`, `ops.rs` and `coplanar.rs`. An agent that reads the labels alone takes the issue and walks into the paused area. The check is: does the FIX belong to the paused area? The command that fails can live in `crates/engine/src/cmd/` and the primitive it uses in `crates/doc/`, and the fix can be in either of those without touching the kernel at all. So the rule is not "the issue is banned" but "the FILES of the fix are banned".
+**The kernel veto has to be checked at the ISSUE level and at the FILE level, and they are not the same thing.** The issue #10719 ("A path flange doesn't actually follow the path") has NO `area:kernel` label, but `grep flange crates/` finds it in `crates/kernel/src/blend.rs`, `prism.rs`, `ops.rs` and `coplanar.rs`. An agent that reads the labels alone takes the issue and walks into the vetoed area. The check is: does the FIX belong to the vetoed area? The command that fails can live in `crates/engine/src/cmd/` and the primitive it uses in `crates/doc/`, and the fix can be in either of those without touching the kernel at all. So the rule is not "the issue is banned" but "the FILES of the fix are banned".
 
 A subagent that has to be told this mid-flight will sometimes already have a lock on an issue it cannot work on. The steer has to say both: where the code actually is, and to release the lock if the issue turns out to be unworkable.
 
@@ -242,18 +243,18 @@ are slots.
 ### The box is SHARED: the compilations are the FILLER and they sit at the bottom
 The cargo config of the machine says it in a comment: it is shared, wait when the load is
 high, and compile with `nice -n 19`. The orchestrator obeys the same rule: the interactive
-work (the agent, the gateway, the phases of the gate) gets the CPU, and the compilations fill
+work (the agent, the desktop session, the phases of the gate) gets the CPU, and the compilations fill
 the gaps. Nice only decides the order among the tasks that WANT the CPU, so a compilation at
 19 still gets a whole core when the box is idle — priority does not cost idle time.
 
 **A one-shot `renice` is not enough.** `rustc` processes are born and die continuously, so
 every compilation started after the renice comes back at priority 0. Keep the priority with a
 PERIODIC job instead: a small script that renices the `cargo`/`rustc` processes to 19, run
-from a cron every couple of minutes with `--no-agent` (zero tokens).
+from the user crontab every few minutes (`solidcraft-nice-compilations` in `bin/crons.txt`; a
+script, so zero tokens).
 
 **The cron that keeps the priority is a script with NO arguments.** A cron calls the script
 with no arguments, so the script's DEFAULT branch has to be the useful one (a script that
-only prints its usage leaves the job doing nothing, silently, forever), and the script has to
-exist in `~/.hermes/scripts/` BEFORE the job is created: the file is resolved at creation
-time and the create fails with "Script file not found". The path passed to `--script` is
-RELATIVE to that directory.
+only prints its usage leaves the job doing nothing, silently, forever). The crontab runs the
+script OF THE REPO (`bash bin/install-crontab.sh` writes the block from `bin/crons.txt`) and
+its output goes to `logs/cron-<job>.log`.

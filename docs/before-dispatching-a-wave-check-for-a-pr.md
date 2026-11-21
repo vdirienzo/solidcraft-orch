@@ -109,21 +109,20 @@ the comment of the PR that shipped it, with the case table.
 The recipe, the decision table and a comment skeleton are in
 `docs/duplicate-claims-and-contributing-instead.md`
 
-### A build that dies with 143 is the WORKER SCOPE, and the fix is a scope of its own
-Hermes caps every worker scope at 4 GiB (`_WORKER_MEMORY_MAX_CAP_BYTES`) and the OOM killer
-takes the build down with SIGTERM (exit 143) and NO error message. `journalctl` says
-`A process of this unit has been killed by the OOM killer`. The agent reads it as a timeout
-and burns its budget on it again; lowering `CARGO_BUILD_JOBS`, `CARGO_PROFILE_CI_OPT_LEVEL`
-and `CARGO_PROFILE_CI_CODEGEN_UNITS` does NOT help, because the cap is on the SCOPE, not on
-the number of compilers.
+### A build that dies with 143 is MEMORY, and the fix is a scope of its own
+(2026-11-21) The 4 GiB cap of the old hermes worker scope left with hermes; the limit now is the
+box (15 GB). The OOM killer still takes a heavy build down with SIGTERM (exit 143) and NO error
+message, and `journalctl` says `A process of this unit has been killed by the OOM killer`. The
+agent reads it as a timeout and burns its budget on it again.
 
-The fix is to run the heavy command in a systemd scope with its own limit:
+The fix is to run the heavy command in a systemd scope with the belt of a slot
+(`SLOT_MEMORY_MAX` in `$LOOP_DIR/config.env`):
     systemd-run --user --scope --quiet --unit=orch-<issue>-<what> \
-      -p MemoryMax=24G -p MemorySwapMax=0 -p OOMPolicy=continue \
+      -p MemoryMax="$SLOT_MEMORY_MAX" -p MemorySwapMax=0 -p OOMPolicy=continue \
       -- cargo test -p solidcraft-ui-egui --profile ci --lib <filter>
-`--scope` keeps the command in the foreground (so the tool still sees its exit code) while
-giving it 24 GB. A `cargo test -p solidcraft-ui-egui --profile ci --lib` that dies with 143
-in the worker scope PASSES in this one.
+`--scope` keeps the command in the foreground (so the tool still sees its exit code), and the
+OOM takes that scope, not the box. On the old 62 GB box this test needed 24 GB: when it does not
+fit in the belt here, it is the job of the upstream CI.
 
 Two traps on the way there:
 - `RUSTFLAGS` OVERRIDES the flags of `~/.cargo/config.toml` (the mold linker and its

@@ -138,17 +138,11 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# ORCH_DIR: el orquestador. Desde ORCH/bin/ es el padre de HERE; desde la
-# COPIA que los crons ejecutan (~/.hermes/scripts/) NO lo es: ahi el padre
-# seria ~/.hermes, que no tiene bin/pipeline.py. Por eso se resuelve por la
-# REGLA DEL CI: el orquestador es el directorio que tiene bin/pipeline.py. Si
-# no hay ninguno (otra PC con otro layout), se queda el default de esta
-# maquina, que el ORCH_DIR del ambiente puede pisar.
-ORCH_DEFAULT="${ORCH_DEFAULT:-/home/user/.local/share/solidcraft-orch}"
+# ORCH_DIR: el orquestador es el padre de bin/ (el ORCH_DIR del ambiente lo
+# puede pisar). 2026-11-21: el crontab corre el script DEL REPO; la copia de
+# los crons viejos (fuera de bin/, sin pipeline.py al lado) ya no existe, y
+# con ella se fue el fallback a la ruta de esta maquina.
 ORCH_DIR="${ORCH_DIR:-$(dirname "$HERE")}"
-if [ ! -f "$ORCH_DIR/bin/pipeline.py" ] && [ -f "$ORCH_DEFAULT/bin/pipeline.py" ]; then
-  ORCH_DIR="$ORCH_DEFAULT"
-fi
 REPO="${REPO:-tangency-labs/solidcraft}"
 AUTHOR="${AUTHOR:-vdirienzo}"
 GH_BIN="${GH_BIN:-gh}"

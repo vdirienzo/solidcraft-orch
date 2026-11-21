@@ -1,9 +1,9 @@
 # An agent that dies still leaves work, and someone else may have done it first
 
 ## A dead agent is not an empty slot
-A subagent can die with a tool pending and no summary at all ("the turn stopped
-while a tool result was still pending", "No reply"). That is NOT the same as "the
-slot produced nothing".
+An agent can die with a tool pending and no summary at all: the `opencode run` of the
+slot is cut by its time ceiling, by the OOM killer or by a reboot. That is NOT the same
+as "the slot produced nothing".
 
 On #10747 the dead agent had left, in its worktree:
 - the commit (`e1a5c4435`, 8 files, 192 insertions),
@@ -13,24 +13,28 @@ On #10747 the dead agent had left, in its worktree:
 Before closing a slot as lost, ALWAYS look at:
 - the branch: `git log --oneline origin/main..BRANCH` and `git diff --stat origin/main...BRANCH`,
 - the worktree: `git status --short` (untracked files are often the evidence),
-- the transcript: what it was doing in its last ten actions.
+- the transcript: its last ten events in `logs/<N>-wave.jsonl` (`--format json`), and
+  the exit line that `bin/dispatch-slot.sh` wrote in `logs/<N>-wave.log`.
 
-## A child that hits the ITERATION CAP has usually already finished the work
-The cap is reached at the END of a run, so what gets truncated is the SUMMARY, not the work.
-A child that reports "TRUNCATED, hit max_iterations" may have committed, pushed, gated and
-verified everything already, and its summary may be a to-do list addressed to the ORCHESTRATOR
-(the body update, the ready switch) rather than a list of its own loose ends.
+## An agent that hits the TIME CEILING has usually already finished the work
+(2026-11-21) The ceiling is time now, not iterations: `AGENT_TIMEOUT_MIN` (`bin/agent-env.sh`,
+180 min unless `config.env` says otherwise), applied by `bin/dispatch-slot.sh` with `timeout`.
+An agent cut by it exits with rc=124 and its log line says "techo de tiempo". The ceiling is
+reached at the END of a run, so what is lost is the VERDICT, not the work: the agent may have
+committed, pushed, gated and verified everything already, one step before writing the JSON.
 
-So the reading of a truncated report is: go and LOOK, do not re-dispatch. `git status
+So the reading of a turn with no verdict is: go and LOOK, do not re-dispatch. `git status
 --porcelain` in the worktree and `git ls-remote` for the published head are the ground truth;
-a child that pushed a commit is done with the implementation, and a replacement would
-re-derive a settled design and burn its own budget before writing anything.
+an agent that pushed a commit is done with the implementation, and a replacement would
+re-derive a settled design and burn its own budget before writing anything. Never `--continue`
+the cut session either: its cache is cold after ~15 minutes and upstream's `CONTRIBUTING.md`
+says not to resume one ("it re-reads the whole history at full price").
 
 Two corollaries that follow from the same fact:
 - the ORCHESTRATOR finishes the last mile itself (the push, the body, the ready switch) when
-  the child stopped one command away — it is cheaper than a replacement;
-- the durable form of the child's conclusion is its COMMIT MESSAGE, not its report: require
-  the diagnosis to be committed, so a truncated report still leaves the reasoning on disk.
+  the agent stopped one command away — it is cheaper than a replacement;
+- the durable form of the agent's conclusion is its COMMIT MESSAGE, not its report: require
+  the diagnosis to be committed, so a cut turn still leaves the reasoning on disk.
 
 ## Someone else may have done the same work while it was running
 On #10747 the same fix landed as PR #10812 by another author, with the SAME title

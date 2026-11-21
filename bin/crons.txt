@@ -17,7 +17,7 @@
 #
 #   <job> | <schedule> | <script> | <node> | <what it does>
 #
-#   <job>      the name the cron is registered under (hermes cron create)
+#   <job>      the name of the job: its line in the crontab block and its log, logs/cron-<job>.log
 #   <schedule> a 5-field cron expression
 #   <script>   the script, relative to the repo root
 #   <node>     the id of the node in workflow.yaml, or '-' when the cron

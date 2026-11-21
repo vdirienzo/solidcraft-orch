@@ -11,7 +11,8 @@ Apply them in this order and stop at the first one that rejects the issue.
 1. **Veto by area and state.** `kernel-paused`, `status:decision`, an in-progress label, or an
    area the maintainer parked. These are not "less attractive", they are off-limits.
    A parked area is also the **subject** when the cause lives in the parked code: the STEP and
-   IGES reader is `crates/kernel/src/step_in/`, and the kernel is paused, so an issue whose
+   IGES reader is `crates/kernel/src/step_in/`, and this box vetoes the kernel (it cannot build
+   it; upstream does take kernel work, in `solidcore/`), so an issue whose
    title names the format is off-limits even when the upstream labels it `area:io`. The
    selector vetoes the subjects `STEP` and `IGES` (in upper case: a lowercase "step" is a
    geometry step, not the format) and the titles that ARE the parked code: the kernel's own
@@ -42,9 +43,10 @@ Apply them in this order and stop at the first one that rejects the issue.
 ### A filter that is about the CODE, not the issue text
 Two candidates can look equally good in the issue text and be worth completely different
 amounts of an agent's budget, and the difference is where the behaviour lives:
-- a failure whose message comes from a PAUSED area is off-limits, even when the issue reads
+- a failure whose message comes from a VETOED area is off-limits, even when the issue reads
   like a UI bug. Check where the string the report quotes is actually produced: if it lives in
-  the paused kernel, the honest outcome is to skip the issue, not to work around it;
+  the kernel (`crates/kernel`, `solidcore/`), the honest outcome is to skip the issue, not to
+  work around it;
 - a request that is a DESIGN or ARCHITECTURE decision (adopt a language, a protocol, a
   dependency) is not a fix an agent can land: it needs a proposal, and it has to be settled by
   a human. It is a different kind of work and belongs in a different queue.

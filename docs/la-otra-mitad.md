@@ -125,8 +125,8 @@ vivo un `nextest` de 45 min; sólo la segunda deja el lock tomado por otro hijo.
   de variables de entorno, como el resto de los scripts de este repo. **Antes de
   versionarlo hay que revisarlo**: `README.md:153` documenta que ahí va `FORK_OWNER` y
   `bin/publish-pr.sh:276` lo lee, así que hay que confirmar que no trae secretos.
-- Los scripts pasan a usar `ORCH_DIR`/`LOOP_DIR`/`SOLIDCRAFT_REPO`/`WORKTREES_DIR`/
-  `HERMES_SCRIPTS` con default, **incluidos los que hoy tienen rutas absolutas**
+- Los scripts pasan a usar `ORCH_DIR`/`LOOP_DIR`/`SOLIDCRAFT_REPO`/`WORKTREES_DIR`
+  con default, **incluidos los que hoy tienen rutas absolutas**
   (`gate-quick.sh:93,293`).
 - Los exit codes del freno (0/10/11/12) pasan a ser un contrato **documentado y testeado**,
   no una convención de otro directorio.

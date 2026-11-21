@@ -1,152 +1,87 @@
 # SolidCraft — handoff para la próxima sesión
 
-Actualizado: 2026-10-31 18:10 CET
+Actualizado: 2026-11-21
 
-## ⚠ PENDIENTE QUE NECESITA UNA DECISIÓN (31-10-2026 ~00:15)
+## Dónde estamos
 
-**El slot del issue #10306 perdió el claim y su agente sigue trabajando.**
-El PR #10307 de `austin62jake` (draft, creado a las 21:34, `Fixes #10306`) ya reclamaba el issue
-cuando nuestro agente arrancó (21:54). Como el PR abierto con **número menor** gana, el nuestro
-habría perdido. El agente solo llegó a escribir el test RED; el fix nunca llegó.
+- **El análisis del 2026-11-21** está en `reports/analisis-orquestador-2026-11-21.md`: los
+  resultados reales (117 PRs, 88 mergeados), lo que estaba caído, las causas de fondo, los tokens
+  y la deuda. Lo que quedó pendiente está en sus §2 a §4.
+- **Dos commits lo aplicaron:**
+  - `08a4ee5`: el agente de los slots es **opencode** (`bin/dispatch-slot.sh`, con el runtime
+    de `bin/agent-env.sh`) y los crons son el **crontab del usuario** (`bin/install-crontab.sh`
+    los instala desde `bin/crons.txt`). Hermes se fue para siempre: `~/.hermes` no existe.
+  - `517857d`: la wave vuelve a despachar, con el flujo de upstream. El crontab tiene PATH, la
+    cola de gates usa `flock` y la wave corta a los tres fallos. El claim va primero (commit
+    vacío, draft y `claim-verify`) y el brief sigue `solidcraft-full-stop`. El agente corre con
+    techo de tiempo y `--format json`. No hay ping de `approved-for-ci` ni comentarios de estado.
+- **Las reglas** viven en upstream (`AGENTS.md`, `CONTRIBUTING.md`, `.agents/skills/`).
+  `RULES.md` solo apunta ahí y lista las seis reglas propias del orquestador.
+- El estado vivo (slots, PRs, gates) **no** está en este archivo: sale de `bin/orch-state.sh`.
 
-- Diff preservado: `logs/10306-perdido-claim.diff`
-- `state.json` → `slots.5` está marcado `claim-perdido` con la acción a tomar.
-- **El agente es hijo de la sesión central, así que no se puede steerear desde otra sesión.** Hay que
-  pararlo desde la sesión que lo despachó, y liberar el lock: `bash bin/slot-lock.sh --slot 10306 --release`.
+## Cómo arrancar
 
-**Además: el slot #10331 se registró como `running` SIN tomar el lock.** Viola la regla del
-31-10-2026 de tomar el lock *antes* de despachar. Marcado en `state.json` → `slots.7.lock_missing`.
-
-La forma de evitar esto es el protocolo de claim nuevo (`RULES.md` pasos 3-5):
-leer los **comentarios** del issue antes de tomarlo → tomar el lock **primero** → abrir el draft →
-**re-verificar** con `bash bin/claim-verify.sh <issue> [nuestro_pr]` (0 gana / 1 perdió / 2 no verificable).
+```bash
+cd ~/.local/share/solidcraft-orch   # es este repo (un symlink)
+bash bin/preflight.sh               # qué le falta a la máquina (opencode, gh, el PATH del crontab)
+bash bin/rules-sync.sh              # exit 1 + lista = upstream movió reglas: leerlas antes de despachar
+bash bin/test-all.sh --fast         # 0 fallos antes de tocar nada
+crontab -l | grep -c solidcraft     # los crons del loop; si faltan: bash bin/install-crontab.sh
+bash bin/orch-state.sh              # slots, PRs y gates (NUNCA state.json entero)
+bash bin/slots.sh report            # cores, RAM y slots libres
+bash bin/wave.sh --dry-run          # qué haría la wave; el cron la corre cada 10 min
+```
 
 ## Qué es este directorio
 
-La memoria del orquestador multi-agente. **Todo el estado vive acá, no en el contexto de la
-sesión**: el contexto se comprime y se pierde, el disco no.
+La memoria del orquestador. **Todo el estado vive acá, no en el contexto de la sesión.**
 
-| Archivo | Qué es | Cómo se lee |
+| Qué | Para qué | Cómo se lee |
 |---|---|---|
-| `state.json` | el estado canónico: slots, PRs, gates, capacidad | **con `bin/orch-state.sh`**, nunca entero |
-| `state/` | el estado **partido por concepto** (`meta`, `prs`, `slots`, `gates`, `claims`, `policy`, `notes`) | `state.json` se **genera** desde acá con `bin/merge-state.sh`; el concepto se lee con `bin/orch-state.sh <concepto>` |
-| `history.jsonl` | el registro append-only de lo que se hizo (una entrada por línea) | `bin/orch-state.sh history 10` |
-| `RULES.md` | el resumen de AGENTS.md + skills + CONTRIBUTING.md | entero (es corto) |
-| `bin/` | las herramientas | ver abajo |
-| `logs/` | evidencia: RED/GREEN, bodies, capturas | por issue |
+| `state/` → `state.json` | el estado por concepto; `state.json` se arma con `bin/merge-state.sh` | `bin/orch-state.sh <concepto>` |
+| `history.jsonl` | lo que se hizo, una línea por acción | `bin/orch-state.sh history 10` |
+| `RULES.md` | el puntero a las reglas de upstream y las propias | entero (es corto) |
+| `rules-snapshot/` | los hashes de las reglas de upstream | `bin/rules-sync.sh` |
+| `prompts/` | la plantilla del brief y el brief de cada slot | por issue |
+| `logs/` | evidencia; el turno del agente en `<N>-wave.log` y sus eventos en `<N>-wave.jsonl` | por issue |
 | `locks/` | los locks por slot | `bin/slot-lock.sh --list` |
+| `reports/` | las mediciones y los análisis | por fecha |
 
-## Las herramientas (usarlas, no improvisar)
+## Las herramientas
 
 ```bash
-# el estado, por partes (NUNCA leer state.json entero: son 30 KB que se reenvian en cada turno)
-bash bin/orch-state.sh              # summary: slots, PRs, gates
-bash bin/orch-state.sh slots        # solo los slots
-bash bin/orch-state.sh prs          # solo los PRs
-bash bin/orch-state.sh issue 10134  # todo lo que se sabe de un issue
-bash bin/orch-state.sh keys         # las claves y su tamano
-bash bin/orch-state.sh history 10   # las ultimas 10 acciones
-
-# verificar un PR en UNA llamada (head vs fork, keywords, defaults, rutas locales, draft, checks, gate)
-bash bin/verify-pr.sh 9843          # exit 0 = todo en orden, 1 = hay un fallo, 6 = NO SE SABE
-                                  # (el CI no se pudo leer: no es un "no", es un "no se")
-
-# los slots
-bash bin/slots.sh report            # cores, RAM, implement_slots, free_slots, gate_may_start
-bash bin/slot-lock.sh --list
-bash bin/slot-lock.sh --slot N --take --owner "label"
-bash bin/slot-lock.sh --slot N --reap --older-than 60
-bash bin/slot-lock.sh --heavy --take --wait 3600   # el turno del gate (uno a la vez)
-bash bin/slot-lock.sh --heavy --reap --older-than 60   # un heavy lock huerfano bloquea TODOS los gates
-export CARGO_TARGET_DIR=$(bash bin/slot-target-dir.sh --slot N)   # NUNCA hardcodear la ruta
-
-# el gate scoped (target dir UNIFICADO con el del slot: bin/gate.sh)
-bash bin/gate.sh <issue> <sha>            # compila en targets/slot-<issue> y en el worktree del slot
-cat ~/.local/share/solidcraft-loop/gates/<issue>/scope.verdict   # el veredicto; el exit code NO es el veredicto
-
-# el body de un PR contra el parser del upstream
-bash ~/.local/share/solidcraft-loop/bin/pr-defaults-line.sh --body <file>   # exit 0 = pasa
-
-# el ping al maintainer: UN comentario por PR pidiendo el label approved-for-ci
-bash bin/ping-ready.sh --report        # solo el resumen, NO toca GitHub
-bash bin/ping-ready-report.sh          # lo mismo (wrapper)
-# el ping CORRE SOLO: cron solidcraft-ping-ready, cada 30 min, --no-agent, entrega local
-# (idempotente por head sha: la copia en ~/.hermes/scripts/ping-ready.sh tiene que ser
-#  identica al canonico; 'diff -q bin/ping-ready.sh ~/.hermes/scripts/ping-ready.sh')
-# la TANDA: nunca mas de MAX_PEDIDOS (2) pedidos approved-for-ci en curso; entra el
-#  siguiente por el area con MAS PRs listos y dentro del area el MAS ANTIGUO, y a los
-#  72 h del pedido mas viejo sin resolver se abre UN lugar mas (valvula).
-
-# la suite del orquestador
-bash bin/test-slot-parallelism.sh    # 27 tests
-bash bin/test-ping-ready.sh          # el ping: idempotencia, conflicto, formato del resumen
+bash bin/orch-state.sh issue 10134                    # todo lo que se sabe de un issue
+bash bin/verify-pr.sh 9843                            # un PR en una llamada (0 ok, 1 falla, 6 no se sabe)
+bash bin/prepare-slot.sh <issue>                      # lock, claim, worktree y brief
+bash bin/dispatch-slot.sh <issue>                     # arranca el opencode del slot
+bash bin/close-slot.sh <issue> [pr]                   # limpia el slot cuando el PR ya está arriba
+bash bin/slot-lock.sh --slot N --reap --older-than 60 # un lock huérfano (edad y dueño, nunca el PID)
+bash bin/slot-lock.sh --heavy --take --wait 3600      # el turno del build pesado (uno a la vez)
+export CARGO_TARGET_DIR=$(bash bin/slot-target-dir.sh --slot N)   # nunca hardcodear la ruta
+bash bin/gate.sh <issue> <sha>                        # el gate del slot; el veredicto está en
+                                                      # $LOOP_DIR/gates/<slot>/scope.verdict
 ```
+
+La sesión de opencode de un slot se encuentra con `opencode session list` (título `issue-N`).
+No se retoma con `--continue`/`--session` una sesión con el cache frío (`CONTRIBUTING.md` de
+upstream): el turno nuevo arranca del brief y de lo que ya está en el fork.
 
 ## La máquina
 
-16 cores, 62 GB de RAM, 492 GB de disco. Es una VM dedicada a este trabajo: se puede limpiar.
+12 cores, 15 GB de RAM, 421 GB en `/home`.
 
-- `implement_slots` lo decide `slots.sh` según los cores y la RAM libres (tope 4).
-- **El gate es serializado**: compila 7 paquetes y satura la máquina. Turno con `--heavy`.
-- **El perfil dev llena 66 GB por slot; el perfil `ci` son 1.5 GB.** Usar `ci`.
-- Al terminar un slot, borrar su target (tras verificar que el fix está en upstream).
-- La app release tarda **49 min** en linkear (LTO) y ocupa 3.3 GB: no se borra sin motivo.
+- `implement_slots` lo decide `bin/slots.sh` según los cores y la RAM libres (hoy manda la RAM).
+- **Un build pesado a la vez**, con `nice`. Los techos de memoria del slot y del gate salen de la
+  política de la máquina (`$LOOP_DIR/config.env`: `SLOT_MEMORY_MAX`, `GATE_MEMORY_MAX`).
+- **El kernel no se compila acá**: se vetan los issues de `crates/kernel` y `solidcore/`.
+  Upstream sí acepta trabajo de kernel; el veto es nuestro, por la máquina.
+- El agente tiene techo de tiempo: `AGENT_TIMEOUT_MIN` (180 min si `config.env` no dice otra
+  cosa), que `bin/dispatch-slot.sh` aplica con `timeout`.
 
-## Estado actual (2026-10-31 18:10)
+## Sobre los tokens
 
-**Mergeados en upstream:** #9606 (#5858), #9823 (#3892), #8333, #9212, #7368, #8010.
-
-**Abiertos:**
-
-| PR | Issue | Estado | Qué espera |
-|---|---|---|---|
-| #9843 | #7114 | draft, gate verde, evidencia adjunta | la revisión del maintainer |
-| #8059 | — | abierto | el merge del maintainer (la merge queue es suya) |
-
-**En curso (4 agentes en paralelo):**
-
-| Slot | Issue | Tema |
-|---|---|---|
-| 1 | #10134 | `sketch.move` no resuelve el id de un arco |
-| 2 | #10116 | Preferences resetea `window_system` al guardar |
-| 3 | #10138 | la app debe seguir el idioma del sistema |
-| 4 | #10079 | renombrar la 2ª extrusión abre el sketch |
-
-**Pendiente de esta sesión:** el rebase de #9843 sobre `origin/main` (estaba **114 commits
-atrás**, y su CI estaba todo en `skipping`, o sea sin CI real). Rebase limpio, el fix intacto;
-falta correr los tests dirigidos sobre el código rebasado y empujar con `--force-with-lease`.
-
-## Reglas que no se negocian
-
-- **El orquestador orquesta, no implementa.** Toda implementación va a un subagente con un
-  brief autocontenido.
-- Push **solo al fork** (`fork` = vdirienzo; `origin` = upstream y da 403).
-- `Changes a default:` — exactamente una línea. `Fixes #N` y NADIE MÁS con close/fix/resolve.
-- Un test de regresión en el archivo de tests **existente** del área.
-- El **kernel está en pausa**: nada de `crates/kernel/` ni de labels `kernel-paused`.
-- Nunca agregar `approved-for-ci` (solo los maintainers). La merge queue es del maintainer.
-- Nunca editar archivos generados. Nunca `unwrap/expect/panic!` fuera de tests.
-- Un tema y un issue por PR.
-- Evidencia real (capturas propias) para cambios observables.
-- El liveness de un lock es su **edad y su dueño**, nunca el PID.
-
-## Sobre los tokens (leído de las mediciones, no de la teoría)
-
-La sesión del orquestador: 5.1 M de input contra 460 K de output. **El costo no es el brief:
-es que cada resultado de herramienta queda en el contexto y se reenvía en cada turno.**
-
-- **Batching**: llamadas independientes en un mismo turno. La sesión hacía 1.1 tool calls por
-  turno; eso multiplica el reenvío.
-- **Filtrar en el origen**: un `grep` que imprime 14 KB, un `du` de todo, un `git log` sin
-  `--max-count`: el lector paga cada byte, para siempre. Un resultado de más de ~10 KB
-  significa que el comando no filtró bastante.
-- **Leer el estado por partes** con `orch-state.sh`.
-- **El estado tiene que ser cierto, no completo**: una entrada vieja (un PR mergeado que
-  figuraba abierto) cuesta más que una que falta. GitHub manda; el disco se corrige.
-- **No re-verificar lo que un subagente ya corrió**: las verificaciones que convierten un
-  resumen en un hecho son las nombradas en la skill (head vs fork, body vs parser, archivo de
-  veredicto, tests). Rederivar lo que el agente ya ejecutó es el gasto más caro y no agrega
-  evidencia.
-- **No mandar al subagente lo que puede leer en disco**: AGENTS.md, las skills y CONTRIBUTING.md
-  están en el repo. Lo que no puede leer es la conversación: el issue, el diagnóstico, los
-  números medidos y las decisiones tomadas. Eso es el brief.
+El costo no es el brief: es que cada resultado de herramienta queda en el contexto y se reenvía
+en cada turno. Llamadas independientes en un mismo turno, filtrar en el origen (un resultado de
+más de ~10 KB es un comando que no filtró) y leer el estado por partes. Al agente no se le manda
+lo que puede leer en disco (`AGENTS.md`, las skills): se le manda el issue, el diagnóstico, los
+números medidos y las decisiones. Más en `docs/costo-de-tokens.md`.

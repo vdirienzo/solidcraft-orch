@@ -101,6 +101,10 @@ fi
 # --- 2. una clave nueva de primer nivel en state.json a mano -> falla ------
 # Se trabaja sobre una COPIA: el state.json real no se toca.
 WORK="$TMP/orch"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+# (El --check de arriba corre contra el estado real a proposito: solo lee.)
+source "$HERE/test-guard.sh"
+test_guard_orch_dir "$WORK"
 mkdir -p "$WORK"
 cp "$SRC" "$WORK/merge-state.sh"
 

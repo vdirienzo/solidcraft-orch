@@ -1310,48 +1310,8 @@ else
      "comentarios=$n $(cut -f1 "$D/comment-calls.log" 2>/dev/null | tr '\n' ' ')"
 fi
 
-# ----------------------------------------------------------------------
-# la COPIA que el cron ejecuta, y la deriva
-#
-# El cron solidcraft-ping-ready NO usa el repo: usa la copia de
-# ~/.hermes/scripts/ping-ready.sh. Si esa copia queda vieja, el ping
-# corre con el codigo viejo y nadie se entera: el cron da "ok" igual.
-# Estos tests miran las dos cosas que la pueden romper:
-#   1. la copia es IDENTICA al canonico (diff -q);
-#   2. el canonico encuentra pipeline.py (la regla del CI) aunque NO este
-#      en ORCH/bin/: el script resuelve el orquestador por la REGLA, no
-#      por su propia ubicacion.
-# ----------------------------------------------------------------------
-HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"
-COPY="$HERMES_SCRIPTS/ping-ready.sh"
-
-if [ -f "$COPY" ]; then
-  if diff -q "$PING_READY" "$COPY" >/dev/null 2>&1; then
-    ok "(copia) la copia del cron es IDENTICA al canonico"
-  else
-    no "(copia) la copia del cron es IDENTICA al canonico" \
-       "la copia ($COPY) difiere: el cron corre el codigo viejo"
-  fi
-  if [ -x "$COPY" ]; then
-    ok "(copia) la copia del cron es ejecutable"
-  else
-    no "(copia) la copia del cron es ejecutable" "no tiene permiso de ejecucion"
-  fi
-  # La copia, corrida DESDE ~/.hermes/scripts/, tiene que encontrar la
-  # regla del CI: el padre de ese directorio NO es el orquestador.
-  D="$(mkstub copy)"
-  setup_base "$D" "$SHA_A"
-  out="$(GH_BIN="$TMP/gh" STUB_DIR="$D" bash "$COPY" --report 12891 2>"$D/err")"
-  rc=$?
-  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "^12891 $SHORT_A 0 atras no verde no LISTO"; then
-    ok "(copia) la copia encuentra la regla del CI desde ~/.hermes/scripts"
-  else
-    no "(copia) la copia encuentra la regla del CI desde ~/.hermes/scripts" \
-       "rc=$rc out=$out err=$(head -2 "$D/err" | tr '\n' ' ')"
-  fi
-else
-  echo "AVISO - no hay copia en $COPY: el cron solidcraft-ping-ready la necesita"
-fi
+# (2026-11-21) Los tests de "la copia del cron" se fueron con hermes: el
+# crontab corre bin/ping-ready.sh del repo y no hay copia que pueda derivar.
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

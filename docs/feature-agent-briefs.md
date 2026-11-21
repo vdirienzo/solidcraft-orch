@@ -195,21 +195,14 @@ never carry a number that was not read. A scheduled daily report (a cron job who
 collects the counts and whose delivery is the chat of origin) is the way to deliver it, and
 the summary of the orchestrator's own state is the first command it runs.
 
-### The hours of the report are ARGENTINE time, and the cron reads the CONFIGURED timezone
-The daily report goes out at 10am and 10pm ARGENTINE time. The cron expression is read in
-the timezone CONFIGURED in Hermes (`timezone:` in `config.yaml`, read by `hermes_time`),
-NOT the timezone of the server. This box runs `Europe/Berlin`, so a cron of `0 10,22 * * *`
-evaluated against the server timezone would fire an hour off.
-
-Set the zone instead of converting the hours by hand: `hermes config set timezone
-America/Argentina/Buenos_Aires`. Argentina is UTC-3 with NO daylight saving and Berlin has
-it, so a schedule converted by hand drifts by an hour twice a year; a zone-aware scheduler
-does not.
-
-The `next_run_at` stored in a job keeps the offset it had when it was computed, so after
-changing the timezone it is still the OLD one. Rewrite the job with the SAME expression
-(`hermes cron edit <id> --schedule "0 10,22 * * *"`) to force the recalculation, then read
-`hermes cron list` and check that the offset changed. A gateway restart is NOT needed.
+### The hours of the report are ARGENTINE time, and the cron reads the SYSTEM timezone
+The daily report goes out at 10am and 10pm ARGENTINE time. The user crontab reads its hours in
+the timezone of the SYSTEM, and this box runs `America/Argentina/Buenos_Aires` (`timedatectl`),
+so the hours of `bin/crons.txt` are Argentine hours here. On a box in another zone they are not:
+Argentina is UTC-3 with NO daylight saving, so hours converted by hand drift by an hour twice a
+year against a zone that has it. `bin/daily-report.py` computes its own time in UTC-3, so the
+text of the report is right whatever the zone. (2026-11-21: the old scheduler, hermes, had its
+own `timezone:` setting; it is gone.)
 
 ## Choosing the issues of a wave
 The issues are picked BEFORE anything is dispatched, and a wrong pick costs an agent its whole

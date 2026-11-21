@@ -55,6 +55,9 @@ command -v date >/dev/null 2>&1 || { echo "test-slot-stale: no hay date" >&2; ex
 
 # --- the mini orchestrator ---------------------------------------------------
 ORCH="$TMP/orch"      # the ORCH_DIR: the locks and the state live here
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+source "$HERE/test-guard.sh"
+test_guard_orch_dir "$ORCH"
 WT="$TMP/wt"          # the WORKTREES_DIR: issue-<slot>/
 REPO="$TMP/repo"      # the repository of SolidCraft (a throwaway one)
 STUB="$TMP/stub"      # the gh stub, OUTSIDE the PATH of the machine

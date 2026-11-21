@@ -45,9 +45,9 @@ STALE_MIN="${SLOT_LOCK_STALE_MIN:-240}"
 DRY=""
 [ "${1:-}" = "--dry-run" ] && DRY="--dry-run"
 
-# The siblings: the cron runs a COPY of this script from ~/.hermes/scripts/,
-# where the siblings are NOT. They live in the orchestrator's bin. When this
-# script runs from the repo, they are right here.
+# The siblings live next to this script: the crontab runs the scripts of the
+# repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
+# that runs outside bin/ without them.
 if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_BIN:-$ORCH_DIR/bin}"; fi
 
 [ -f "$ORCH_DIR/state.json" ] || { echo "wave: no hay estado en $ORCH_DIR/state.json" >&2; exit 2; }
@@ -294,6 +294,39 @@ PY
   fi
 done < "$TMP/matched.tsv"
 
+# --- 3a. LAS REGLAS DE UPSTREAM, ANTES DE DESPACHAR (2026-11-21) -----------
+#
+# Upstream cambia sus reglas seguido (el 2026-11-21 movio todas las skills a
+# .agents/skills/ y nadie lo vio en dias). Dos clases de cambio:
+#   - lo que el orquestador tiene ESCRITO EN SU CODIGO: la regla del claim
+#     (scripts/claim/claim.js -> bin/claim_rule.py), el parser del body
+#     (scripts/pr-checks/pr-checks.js) y la plantilla del PR. Si eso se movio,
+#     un agente nuevo publicaria con una regla vieja: la wave NO despacha
+#     hasta que alguien revise el cambio y corra bin/rules-snapshot.sh --update.
+#   - lo demas (AGENTS.md, CONTRIBUTING.md, las skills): el agente lo lee EN
+#     VIVO de su worktree (nace de origin/main), asi que lo sigue solo. Se
+#     avisa en el log y se sigue.
+# Cerrar slots (los pasos de arriba) sigue igual: solo se frena lo nuevo.
+RULES_HOLD=""
+RULES_OUT="$(bash "$ORCH_BIN/rules-sync.sh" 2>/dev/null)"
+RULES_RC=$?
+if [ "$RULES_RC" = "1" ]; then
+  RULES_HARD="$(printf '%s\n' "$RULES_OUT" | grep -E 'scripts/claim/claim\.js|scripts/pr-checks/pr-checks\.js|\.github/pull_request_template\.md' || true)"
+  if [ -n "$RULES_HARD" ]; then
+    RULES_HOLD=1
+    echo "wave: ALERTA reglas: upstream cambio algo que el orquestador tiene en su codigo; no se despacha hasta revisarlo (bin/rules-snapshot.sh --update):"
+    printf '%s\n' "$RULES_HARD" | sed 's/^/wave:     /'
+  else
+    # Solo cambio lo que el agente lee en vivo: se registra solo, o el mismo
+    # aviso se repetiria cada 10 minutos hasta que alguien lo viera.
+    echo "wave: AVISO reglas: upstream cambio lo que el agente lee en vivo; se registra y se sigue:"
+    printf '%s\n' "$RULES_OUT" | sed 's/^/wave:     /'
+    bash "$ORCH_BIN/rules-snapshot.sh" --update 2>&1 | tail -1 | sed 's/^/wave:     /'
+  fi
+elif [ "$RULES_RC" != "0" ]; then
+  echo "wave: AVISO reglas: no se pudo comparar con upstream (rules-sync rc=$RULES_RC); se sigue"
+fi
+
 # --- 3b. EL TRABAJO A MEDIAS, ANTES QUE LO NUEVO -----------------------------
 #
 # Un slot con el trabajo YA en el fork y sin pull request vale mas que un
@@ -335,6 +368,7 @@ PY
 }
 FREE_SAVED="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
 FREE="${FREE_SAVED:-0}"
+[ -n "$RULES_HOLD" ] && FREE=0
 if [ "${FREE:-0}" -gt 0 ]; then
   while IFS=$'\t' read -r SAVED FAILS; do
     [ -n "$SAVED" ] || continue
@@ -421,6 +455,7 @@ PY
 FAILED=0
 FREE="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
 FREE="${FREE:-0}"
+[ -n "$RULES_HOLD" ] && FREE=0
 echo "wave: free_slots=$FREE"
 while [ "${FREE:-0}" -gt 0 ]; do
   if [ "$FAILED" -ge "$MAX_FAILS" ]; then

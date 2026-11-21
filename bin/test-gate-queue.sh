@@ -35,6 +35,9 @@ ok(){ printf 'ok   - %s\n' "$1"; pass=$((pass+1)); }
 no(){ printf 'FALLA- %s\n' "$1"; fail=$((fail+1)); [ $# -gt 1 ] && printf '       %s\n' "$2"; }
 
 ORCH="$TMP/orch"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+source "$HERE/test-guard.sh"
+test_guard_orch_dir "$ORCH"
 WT="$TMP/wt"
 # The paths of the machine, with a default (the portability check asks for
 # it, and it is right: a script that uses one without defining it runs

@@ -39,9 +39,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
-# The siblings: the cron runs a COPY of this script from ~/.hermes/scripts/,
-# where the siblings are NOT. They live in the orchestrator's bin. When this
-# script runs from the repo, they are right here.
+# The siblings live next to this script: the crontab runs the scripts of the
+# repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
+# that runs outside bin/ without them.
 if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_BIN:-$ORCH_DIR/bin}"; fi
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 ISSUE="${1:-}"

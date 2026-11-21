@@ -42,6 +42,9 @@ bad()  { FAIL=$(( FAIL + 1 )); printf 'FAIL %s\n' "$1"; [ -n "${2:-}" ] && print
 TESTDIR="$(mktemp -d "${TMPDIR:-/tmp}/orch-test.XXXXXX")"
 trap 'rm -rf "$TESTDIR"' EXIT
 export ORCH_DIR="$TESTDIR"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+source "$(cd "$(dirname "$0")" && pwd)/test-guard.sh"
+test_guard_orch_dir
 BIN="$ORCH_DIR/bin"
 mkdir -p "$BIN"
 

@@ -37,7 +37,6 @@ own:
     LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
     SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
     WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
-    HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"
 
 The acceptance criterion is one grep, and it is part of the test suite (`bin/test-portability.sh`):
 
@@ -69,17 +68,21 @@ the scan:
 The repo is private, but a private repo is not a secret store: the check is cheap and it is the
 difference between a token that leaks into a fork and one that does not.
 
-## The second machine registers the crons, not the state
+## The second machine installs the crontab, not the state
 
 The crons are the parts that make the orchestrator autonomous, and they are the same on both
-machines. All of them run with `--no-agent` (zero model tokens) and deliver to `local`:
+machines. They are SCRIPTS (zero model tokens) in the user crontab, and the register is
+`bin/crons.txt`:
 
-    hermes cron create --name solidcraft-gate-queue    --schedule '*/3 * * * *' --script gate-queue.sh      --no-agent --deliver local
-    hermes cron create --name solidcraft-pipeline      --schedule '*/5 * * * *' --script pipeline.py        --no-agent --deliver local
-    hermes cron create --name solidcraft-nice-compilations --schedule '*/2 * * * *' --script nice-compilations.sh --no-agent --deliver local
-    hermes cron create --name solidcraft-reporte-diario   --schedule '0 10,22 * * *' --script daily-report.py --no-agent --deliver origin
+    bash bin/install-crontab.sh
 
-The wave cron stays PAUSED on both: it opens a new session per run and duplicates the work.
+It writes the block of the crontab with a `PATH` that finds `gh`, `opencode` and `cargo`, runs
+each script by its interpreter and gives each job its log (`logs/cron-<job>.log`).
+`bash bin/preflight.sh` says what is still missing. (2026-11-21: they used to be jobs of hermes,
+which is gone.)
+
+The wave runs on ONE machine only: the arbiter of the claim does not count our own pull
+requests as rivals, so two waves with separate states can take the same issue.
 
 ## What the two machines must NOT share
 

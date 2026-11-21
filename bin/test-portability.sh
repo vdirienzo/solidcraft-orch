@@ -10,10 +10,10 @@
 # WHAT IS TESTED:
 #   1. no script of bin/ has an absolute path of THIS machine outside the
 #      documented defaults (${VAR:-<path of this machine>}).
-#   2. every script that uses ORCH_DIR/LOOP_DIR/SOLIDCRAFT_REPO/WORKTREES_DIR/
-#      HERMES_SCRIPTS defines it with a default, so it never runs with an
-#      empty path on the other PC.
-#   3. the five variables are documented in the README.
+#   2. every script that uses ORCH_DIR/LOOP_DIR/SOLIDCRAFT_REPO/WORKTREES_DIR
+#      defines it with a default, so it never runs with an empty path on the
+#      other PC. (2026-11-21: HERMES_SCRIPTS left the list with hermes.)
+#   3. the four variables are documented in the README.
 #   4. the rules and the traps of the skill are in docs/ (the other PC has no
 #      skill: it has the repo).
 #
@@ -96,9 +96,9 @@ fi
 # --- 2. the variables that are used are DEFINED ------------------------------
 # A script that uses $WORKTREES_DIR without defining it runs with an EMPTY
 # path on the other PC (or with the path of another variable). Every script
-# that uses one of the five variables has to define it with a default: either
+# that uses one of the four variables has to define it with a default: either
 # an assignment at the top, or a default in the very use of it.
-VARS="ORCH_DIR LOOP_DIR SOLIDCRAFT_REPO WORKTREES_DIR HERMES_SCRIPTS"
+VARS="ORCH_DIR LOOP_DIR SOLIDCRAFT_REPO WORKTREES_DIR"
 
 for v in $VARS; do
   MISSING=""
@@ -150,7 +150,7 @@ else
 fi
 
 # The crons run the scripts OF THE REPO (2026-11-21: the loop left hermes and
-# its copies in ~/.hermes/scripts). The scheduler is the crontab of the user,
+# its copies of the scripts). The scheduler is the crontab of the user,
 # installed from the register by bin/install-crontab.sh: the README has to say
 # how the other PC installs it, or its crons never exist.
 if grep -qF "bash bin/install-crontab.sh" "$ORCH_DIR/README.md" 2>/dev/null; then
