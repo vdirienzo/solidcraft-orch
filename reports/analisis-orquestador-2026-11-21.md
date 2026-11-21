@@ -221,3 +221,43 @@ y las reglas anteriores, y nada lo detectó.
    por diffs chicos y veto de repro-first.
 6. **Borrar** lo que reemplaza upstream, más hermes y `loop/`.
 7. **Métricas** y, solo si sigue haciendo falta, el supervisor.
+
+---
+
+# Estado al cierre (2026-11-21, ~20:20)
+
+Commits en `main` del orquestador: `08a4ee5` (el trabajo de la sesión anterior: opencode y
+crontab), `517857d` (la wave despacha otra vez), `6e93cfa` (foto de GitHub, regla única del
+claim, fichas), `4b32fbb` (gate con el CI del fork o `cargo xtask fast`), `7efd0a8`
+(métricas y alertas), `6c9ca14` (fuera hermes, reglas que siguen a upstream, tests
+herméticos), `617b919` (la wave usa la ficha y el veto del maintainer exige su cita) y
+`76aac94` (versión de la ficha en los tests). Suites: 33 pasan, 0 fallan (`test-all --fast`),
+contra 27 en la línea base.
+
+Hecho del plan:
+- **Sección 1:** completa (PATH y crontab, cola de gates, bucle de la wave, briefs viejos).
+- **Sección 2:** claim primero, desde el brief; filtros de área y error mapeados a crates;
+  una sola regla del claim; gate con `xtask fast` o el CI del fork; publicación sin edición
+  de bodies ni comentarios de estado; clave issue+sha en la cola; tests herméticos.
+- **Sección 3:** techo de tiempo y `--format json`; brief de 2,5 KB basado en
+  `solidcraft-full-stop`; foto de GitHub; tokens y costo por slot en el reporte.
+- **Sección 4:** fuera hermes; `RULES.md` remite a upstream; `rules-sync` en la wave.
+
+Primera corrida real del flujo nuevo: la wave de las 20:10 retomó el slot 19690 (PR #20081)
+con el brief nuevo. A los 11 minutos llevaba 17 pasos, 0,019 USD, 508k tokens leídos de la
+caché y el test RED confirmado.
+
+Política de esta máquina (`~/.local/share/solidcraft-loop/config.env`, con respaldo
+`.bak-2026-11-21`): `IMPLEMENT_SLOTS=1`, `GATE_MODE=local`, `LOCAL_GATE=fast` y
+`AGENT_TIMEOUT_MIN=180`.
+
+Queda para una acción humana o para después:
+1. **Habilitar Actions en el fork** desde la web (github.com/vdirienzo/solidcraft → Actions).
+   La API dice que está activo, pero el despacho responde "Actions has been disabled for this
+   repository". Después, poner `GATE_MODE=fork-ci` en `config.env`.
+2. **Subir a `IMPLEMENT_SLOTS=2`** cuando el primer PR del brief nuevo se vea bien, y medirlo
+   con `daily-report.py` (costo por merge) y `loop-status.py` (alertas).
+3. **Carril de kernel:** no se abre. Esta máquina no compila solidcore, y los PRs de kernel
+   tienen la peor tasa: 2 mergeados y 4 cerrados.
+4. **Borrar `loop/`:** no se hizo. `gate.sh` (`LOCAL_GATE=quick`), `publish-pr.sh`
+   (`pr-defaults-line.sh`) y `run-issue-scope.sh` todavía lo usan.
