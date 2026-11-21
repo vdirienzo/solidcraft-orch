@@ -32,7 +32,23 @@
 #   2   the usage is wrong, or the gate script of the loop is not there
 #   4   the claim of the issue is LOST: the gate did not run
 #   5   there is NO worktree of the slot: the gate did not run (2026-11-17)
-#   *   the exit code of the gate script of the loop
+#   7   the worktree is NOT the requested commit (its HEAD is another sha, or
+#       it has uncommitted or untracked changes): the gate did not run
+#       (2026-11-21)
+#   *   the exit code of the gate (cargo xtask fast, or the gate script of the loop)
+#
+# THE LOCAL GATE IS NOT THE DEFAULT GATE ANYMORE (2026-11-21): the pipeline
+# gates a pull request with upstream's CI run on the fork (bin/fork-ci.sh,
+# GATE_MODE=fork-ci) and only enqueues this script with GATE_MODE=local. And
+# what this script runs is upstream's own pre-push check, `cargo xtask fast
+# --base <base>` (CONTRIBUTING.md: "Run cargo xtask fast before pushing ... CI
+# runs the rest"), not our gate-quick.sh: gate-quick (nextest with
+# --ignore-default-filter, SOLIDCRAFT_REQUIRE_GPU=1 and a baseline 18 days
+# old) gave a FALSE red on PR #20017 while upstream's "Native Linux tests"
+# passed on the same head. LOCAL_GATE=quick keeps the old gate for
+# compatibility. The verdict of `fast` is written where the readers look for
+# it ($LOOP_DIR/gates/<slot>/scope.verdict, VERDICT=VERDE-SCOPE|ROJO-SCOPE,
+# MODE=xtask-fast).
 #
 # IT DOES NOT RUN THE FULL `cargo xtask ci`: the CI of the upstream runs the
 # full suite when a maintainer adds the label approved-for-ci, and the merge
@@ -82,14 +98,39 @@ BASE="${3:-origin/main}"
 # it is not given.
 OUR_PR="${4:-}"
 
+# WHICH LOCAL GATE (2026-11-21): fast = upstream's `cargo xtask fast` (the
+# default), quick = the gate-quick.sh of the loop (the old one).
+LOCAL_GATE="${LOCAL_GATE:-fast}"
+
 if [ -z "$ISSUE" ] || [ -z "$SHA" ]; then
   echo "usage: bash bin/gate.sh <issue> <sha> [base] [our_pr]" >&2
   exit 2
 fi
-if [ ! -x "$GATE_SCRIPT" ] && [ ! -f "$GATE_SCRIPT" ]; then
+case "$LOCAL_GATE" in
+  fast|quick) ;;
+  *) echo "gate.sh: LOCAL_GATE=$LOCAL_GATE no es un gate (fast o quick)" >&2; exit 2 ;;
+esac
+case "$SHA" in
+  *[!0-9a-fA-F]*) echo "gate.sh: el sha '$SHA' no es un sha" >&2; exit 2 ;;
+esac
+if [ "$LOCAL_GATE" = "quick" ] && [ ! -x "$GATE_SCRIPT" ] && [ ! -f "$GATE_SCRIPT" ]; then
   echo "gate.sh: the gate script is not there: $GATE_SCRIPT" >&2
   exit 2
 fi
+
+# Two SHAs are the same commit when one is the prefix of the other: the
+# gate writes the SHA it was given and the queue can carry an abbreviated
+# one. A SHA that is a prefix of another is NOT the same commit (a SHA of
+# 7 characters is a prefix of MANY commits), so only the long one can
+# match the short one.
+same_sha() {
+  local a="${1:-}" b="${2:-}"
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  [ "$a" = "$b" ] && return 0
+  case "$a" in "$b"*) [ ${#b} -ge 7 ] && return 0 ;; esac
+  case "$b" in "$a"*) [ ${#a} -ge 7 ] && return 0 ;; esac
+  return 1
+}
 
 # ---------------------------------------------------------------------------
 # THE WORKTREE OF THE SLOT (2026-11-17): no worktree, no gate.
@@ -133,6 +174,34 @@ if [ -z "$WORKTREE" ]; then
   exit 5
 fi
 export REPO="$WORKTREE"
+
+# ---------------------------------------------------------------------------
+# THE TREE THAT IS JUDGED IS THE REQUESTED COMMIT (2026-11-21).
+#
+# WHY: the gate compiles the WORKING TREE of the worktree and writes a verdict
+# that names the SHA it was GIVEN. When the agent had pushed another commit
+# since, or had edits that were not committed, the verdict said "VERDE for
+# <sha>" about a tree that was not <sha>, and the pipeline promoted <sha> with
+# it. So the HEAD of the worktree has to BE the requested commit and the tree
+# has to be clean (no change and no untracked file: `cargo xtask fast` reads
+# uncommitted and untracked files too), or the gate does not run.
+#
+# THE CHECK IS BEFORE THE BUILD TOKEN, like the one of the worktree: there is
+# no point in waiting for a token to compile the wrong tree. EXIT CODE 7.
+# ---------------------------------------------------------------------------
+WT_HEAD="$(git -C "$WORKTREE" rev-parse HEAD 2>/dev/null || true)"
+if ! same_sha "$WT_HEAD" "$SHA"; then
+  echo "gate.sh: el worktree $WORKTREE esta en ${WT_HEAD:-un HEAD que no se pudo leer}, NO en $SHA" >&2
+  echo "gate.sh: el gate NO corre: su veredicto nombraria $SHA y describiria otro arbol." >&2
+  exit 7
+fi
+WT_DIRTY="$(git -C "$WORKTREE" status --porcelain --untracked-files=normal 2>/dev/null | head -20)"
+if [ -n "$WT_DIRTY" ]; then
+  echo "gate.sh: el worktree $WORKTREE tiene cambios sin commitear (o archivos sin seguimiento):" >&2
+  printf '%s\n' "$WT_DIRTY" | sed 's/^/gate.sh:   /' >&2
+  echo "gate.sh: el gate NO corre: el arbol no es el commit $SHA." >&2
+  exit 7
+fi
 
 # The target directory of the slot: THE SAME one the agent used. The gate
 # helper of the loop resolves the layout from GATE_QUICK_TARGET_DIR, so the
@@ -264,6 +333,91 @@ fi
 # and the verdict is a ROJO that says nothing about the change.
 cd "$REPO" || exit 2
 
+# ---------------------------------------------------------------------------
+# THE DEFAULT LOCAL GATE: upstream's `cargo xtask fast` (2026-11-21).
+#
+# It checks what the change touches against <base> (fmt, the quick checks of
+# ci, workspace clippy and the tests of the packages whose files changed) and
+# lists every failing step at the end ("fast: <step> failed: ..."). It is the
+# check CONTRIBUTING.md asks for before a push, so its verdict is the one
+# upstream's CI is going to agree with; gate-quick.sh was ours and it was the
+# one that cried wolf (PR #20017).
+#
+# `fast` FORMATS the tree (cargo fmt writes): a commit that was not formatted
+# comes out of it with modified files. That is a RED (upstream's fmt --check
+# fails on that commit), and the tracked files are put back as they were (the
+# tree was clean before, so every change is the gate's own): the worktree is
+# the agent's, and a gate does not leave edits in it. A NEW untracked file is
+# named and left alone (deleting files is not the gate's business).
+# ---------------------------------------------------------------------------
+if [ "$LOCAL_GATE" = "fast" ]; then
+  SLOT_REAL="$(basename "${CARGO_TARGET_DIR:-slot-$ISSUE}")"
+  SLOT_REAL="${SLOT_REAL#slot-}"
+  GDIR="$LOOP_DIR/gates/$SLOT_REAL"
+  mkdir -p "$GDIR" || exit 2
+  FAST_LOG="$GDIR/fast.log"
+  # The base has to be the one of today: with a stale origin/main the diff
+  # also carries what upstream merged since, and fast tests packages that the
+  # change never touched. A fetch that fails does not stop the gate.
+  case "$BASE" in
+    origin/*)
+      timeout 180 git -C "$REPO" fetch -q origin "${BASE#origin/}" 2>/dev/null \
+        || echo "gate.sh: no pude actualizar $BASE: el gate compara contra el que hay" >&2 ;;
+  esac
+  echo "gate.sh: corro cargo xtask fast --base $BASE (log: $FAST_LOG)" >&2
+  START_S="$(date +%s)"
+  nice -n 19 cargo xtask fast --base "$BASE" > "$FAST_LOG" 2>&1
+  GATE_RC=$?
+  DURATION_S=$(( $(date +%s) - START_S ))
+  FAILED_STEPS="$(sed -nE 's/^fast: (.+) failed: .*$/\1/p' "$FAST_LOG" | sort -u | paste -sd, -)"
+  CHANGED="$(git -C "$REPO" status --porcelain --untracked-files=normal 2>/dev/null)"
+  CHECKS="fast:$([ "$GATE_RC" -eq 0 ] && echo ok || echo fail)"
+  if [ -n "$CHANGED" ]; then
+    echo "gate.sh: cargo xtask fast cambio el arbol (el commit no estaba formateado):" >&2
+    printf '%s\n' "$CHANGED" | head -20 | sed 's/^/gate.sh:   /' >&2
+    git -C "$REPO" checkout -q -- . 2>/dev/null \
+      || echo "gate.sh: no pude devolver los archivos del worktree a $SHA" >&2
+    CHECKS="$CHECKS|tree:changed"
+    FAILED_STEPS="${FAILED_STEPS:+$FAILED_STEPS,}el arbol cambio (fmt)"
+    [ "$GATE_RC" -eq 0 ] && GATE_RC=1
+  fi
+  if [ "$GATE_RC" -eq 0 ]; then
+    VERDICT_FAST="VERDE-SCOPE"
+    NEW_FAST=0
+  else
+    VERDICT_FAST="ROJO-SCOPE"
+    # NEVER 0 on a red: a reader that sees GATE_STATUS=finished with no new
+    # failure would take the red for a green.
+    NEW_FAST="$(printf '%s' "$FAILED_STEPS" | tr ',' '\n' | grep -c . || true)"
+    [ "${NEW_FAST:-0}" -ge 1 ] 2>/dev/null || NEW_FAST=1
+  fi
+  {
+    echo "GATE_STATUS=finished"
+    echo "MODE=xtask-fast"
+    echo "VERDICT=$VERDICT_FAST"
+    echo "NEW_FAILURES=$NEW_FAST"
+    echo "FAILED_TESTS="
+    echo "FAILED_STEPS=$FAILED_STEPS"
+    echo "CHECKS=$CHECKS"
+    echo "SHA=$SHA"
+    echo "HEAD_SHA=$WT_HEAD"
+    echo "BASE=$BASE"
+    echo "AT=$(date +%s)"
+    echo "DURATION_S=$DURATION_S"
+    echo "LOG=$FAST_LOG"
+  } > "$GDIR/scope.verdict.tmp" && mv -f "$GDIR/scope.verdict.tmp" "$GDIR/scope.verdict"
+  # The effective verdict of a previous gate-quick run is about ANOTHER
+  # commit and another gate: it goes away. gate-baseline.sh rewrites it from
+  # this verdict when somebody asks (a fast verdict names no test, so there
+  # is nothing to discount).
+  rm -f "$GDIR/scope.effective.verdict"
+  echo "gate.sh: VERDICT=$VERDICT_FAST NEW_FAILURES=$NEW_FAST${FAILED_STEPS:+ FAILED_STEPS=$FAILED_STEPS} (${DURATION_S}s)" >&2
+  tail -n 5 "$FAST_LOG" | sed 's/^/gate.sh: fast: /' >&2
+  exit $GATE_RC
+fi
+
+# LOCAL_GATE=quick: the gate-quick.sh of the loop, as before.
+#
 # The xtask is built BEFORE the gate, in the ci profile, in the target
 # directory of the slot. The phase "cargo xtask layers" of the gate compiles
 # it: on a cold target directory that is 22 crates and it eats the whole
@@ -306,19 +460,7 @@ GATE_RC=$?
 SLOT_REAL="$(basename "${CARGO_TARGET_DIR:-}")"
 SLOT_REAL="${SLOT_REAL#slot-}"
 
-# Two SHAs are the same commit when one is the prefix of the other: the
-# gate writes the SHA it was given and the queue can carry an abbreviated
-# one. A SHA that is a prefix of another is NOT the same commit (a SHA of
-# 7 characters is a prefix of MANY commits), so only the long one can
-# match the short one.
-same_sha() {
-  local a="${1:-}" b="${2:-}"
-  [ -n "$a" ] && [ -n "$b" ] || return 1
-  [ "$a" = "$b" ] && return 0
-  case "$a" in "$b"*) [ ${#b} -ge 7 ] && return 0 ;; esac
-  case "$b" in "$a"*) [ ${#a} -ge 7 ] && return 0 ;; esac
-  return 1
-}
+# (same_sha is defined at the top: the check of the worktree uses it too.)
 
 # The effective verdict is only written for the verdict of THIS run: the
 # raw file of the slot can be the one of a previous run (the gate that

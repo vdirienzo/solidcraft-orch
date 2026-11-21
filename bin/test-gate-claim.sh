@@ -33,6 +33,11 @@
 #      verdict and says WHERE the worktree was expected: a verdict that
 #      describes the main checkout is worse than no verdict;
 #   7. the gate WITH the worktree of the slot goes on its way;
+#   7b-7g. (2026-11-21) the local gate is upstream's `cargo xtask fast --base
+#      origin/main`: it only runs on the requested commit (HEAD == sha) and
+#      on a clean tree (rc=7 otherwise, nothing compiled), a failing or
+#      reformatting `fast` is a ROJO with NEW_FAILURES>=1 (and the tree is
+#      put back), and LOCAL_GATE=quick keeps the old gate-quick.sh;
 #   8. the runner does NOT take the verdict of "SHA=0d74d8ca" as the verdict
 #      of the commit "0d74d8cae" (the comparison was not anchored);
 #   9. the runner DOES take the verdict of "SHA=0d74d8cae" as the verdict of
@@ -275,6 +280,10 @@ proceeded() { printf '%s' "$OUT" | grep -q 'GATE-PROCEEDED'; }
 # (a stub of claim-verify.sh: what the gate does with each verdict)
 # =============================================================================
 ORCH_DIR_UNDER_TEST="$TESTDIR/orch-stub"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+# (Mas abajo el verificador REAL corre con el ORCH_DIR real: solo lee.)
+source "$HERE/test-guard.sh"
+test_guard_orch_dir "$ORCH_DIR_UNDER_TEST"
 
 # --- our pull request, given: the gate asks the verifier WITH our number ---
 : > "$TESTDIR/claim-args.log"
@@ -480,6 +489,7 @@ RUNNER_SH="${RUNNER_SH:-$HERE/gate-runner.sh}"
 # --- the world of the gate: its own orchestrator, its own loop ---------------
 GATEROOT="$TESTDIR/gateworld"
 GATEORCH="$GATEROOT/orch"
+test_guard_orch_dir "$GATEORCH"
 GATELOOP="$GATEROOT/loop"
 GATEHOME="$GATEROOT/home"
 GATETARGETS="$GATEROOT/targets"
@@ -493,6 +503,17 @@ mkdir -p "$GATEORCH/bin" "$GATEORCH/logs" "$GATELOOP/bin" "$GATELOOP/gates" \
 cat > "$GATEHOME/.cargo/bin/cargo" <<'STUB'
 #!/usr/bin/env bash
 echo "cargo $* (STUB de los tests)"
+# Lo que se le pidio a cargo (los casos 7b-7g miran que corra `xtask fast`).
+printf '%s\n' "$*" >> "${CARGO_STUB_LOG:-/dev/null}"
+# Un `fast` que falla dice el paso que fallo, como el de upstream.
+if [ -n "${CARGO_STUB_FAIL_STEP:-}" ]; then
+  echo "fast: ${CARGO_STUB_FAIL_STEP} failed: exit status 101"
+  exit 1
+fi
+# Un `fast` que formatea: cambia un archivo seguido del worktree.
+if [ -n "${CARGO_STUB_TOUCH:-}" ]; then
+  echo "// formateado" >> "$CARGO_STUB_TOUCH"
+fi
 exit 0
 STUB
 chmod 755 "$GATEHOME/.cargo/bin/cargo"
@@ -614,7 +635,12 @@ fi
 rm -rf "$GATELOOP/gates"
 mkdir -p "$GATELOOP/gates"
 ln -sfn "$WORKTREE" "$GATEWT/issue-$ISSUE"
-run_gate "$ISSUE" "$SHA" "$GATEWT"
+# The sha is the HEAD of the worktree (2026-11-21): the gate refuses to judge
+# a sha that is not the tree it compiles (case 7b).
+WT_SHA="$(git -C "$WORKTREE" rev-parse HEAD)"
+export CARGO_STUB_LOG="$GATEROOT/cargo-calls.log"
+: > "$CARGO_STUB_LOG"
+run_gate "$ISSUE" "$WT_SHA" "$GATEWT"
 if [ "$GATE_RC" -eq 0 ] && [ -f "$GATELOOP/gates/$ISSUE/scope.verdict" ]; then
   ok "7. the gate with the worktree of the slot goes on its way (rc=0, verdict written)"
 else
@@ -622,11 +648,94 @@ else
       "rc=$GATE_RC $(printf '%s' "$GATE_OUT" | tail -3 | tr '\n' ' ')"
 fi
 
+# --- 7b-7g. THE LOCAL GATE IS UPSTREAM'S `cargo xtask fast` (2026-11-21) ----
+# The default local gate runs `cargo xtask fast --base <base>` in the worktree
+# (not gate-quick.sh), only on the requested commit and on a clean tree, and
+# writes a verdict the readers understand. LOCAL_GATE=quick keeps the old gate.
+V="$GATELOOP/gates/$ISSUE/scope.verdict"
+if grep -qx "xtask fast --base origin/main" "$CARGO_STUB_LOG" \
+   && grep -q '^MODE=xtask-fast' "$V" && grep -q '^VERDICT=VERDE-SCOPE' "$V" \
+   && grep -q '^NEW_FAILURES=0' "$V" && grep -qx "SHA=$WT_SHA" "$V"; then
+  ok "7b. the default local gate is 'cargo xtask fast --base origin/main' and its green verdict names the sha"
+else
+  bad "7b. the default local gate is 'cargo xtask fast --base origin/main' and its green verdict names the sha" \
+      "cargo: $(tr '\n' ';' < "$CARGO_STUB_LOG") verdict: $(tr '\n' ' ' < "$V" 2>/dev/null)"
+fi
+
+rm -rf "$GATELOOP/gates"; mkdir -p "$GATELOOP/gates"; : > "$CARGO_STUB_LOG"
+run_gate "$ISSUE" "$SHA" "$GATEWT"
+if [ "$GATE_RC" -eq 7 ] && [ ! -s "$CARGO_STUB_LOG" ] \
+   && [ -z "$(find "$GATELOOP/gates" -name scope.verdict 2>/dev/null)" ]; then
+  ok "7c. a sha that is NOT the HEAD of the worktree: rc=7, nothing compiled, no verdict"
+else
+  bad "7c. a sha that is NOT the HEAD of the worktree: rc=7, nothing compiled, no verdict" \
+      "rc=$GATE_RC cargo: $(tr '\n' ';' < "$CARGO_STUB_LOG")"
+fi
+
+echo "sin commitear" > "$WORKTREE/suelto.txt"
+: > "$CARGO_STUB_LOG"
+run_gate "$ISSUE" "$WT_SHA" "$GATEWT"
+rm -f "$WORKTREE/suelto.txt"
+if [ "$GATE_RC" -eq 7 ] && [ ! -s "$CARGO_STUB_LOG" ] \
+   && printf '%s' "$GATE_OUT" | grep -q 'suelto.txt'; then
+  ok "7d. a worktree with an untracked file: rc=7, nothing compiled, the file is named"
+else
+  bad "7d. a worktree with an untracked file: rc=7, nothing compiled, the file is named" \
+      "rc=$GATE_RC $(printf '%s' "$GATE_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+: > "$CARGO_STUB_LOG"
+GATE_OUT="$(CARGO_STUB_FAIL_STEP=clippy env HOME="$GATEHOME" ORCH_DIR="$GATEORCH" \
+              LOOP_DIR="$GATELOOP" WORKTREES_DIR="$GATEWT" \
+              SOLIDCRAFT_REPO="$GATEROOT/checkout-principal" GATE_TARGETS="$GATETARGETS" \
+              GH_BIN="$STUBBIN/gh" bash "$GATE_SH" "$ISSUE" "$WT_SHA" 2>&1)"
+GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] && grep -q '^VERDICT=ROJO-SCOPE' "$V" 2>/dev/null \
+   && grep -q '^NEW_FAILURES=1' "$V" && grep -q '^FAILED_STEPS=clippy' "$V"; then
+  ok "7e. a failing 'fast' is a ROJO with NEW_FAILURES>=1 and the step that failed"
+else
+  bad "7e. a failing 'fast' is a ROJO with NEW_FAILURES>=1 and the step that failed" \
+      "rc=$GATE_RC verdict: $(tr '\n' ' ' < "$V" 2>/dev/null)"
+fi
+
+git -C "$WORKTREE" commit -q --allow-empty -m "un commit para el caso del fmt" 2>/dev/null
+printf 'fn main() {}\n' > "$WORKTREE/lib.rs"
+git -C "$WORKTREE" add lib.rs && git -C "$WORKTREE" commit -q -m "un archivo que fast formatea"
+WT_SHA2="$(git -C "$WORKTREE" rev-parse HEAD)"
+GATE_OUT="$(CARGO_STUB_TOUCH="$WORKTREE/lib.rs" env HOME="$GATEHOME" ORCH_DIR="$GATEORCH" \
+              LOOP_DIR="$GATELOOP" WORKTREES_DIR="$GATEWT" \
+              SOLIDCRAFT_REPO="$GATEROOT/checkout-principal" GATE_TARGETS="$GATETARGETS" \
+              GH_BIN="$STUBBIN/gh" bash "$GATE_SH" "$ISSUE" "$WT_SHA2" 2>&1)"
+GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ] && grep -q '^VERDICT=ROJO-SCOPE' "$V" 2>/dev/null \
+   && grep -q 'tree:changed' "$V" && [ -z "$(git -C "$WORKTREE" status --porcelain)" ]; then
+  ok "7f. a 'fast' that reformats the tree is a ROJO, and the worktree is put back as it was"
+else
+  bad "7f. a 'fast' that reformats the tree is a ROJO, and the worktree is put back as it was" \
+      "rc=$GATE_RC status: $(git -C "$WORKTREE" status --porcelain | tr '\n' ' ') verdict: $(tr '\n' ' ' < "$V" 2>/dev/null)"
+fi
+
+rm -rf "$GATELOOP/gates"; mkdir -p "$GATELOOP/gates"; : > "$CARGO_STUB_LOG"
+GATE_OUT="$(LOCAL_GATE=quick env HOME="$GATEHOME" ORCH_DIR="$GATEORCH" \
+              LOOP_DIR="$GATELOOP" WORKTREES_DIR="$GATEWT" \
+              SOLIDCRAFT_REPO="$GATEROOT/checkout-principal" GATE_TARGETS="$GATETARGETS" \
+              GH_BIN="$STUBBIN/gh" bash "$GATE_SH" "$ISSUE" "$WT_SHA2" 2>&1)"
+GATE_RC=$?
+if [ "$GATE_RC" -eq 0 ] && grep -q '^BASE=origin/main' "$V" 2>/dev/null \
+   && ! grep -q '^MODE=xtask-fast' "$V" && ! grep -q 'xtask fast' "$CARGO_STUB_LOG"; then
+  ok "7g. LOCAL_GATE=quick runs the gate-quick.sh of the loop, not 'fast'"
+else
+  bad "7g. LOCAL_GATE=quick runs the gate-quick.sh of the loop, not 'fast'" \
+      "rc=$GATE_RC cargo: $(tr '\n' ';' < "$CARGO_STUB_LOG") verdict: $(tr '\n' ' ' < "$V" 2>/dev/null)"
+fi
+unset CARGO_STUB_LOG
+
 # =============================================================================
 # EL RUNNER: EL SHA ANCHORADO (F2) Y LOS SLOTS PENDIENTES DEL ESTADO (F3)
 # =============================================================================
 RUNROOT="$TESTDIR/runnerworld"
 RUNORCH="$RUNROOT/orch"
+test_guard_orch_dir "$RUNORCH"
 RUNLOOP="$RUNROOT/loop"
 RUNWT="$RUNROOT/worktrees"
 RUNLOG="$RUNROOT/gate-calls.log"

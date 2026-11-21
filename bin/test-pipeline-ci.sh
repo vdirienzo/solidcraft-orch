@@ -269,6 +269,84 @@ elif caso == "issue":
     check("un body vacio se repara con solo 'Fixes #12'",
           vacio == "Fixes #12\n", "vacio=%r" % (vacio,))
 
+elif caso == "forkci":
+    # EL CI DEL FORK (2026-11-21): evaluar_fork_ci es pura; la regla es la de
+    # evaluar_check_runs (de cada nombre de job manda el mas reciente).
+    def frun(rid, status, concl, created="2026-11-21T10:00:00Z"):
+        return {"id": rid, "status": status, "conclusion": concl, "created_at": created,
+                "html_url": "https://x/runs/%d" % rid, "head_sha": "f" * 40}
+    def job(rid, nombre, concl, done="2026-11-21T11:00:00Z", status="completed"):
+        return {"id": rid, "name": nombre, "status": status, "conclusion": concl,
+                "started_at": "2026-11-21T10:01:00Z", "completed_at": done}
+    r = P.evaluar_fork_ci([], {})
+    check("sin runs el CI del fork es NINGUNO", r["estado"] == P.NINGUNO, r)
+    r = P.evaluar_fork_ci([frun(1, "completed", "success")], {})
+    check("un solo run terminado en success es VERDE sin leer sus jobs",
+          r["estado"] == P.VERDE and r["run"] == "https://x/runs/1", r)
+    r = P.evaluar_fork_ci([frun(1, "in_progress", None)],
+                          {1: [job(10, "Select checks", "success")]})
+    check("un run que sigue corriendo es PENDIENTE aunque sus primeros jobs esten verdes",
+          r["estado"] == P.PENDIENTE, r)
+    r = P.evaluar_fork_ci([frun(1, "in_progress", None)],
+                          {1: [job(10, "Native Linux Clippy", "failure")]})
+    check("un run que sigue corriendo con un job ya rojo es ROJO (temprano)",
+          r["estado"] == P.ROJO and r["fallan"] == ["Native Linux Clippy"], r)
+    r = P.evaluar_fork_ci([frun(1, "completed", "failure")],
+                          {1: [job(10, "Native Linux tests", "failure"),
+                               job(11, "Doc tests", "success")]})
+    check("un run terminado con un job rojo es ROJO y FALLAN nombra el job",
+          r["estado"] == P.ROJO and r["fallan"] == ["Native Linux tests"], r)
+    r = P.evaluar_fork_ci([frun(1, "completed", "failure", "2026-11-21T10:00:00Z"),
+                           frun(2, "completed", "success", "2026-11-21T14:00:00Z")],
+                          {1: [job(10, "Native Linux tests", "failure", "2026-11-21T11:00:00Z")],
+                           2: [job(20, "Native Linux tests", "success", "2026-11-21T15:00:00Z")]})
+    check("de cada nombre manda el job mas reciente entre los runs del sha (el verde nuevo gana)",
+          r["estado"] == P.VERDE and r["run"] == "https://x/runs/2", r)
+    r = P.evaluar_fork_ci([frun(1, "completed", "failure")],
+                          {1: [job(10, "Native Linux tests", "success"),
+                               job(11, "Compile RISC-V (manual)", "failure")]})
+    check("un rojo de un job que el merge queue no corre (RISC-V) no bloquea",
+          r["estado"] == P.VERDE and r["informativos"] == ["Compile RISC-V (manual)"], r)
+    r = P.evaluar_fork_ci([frun(1, "completed", "startup_failure")], {1: []})
+    check("un run que no arranco (startup_failure, sin jobs) es ROJO",
+          r["estado"] == P.ROJO, r)
+    r = P.evaluar_fork_ci([frun(1, "completed", "cancelled")],
+                          {1: [job(10, "Native Linux tests", "cancelled")]})
+    check("un run cancelado no es un veredicto: PENDIENTE y dice como despacharlo de nuevo",
+          r["estado"] == P.PENDIENTE and "--force" in r["detalle"], r)
+    linea = P.linea_fork_ci({"estado": P.ROJO, "sha": "f" * 40, "run": "https://x/runs/1",
+                             "fallan": ["Native Linux tests", "GPU path tests (1/4)"]})
+    check("la linea de estado tiene FORKCI, SHA, RUN y FALLAN al final (con comas)",
+          linea == "FORKCI=ROJO SHA=%s RUN=https://x/runs/1 "
+                   "FALLAN=Native Linux tests,GPU path tests (1/4)" % ("f" * 40), linea)
+
+elif caso == "modo":
+    d = tempfile.mkdtemp(prefix="modo-")
+    cfg = os.path.join(d, "config.env")
+    check("sin entorno y sin config.env el modo es fork-ci",
+          P.leer_gate_mode({}, cfg)[0] == "fork-ci")
+    with open(cfg, "w") as fh:
+        fh.write("OTRA=1\nexport GATE_MODE='local'   # el camino viejo\n")
+    check("GATE_MODE=local de config.env (con export, comillas y comentario) se lee",
+          P.leer_gate_mode({}, cfg)[0] == "local")
+    check("el entorno gana a config.env",
+          P.leer_gate_mode({"GATE_MODE": "fork-ci"}, cfg)[0] == "fork-ci")
+    modo, origen = P.leer_gate_mode({"GATE_MODE": "rapido"}, cfg)
+    check("un modo que no existe no se adivina: fork-ci, y el origen lo dice",
+          modo == "fork-ci" and "rapido" in origen, (modo, origen))
+    check("un ROJO-SCOPE terminado con NEW_FAILURES=0 NO es un verde local",
+          P.gate_local_verde({"verdict": "ROJO-SCOPE", "status": "finished",
+                              "new_failures": "0", "slot": "x"}) is False)
+    check("un VERDE-SCOPE es un verde local",
+          P.gate_local_verde({"verdict": "VERDE-SCOPE", "status": "finished",
+                              "new_failures": "0", "slot": "x"}) is True)
+    check("sin VERDICT, terminado y con NEW_FAILURES=0 (formato viejo) es verde",
+          P.gate_local_verde({"verdict": "", "status": "finished",
+                              "new_failures": "0", "slot": "x"}) is True)
+    check("sin VERDICT y con NEW_FAILURES vacio NO es verde",
+          P.gate_local_verde({"verdict": "", "status": "finished",
+                              "new_failures": "", "slot": "x"}) is False)
+
 sys.exit(1 if fails else 0)
 PY
 }
@@ -276,6 +354,13 @@ PY
 export PIPELINE_DIR="$HERE"
 export ORCH_DIR="$TMP/orch"
 export LOOP_DIR="$TMP/loop"
+# EL GUARDIA (2026-11-21): el estado de la suite nunca cae en el orquestador vivo.
+if [ -f "$HERE/test-guard.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$HERE/test-guard.sh"
+  test_guard_orch_dir "$ORCH_DIR"
+fi
+unset GATE_MODE FORK_CI_CROSS FORK_CI_MAX_INFLIGHT FORK_CI_CANCEL_STALE FORK_CI_ERROR_BACKOFF_S
 export MAX_INFLIGHT=0
 mkdir -p "$ORCH_DIR/bin" "$ORCH_DIR/gates" "$LOOP_DIR/gates/slot1" "$LOOP_DIR/gates/slot-corto" \
          "$TMP/checks" "$TMP/comments" "$TMP/prs"
@@ -316,6 +401,14 @@ echo "# el issue sale del titulo o de un verbo de cierre real"
 out=$(run_py issue); rc=$?
 count_py "$out"
 [ $rc -eq 0 ] || fail=$((fail+1))
+echo "# el CI del fork: la regla del mas reciente de cada nombre"
+out=$(run_py forkci); rc=$?
+count_py "$out"
+[ $rc -eq 0 ] || fail=$((fail+1))
+echo "# el modo del gate y el verde local"
+out=$(run_py modo); rc=$?
+count_py "$out"
+[ $rc -eq 0 ] || fail=$((fail+1))
 
 # ------------------------------------------------------------------
 # 2. el pipeline COMPLETO con un gh de mentira.
@@ -349,6 +442,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.parse
 
 D = os.environ.get("STUB_DIR", ".")
 ARGS = sys.argv[1:]
@@ -397,6 +491,30 @@ def api_path():
     return ""
 
 
+def api_query():
+    """La query de la ruta de la API (lo que va despues del '?')."""
+    for a in ARGS[1:]:
+        if not a.startswith("-") and "?" in a:
+            return a.split("?", 1)[1]
+    return ""
+
+
+def leer_json(f, default):
+    try:
+        return json.load(open(f))
+    except Exception:
+        return default
+
+
+def fork_runs():
+    return leer_json(os.path.join(D, "forkci", "runs.json"), [])
+
+
+def guardar_runs(runs):
+    os.makedirs(os.path.join(D, "forkci"), exist_ok=True)
+    json.dump(runs, open(os.path.join(D, "forkci", "runs.json"), "w"))
+
+
 def servir_api(path):
     """(texto, rc, stderr) de la respuesta de la API para ese path."""
     if path.endswith("/check-runs"):
@@ -417,6 +535,39 @@ def servir_api(path):
             return "", 1, "gh: could not list comments: HTTP 502"
         f = os.path.join(D, "comments", "%s.json" % num)
         crudo = open(f).read() if os.path.isfile(f) else "[]"
+    elif "/actions/workflows/" in path and path.endswith("/runs"):
+        # EL CI DEL FORK (2026-11-21): los runs de ci.yml. El filtro head_sha
+        # de la API se aplica DE VERDAD (un stub que lo ignora mide el stub).
+        if os.path.isfile(os.path.join(D, "forkci-fail")):
+            return "", 1, "gh: HTTP 502: Server Error"
+        runs = fork_runs()
+        q = urllib.parse.parse_qs(QUERY)
+        if q.get("head_sha"):
+            runs = [r for r in runs if r.get("head_sha") == q["head_sha"][0]]
+        if q.get("event"):
+            runs = [r for r in runs if r.get("event", "workflow_dispatch") == q["event"][0]]
+        crudo = json.dumps({"total_count": len(runs), "workflow_runs": runs})
+    elif "/actions/runs/" in path and path.endswith("/jobs"):
+        rid = path.split("/actions/runs/")[1].split("/")[0]
+        log("JOBS:%s" % rid)
+        f = os.path.join(D, "forkci", "jobs-%s.json" % rid)
+        jobs = json.load(open(f)) if os.path.isfile(f) else []
+        crudo = json.dumps({"total_count": len(jobs), "jobs": jobs})
+    elif "/actions/runs/" in path and path.endswith("/cancel"):
+        rid = path.split("/actions/runs/")[1].split("/")[0]
+        log("CANCEL:%s" % rid)
+        runs = fork_runs()
+        for r in runs:
+            if str(r.get("id")) == rid:
+                r["status"], r["conclusion"] = "completed", "cancelled"
+        guardar_runs(runs)
+        crudo = "{}"
+    elif "/git/ref/heads/" in path:
+        rama = path.split("/git/ref/heads/", 1)[1]
+        heads = leer_json(os.path.join(D, "forkci", "heads.json"), {})
+        if rama not in heads:
+            return "", 1, "gh: Not Found (HTTP 404)"
+        crudo = json.dumps({"ref": "refs/heads/" + rama, "object": {"sha": heads[rama]}})
     elif path.endswith("/pulls"):
         if os.path.isfile(os.path.join(D, "pulls-fail")):
             return "", 1, "gh: could not list pull requests: HTTP 401: Bad credentials"
@@ -435,7 +586,30 @@ def servir_api(path):
     return jq(crudo, valor("--jq")), 0, ""
 
 
+if ARGS[:2] == ["workflow", "run"]:
+    # El despacho de ci.yml en el fork. Como GitHub: el run aparece en la
+    # lista (salvo con 'dispatch-no-run': la API tarda en listarlo).
+    rama = valor("--ref", "")
+    log("DISPATCH:%s %s" % (rama, " ".join(ARGS[2:])))
+    if os.path.isfile(os.path.join(D, "dispatch-fail")):
+        sys.stderr.write("could not create workflow dispatch event: HTTP 422: Actions has "
+                         "been disabled for this repository.\n")
+        sys.exit(1)
+    if not os.path.isfile(os.path.join(D, "dispatch-no-run")):
+        heads = leer_json(os.path.join(D, "forkci", "heads.json"), {})
+        runs = fork_runs()
+        rid = 7000 + len(runs) + 1
+        runs.append({"id": rid, "status": "queued", "conclusion": None,
+                     "html_url": "https://github.com/vdirienzo/solidcraft/actions/runs/%d" % rid,
+                     "head_sha": heads.get(rama, ""), "head_branch": rama,
+                     "event": "workflow_dispatch", "created_at": "2026-11-21T23:00:00Z",
+                     "updated_at": "2026-11-21T23:00:00Z", "run_attempt": 1})
+        guardar_runs(runs)
+    print("Created workflow_dispatch event for ci.yml at %s" % rama)
+    sys.exit(0)
+
 if ARGS[:1] == ["api"]:
+    QUERY = api_query()
     path = api_path()
     texto, rc, err = servir_api(path)
     if rc != 0:
@@ -938,6 +1112,8 @@ fi
 # sacara cada tres: el cron solidcraft-gate-queue fallo 108 veces con una
 # condicion que no iba a cambiar. Un slot sin worktree no se encola.
 echo "== un slot sin worktree no se encola: el gate no puede correr =="
+# El caso es del modo LOCAL (bin/gate.sh): en modo fork-ci no se encola nada.
+export GATE_MODE=local
 export MAX_INFLIGHT=5
 export WORKTREES_DIR="$TMP/wt"
 mkdir -p "$WORKTREES_DIR" "$ORCH_DIR/bin"
@@ -971,6 +1147,277 @@ else
 fi
 rm -rf "$WORKTREES_DIR"
 export MAX_INFLIGHT=0
+unset GATE_MODE
+
+# ==================================================================
+# EL GATE ES EL CI DEL FORK (2026-11-21)
+#
+# El modo por defecto (sin GATE_MODE y sin config.env): un draft sin veredicto
+# local se gatea con ci.yml despachado en el fork sobre su head. UNA vez por
+# sha, nunca a ciegas, con un tope de runs en vuelo, sin despachar mientras el
+# agente trabaja, y un PR que ya esta listo no se toca.
+# ==================================================================
+echo "== el gate es el CI del fork =="
+unset GATE_MODE
+export WORKTREES_DIR="$TMP/wt-fork"
+mkdir -p "$WORKTREES_DIR"
+SHAF="f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+SHAV="e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+cat > "$TMP/checks/$SHAF.jsonl" <<'EOF'
+{"name":"Defaults line check","status":"completed","conclusion":"success","completed_at":"2026-11-21T15:46:43Z","started_at":"2026-11-21T15:46:38Z","id":222}
+EOF
+fork_reset(){
+  rm -rf "$TMP/forkci" "$ORCH_DIR/gates/fork-ci"
+  rm -f "$TMP/dispatch-fail" "$TMP/dispatch-no-run" "$TMP/forkci-fail"
+  mkdir -p "$TMP/forkci"
+  printf '{"feat/x": "%s"}\n' "${1:-$SHAF}" > "$TMP/forkci/heads.json"
+  echo '[]' > "$TMP/forkci/runs.json"
+  : > "$TMP/calls.log"
+}
+# Los runs del fork: una linea por run, id|status|conclusion|head_sha|rama|created_at
+fork_set_runs(){ python3 - "$TMP/forkci/runs.json" 3<&0 <<'PY'
+import json, os, sys
+runs = []
+for linea in os.fdopen(3).read().splitlines():
+    if not linea.strip():
+        continue
+    rid, status, concl, sha, rama, created = linea.split("|")
+    runs.append({"id": int(rid), "status": status, "conclusion": concl or None,
+                 "html_url": "https://github.com/vdirienzo/solidcraft/actions/runs/" + rid,
+                 "head_sha": sha, "head_branch": rama, "event": "workflow_dispatch",
+                 "created_at": created, "updated_at": created, "run_attempt": 1})
+json.dump(runs, open(sys.argv[1], "w"))
+PY
+}
+fork_set_jobs(){ printf '%s\n' "$2" > "$TMP/forkci/jobs-$1.json"; }
+n_calls(){ grep -c "^$1" "$TMP/calls.log" || true; }
+draft_fork(){
+  set_pulls <<EOF
+16001|Fork CI (#16100)|1|$SHAF|Arregla\n\nFixes #16100\n\nChanges a default: no\n|[]
+EOF
+}
+
+# --- F1: sin run -> UN despacho, con cross_compile, en la rama del PR -------
+fork_reset; draft_fork
+run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 1 ] && grep -q "^DISPATCH:feat/x .*--ref feat/x" "$TMP/calls.log" \
+   && grep -q "^DISPATCH:.*-R vdirienzo/solidcraft" "$TMP/calls.log" \
+   && grep -q "^DISPATCH:.*cross_compile=true" "$TMP/calls.log"; then
+  ok "F1. un draft sin run del fork despacha ci.yml UNA vez, en su rama y con cross_compile"
+else
+  no "F1. un draft sin run del fork despacha ci.yml UNA vez, en su rama y con cross_compile" "$(cat "$TMP/calls.log")"
+fi
+if [ -f "$ORCH_DIR/gates/fork-ci/$SHAF.despacho" ] && ! grep -q "^READY:16001" "$TMP/calls.log"; then
+  ok "F1. el despacho deja su marca y el PR sigue en draft"
+else
+  no "F1. el despacho deja su marca y el PR sigue en draft" "$(ls "$ORCH_DIR/fork-ci" 2>&1)"
+fi
+if grep -q "modo del gate: fork-ci (de el default)" "$TMP/out.log"; then
+  ok "F1. sin GATE_MODE ni config.env el modo es fork-ci, y el log lo dice"
+else
+  no "F1. sin GATE_MODE ni config.env el modo es fork-ci, y el log lo dice" "$(head -3 "$TMP/out.log")"
+fi
+
+# --- F2: la pasada siguiente NO vuelve a despachar (el run ya esta) ---------
+run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 1 ] && grep -q "CI del fork PENDIENTE" "$TMP/out.log"; then
+  ok "F2. la pasada siguiente no vuelve a despachar: el run del sha esta en vuelo (PENDIENTE)"
+else
+  no "F2. la pasada siguiente no vuelve a despachar: el run del sha esta en vuelo (PENDIENTE)" \
+     "dispatch=$(n_calls DISPATCH) $(grep 'PR #16001' "$TMP/out.log" | tail -2)"
+fi
+
+# --- F2b: el run todavia no aparece en la API: la marca frena el segundo ---
+fork_reset; draft_fork
+: > "$TMP/dispatch-no-run"
+run_pipeline; run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 1 ]; then
+  ok "F2b. con el run que la API todavia no lista, la marca local impide el segundo despacho"
+else
+  no "F2b. con el run que la API todavia no lista, la marca local impide el segundo despacho" \
+     "dispatch=$(n_calls DISPATCH)"
+fi
+
+# --- F3: el run del sha termino en success -> ready ------------------------
+fork_reset; draft_fork
+fork_set_runs <<EOF
+801|completed|success|$SHAF|feat/x|2026-11-21T10:00:00Z
+EOF
+run_pipeline
+if grep -q "^READY:16001" "$TMP/calls.log" && grep -q "CI del fork VERDE" "$TMP/out.log" \
+   && [ "$(n_calls DISPATCH)" -eq 0 ] && [ "$(n_calls JOBS)" -eq 0 ]; then
+  ok "F3. el CI del fork VERDE en el head (y el de GitHub verde) pasa el draft a ready, sin leer jobs"
+else
+  no "F3. el CI del fork VERDE en el head (y el de GitHub verde) pasa el draft a ready, sin leer jobs" \
+     "$(cat "$TMP/calls.log"; grep 'PR #16001' "$TMP/out.log")"
+fi
+
+# --- F4: el run termino en failure -> sigue en draft, dice que job falla ---
+fork_reset; draft_fork
+fork_set_runs <<EOF
+802|completed|failure|$SHAF|feat/x|2026-11-21T10:00:00Z
+EOF
+fork_set_jobs 802 '[{"id":1,"name":"Native Linux tests","status":"completed","conclusion":"failure","started_at":"2026-11-21T10:01:00Z","completed_at":"2026-11-21T11:00:00Z"},{"id":2,"name":"Native Linux Clippy","status":"completed","conclusion":"success","started_at":"2026-11-21T10:01:00Z","completed_at":"2026-11-21T10:30:00Z"}]'
+run_pipeline; run_pipeline
+if ! grep -q "^READY:16001" "$TMP/calls.log" && grep -q "CI del fork ROJO" "$TMP/out.log" \
+   && grep -q "fallan: Native Linux tests" "$TMP/out.log" && [ "$(n_calls DISPATCH)" -eq 0 ]; then
+  ok "F4. el CI del fork ROJO deja el draft en draft y el log nombra el job que falla"
+else
+  no "F4. el CI del fork ROJO deja el draft en draft y el log nombra el job que falla" \
+     "$(grep 'PR #16001' "$TMP/out.log" | tail -2)"
+fi
+if [ "$(n_calls JOBS)" -eq 1 ]; then
+  ok "F4. los jobs de un run terminado se leen UNA vez (la segunda pasada usa la cache)"
+else
+  no "F4. los jobs de un run terminado se leen UNA vez (la segunda pasada usa la cache)" "jobs=$(n_calls JOBS)"
+fi
+
+# --- F5: el tope de runs en vuelo --------------------------------------------
+fork_reset; draft_fork
+fork_set_runs <<EOF
+811|in_progress||$SHAV|feat/y|2026-11-21T10:00:00Z
+812|queued||$SHAV|feat/z|2026-11-21T10:05:00Z
+EOF
+run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 0 ] && grep -q "FORK_CI_MAX_INFLIGHT=2" "$TMP/out.log"; then
+  ok "F5. con dos runs del fork en vuelo (el tope) no se despacha otro"
+else
+  no "F5. con dos runs del fork en vuelo (el tope) no se despacha otro" \
+     "dispatch=$(n_calls DISPATCH) $(grep 'PR #16001' "$TMP/out.log" | tail -1)"
+fi
+
+# --- F6: el run viejo de la MISMA rama se cancela y no ocupa el tope -------
+fork_reset; draft_fork
+fork_set_runs <<EOF
+821|in_progress||$SHAV|feat/x|2026-11-21T10:00:00Z
+822|in_progress||$SHAV|feat/z|2026-11-21T10:05:00Z
+EOF
+run_pipeline
+if grep -q "^CANCEL:821" "$TMP/calls.log" && ! grep -q "^CANCEL:822" "$TMP/calls.log" \
+   && [ "$(n_calls DISPATCH)" -eq 1 ] \
+   && [ "$(grep -n '^CANCEL:821' "$TMP/calls.log" | cut -d: -f1)" -lt "$(grep -n '^DISPATCH' "$TMP/calls.log" | cut -d: -f1)" ]; then
+  ok "F6. el run en vuelo de la misma rama con otro sha se cancela antes del despacho (y no cuenta en el tope)"
+else
+  no "F6. el run en vuelo de la misma rama con otro sha se cancela antes del despacho" "$(cat "$TMP/calls.log")"
+fi
+
+# --- F7: la rama del fork no esta en el sha del PR -> no se despacha -------
+fork_reset "$SHAV"; draft_fork
+run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 0 ] && grep -q "RAMA_MOVIDA" "$TMP/out.log"; then
+  ok "F7. si la rama del fork esta en otro sha no se despacha (el run probaria otro commit)"
+else
+  no "F7. si la rama del fork esta en otro sha no se despacha" "$(grep 'PR #16001' "$TMP/out.log" | tail -1)"
+fi
+
+# --- F8: un PR que el agente ya paso a ready no se toca -------------------
+fork_reset
+set_pulls <<EOF
+16002|Ya listo|0|$SHAF|Arregla\n\nFixes #16101\n\nChanges a default: no\n|[]
+EOF
+run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 0 ] && [ "$(n_calls READY)" -eq 0 ] && [ "$(n_calls EDIT)" -eq 0 ]; then
+  ok "F8. un PR que ya esta listo no se despacha, no se vuelve a draft y no se edita"
+else
+  no "F8. un PR que ya esta listo no se despacha, no se vuelve a draft y no se edita" "$(cat "$TMP/calls.log")"
+fi
+
+# --- F9: los runs del fork no se pueden leer -> UNKNOWN, sin despachar ----
+fork_reset; draft_fork
+: > "$TMP/forkci-fail"
+run_pipeline; rc=$?
+if [ "$rc" -eq 6 ] && [ "$(n_calls DISPATCH)" -eq 0 ]; then
+  ok "F9. si los runs del fork no se pueden leer: rc=6 (UNKNOWN) y no se despacha a ciegas"
+else
+  no "F9. si los runs del fork no se pueden leer: rc=6 (UNKNOWN) y no se despacha a ciegas" \
+     "rc=$rc dispatch=$(n_calls DISPATCH)"
+fi
+
+# --- F10: GitHub rechaza el despacho -> rc=1 una vez, despues se espera ---
+fork_reset; draft_fork
+: > "$TMP/dispatch-fail"
+run_pipeline; rc1=$?
+run_pipeline; rc2=$?
+if [ "$rc1" -eq 1 ] && grep -q "Actions has been disabled" "$TMP/out.log" \
+   && [ "$(n_calls DISPATCH)" -eq 1 ] && [ "$rc2" -eq 0 ] && grep -q "RECHAZADO" "$TMP/out.log"; then
+  ok "F10. un despacho rechazado sale rc=1 una vez; la pasada siguiente no reintenta (RECHAZADO, rc=0)"
+else
+  no "F10. un despacho rechazado sale rc=1 una vez; la pasada siguiente no reintenta" \
+     "rc1=$rc1 rc2=$rc2 dispatch=$(n_calls DISPATCH) $(grep 'PR #16001' "$TMP/out.log" | tail -1)"
+fi
+if [ ! -f "$ORCH_DIR/gates/fork-ci/$SHAF.despacho" ]; then
+  ok "F10. el despacho que fallo no deja la marca de despachado"
+else
+  no "F10. el despacho que fallo no deja la marca de despachado"
+fi
+
+# --- F11: el agente sigue trabajando en el slot -> no se despacha ---------
+fork_reset; draft_fork
+mkdir -p "$WORKTREES_DIR/issue-16100"
+printf '#!/usr/bin/env bash\necho "busy: pid 1 trabaja en $1"\nexit 0\n' > "$ORCH_DIR/bin/slot-busy.sh"
+run_pipeline
+rm -f "$ORCH_DIR/bin/slot-busy.sh"
+if [ "$(n_calls DISPATCH)" -eq 0 ] && grep -q "el agente sigue trabajando" "$TMP/out.log"; then
+  ok "F11. mientras el agente trabaja en el slot no se despacha el CI del fork"
+else
+  no "F11. mientras el agente trabaja en el slot no se despacha el CI del fork" "$(grep 'PR #16001' "$TMP/out.log" | tail -1)"
+fi
+
+# --- F12: GATE_MODE=local en config.env: el camino viejo; el entorno gana --
+fork_reset; draft_fork
+printf 'GATE_MODE=local\n' > "$LOOP_DIR/config.env"
+rm -f "$ORCH_DIR/gates/queue.txt"
+MAX_INFLIGHT=5 run_pipeline
+if grep -q "^16100 $SHAF" "$ORCH_DIR/gates/queue.txt" 2>/dev/null && [ "$(n_calls DISPATCH)" -eq 0 ]; then
+  ok "F12. GATE_MODE=local en config.env encola el gate local y no despacha el fork"
+else
+  no "F12. GATE_MODE=local en config.env encola el gate local y no despacha el fork" \
+     "$(cat "$ORCH_DIR/gates/queue.txt" 2>&1) $(grep -E 'modo|PR #16001' "$TMP/out.log")"
+fi
+rm -f "$ORCH_DIR/gates/queue.txt"
+: > "$TMP/calls.log"
+GATE_MODE=fork-ci run_pipeline
+if [ "$(n_calls DISPATCH)" -eq 1 ] && [ ! -s "$ORCH_DIR/gates/queue.txt" ]; then
+  ok "F12. GATE_MODE=fork-ci del entorno gana a config.env"
+else
+  no "F12. GATE_MODE=fork-ci del entorno gana a config.env" "dispatch=$(n_calls DISPATCH)"
+fi
+rm -f "$LOOP_DIR/config.env"
+rm -rf "$WORKTREES_DIR/issue-16100"
+
+# --- F13: un ROJO local no es un verde; en fork-ci el fork verde manda ----
+mkdir -p "$LOOP_DIR/gates/slot-rojo"
+cat > "$LOOP_DIR/gates/slot-rojo/scope.verdict" <<EOF
+GATE_STATUS=finished
+VERDICT=ROJO-SCOPE
+NEW_FAILURES=0
+CHECKS=fmt:fail
+SHA=$SHAF
+EOF
+fork_reset; draft_fork
+GATE_MODE=local run_pipeline
+if ! grep -q "^READY:16001" "$TMP/calls.log"; then
+  ok "F13. en modo local un ROJO-SCOPE con NEW_FAILURES=0 (fmt:fail) NO pasa el PR a ready"
+else
+  no "F13. en modo local un ROJO-SCOPE con NEW_FAILURES=0 (fmt:fail) NO pasa el PR a ready"
+fi
+fork_reset; draft_fork
+fork_set_runs <<EOF
+831|completed|success|$SHAF|feat/x|2026-11-21T10:00:00Z
+EOF
+run_pipeline
+if grep -q "^READY:16001" "$TMP/calls.log"; then
+  ok "F13. en modo fork-ci el CI del fork verde manda sobre un ROJO local viejo"
+else
+  no "F13. en modo fork-ci el CI del fork verde manda sobre un ROJO local viejo" "$(grep 'PR #16001' "$TMP/out.log")"
+fi
+rm -rf "$LOOP_DIR/gates/slot-rojo"
+if grep -q "CI del fork (drafts sin gate local verde): 1 verde" "$TMP/out.log"; then
+  ok "F13. el resumen cuenta el estado del CI del fork de los drafts"
+else
+  no "F13. el resumen cuenta el estado del CI del fork de los drafts" "$(grep 'CI del fork (' "$TMP/out.log")"
+fi
+unset WORKTREES_DIR
 
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"
 [ "$fail" -eq 0 ] || exit 1

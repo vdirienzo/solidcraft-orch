@@ -11,13 +11,18 @@ QUE HACE ESTE SCRIPT, en cada corrida:
   1. Para cada PR nuestro que este en DRAFT: le agrega la referencia al issue si falta.
      La linea "Changes a default:" NO se inventa nunca: si falta, el PR se queda en draft y
      queda logueado que hay que escribirla a mano (un "no" automatico puede ser falso).
-  2. Para cada PR en draft cuyo gate NO tenga veredicto todavia: lo ENCOLA (gate-queue.sh).
-  3. Para cada PR en draft cuyo gate local ya dio verde Y cuyo CI de GitHub esta VERDE en
-     su HEAD SHA: lo pasa a READY y deja el comentario con el veredicto, el SHA y el conteo
-     de fallos preexistentes.
-  4. NO encola mas trabajo del que la caja aguanta (MAX_INFLIGHT): la cola de gates va a 2
-     compilaciones por vez, y un backlog grande es exactamente lo que hace vencer los claims.
+  2. Para cada PR en draft cuyo gate NO tenga veredicto todavia: en modo fork-ci (el
+     default desde el 2026-11-21) DESPACHA ci.yml en el fork sobre el head (una vez por
+     sha: ver "EL GATE ES EL CI DEL FORK"); en modo local (GATE_MODE=local) lo ENCOLA
+     en gate-queue.sh, como antes.
+  3. Para cada PR en draft cuyo gate dio verde (el CI del fork en el head, o un veredicto
+     local verde del head) Y cuyo CI de GitHub esta VERDE en su HEAD SHA: lo pasa a READY.
+     Sin comentarios: el veredicto queda en el log.
+  4. NO pide mas trabajo del que hay donde correrlo: MAX_INFLIGHT gates locales en la
+     cola, FORK_CI_MAX_INFLIGHT runs del fork en vuelo.
   5. Al final, un resumen con cuantos PRs tienen el CI de GitHub verde, pendiente y en rojo.
+  Un PR que ya esta listo (el agente lo paso a ready) no se toca: ni se despacha ni
+  vuelve a draft.
 
 POR QUE EL CI DE GITHUB SE MIRA ADEMAS DEL GATE LOCAL (2026-11-07):
   El gate local (el nuestro) y el CI de GitHub (el de upstream) son dos cosas distintas. El
@@ -249,13 +254,35 @@ def evaluar_check_runs(check_runs):
     if not check_runs:
         return PENDIENTE, "el CI todavia no arranco (sin check-runs en el HEAD SHA)"
 
+    clasificado = clasificar_check_runs(check_runs)
+    if clasificado is None:
+        return PENDIENTE, "el CI todavia no arranco (sin check-runs en el HEAD SHA)"
+    rojos = [f"{nombre} ({motivo})" for nombre, motivo in clasificado[0]]
+    pendientes = [f"{nombre} ({motivo})" for nombre, motivo in clasificado[1]]
+
+    if rojos:
+        return ROJO, "rojo: " + ", ".join(sorted(rojos))
+    if pendientes:
+        return PENDIENTE, "pendiente: " + ", ".join(sorted(pendientes))
+    return VERDE, "verde: todos los checks del HEAD SHA estan en verde"
+
+
+def clasificar_check_runs(check_runs):
+    """([(nombre, motivo) rojos], [(nombre, motivo) pendientes]) o None si no hay ninguno.
+
+    LA MISMA REGLA DE evaluar_check_runs, CON LOS NOMBRES (2026-11-21): el CI del
+    fork (los jobs de un run de ci.yml) se juzga con la regla de "gana el mas
+    reciente de cada nombre", y su linea de estado tiene que decir QUE jobs
+    fallan, no solo que algo fallo. Una sola regla para los dos: si cada uno
+    tuviera la suya, el dia que se arregle una se rompe la otra.
+    """
     grupos = {}
-    for run in check_runs:
+    for run in check_runs or []:
         if not isinstance(run, dict):
             continue
         grupos.setdefault(run.get("name") or "?", []).append(run)
     if not grupos:
-        return PENDIENTE, "el CI todavia no arranco (sin check-runs en el HEAD SHA)"
+        return None
 
     rojos = []
     pendientes = []
@@ -265,18 +292,18 @@ def evaluar_check_runs(check_runs):
         # Un run en vuelo (queued/in_progress) MAS NUEVO que el ultimo completado es el
         # CI que esta corriendo ahora: manda el, y todavia no hay veredicto.
         if _en_vuelo(runs, vigente) is not None:
-            pendientes.append(f"{nombre} (corriendo)")
+            pendientes.append((nombre, "corriendo"))
             continue
 
         if vigente is None:
-            pendientes.append(f"{nombre} (sin veredicto)")
+            pendientes.append((nombre, "sin veredicto"))
             continue
 
         conclusion = _conclusion(vigente)
         if conclusion in CHECK_OK:
             continue
         if conclusion in CHECK_ROJOS:
-            rojos.append(f"{nombre} ({conclusion})")
+            rojos.append((nombre, conclusion))
             continue
         if conclusion in ("cancelled", "stale"):
             # Run superseded. Si hay un gemelo en verde creado despues, ese gana (es el run
@@ -286,16 +313,12 @@ def evaluar_check_runs(check_runs):
                          key=_id, default=None)
             if gemelo is not None:
                 continue
-            pendientes.append(f"{nombre} ({conclusion})")
+            pendientes.append((nombre, conclusion))
             continue
         # conclusion desconocida: no se la da por buena
-        pendientes.append(f"{nombre} ({conclusion or 'sin conclusion'})")
+        pendientes.append((nombre, conclusion or "sin conclusion"))
 
-    if rojos:
-        return ROJO, "rojo: " + ", ".join(sorted(rojos))
-    if pendientes:
-        return PENDIENTE, "pendiente: " + ", ".join(sorted(pendientes))
-    return VERDE, "verde: todos los checks del HEAD SHA estan en verde"
+    return rojos, pendientes
 
 
 def check_ci_verde(check_runs):
@@ -338,6 +361,711 @@ def check_ci_verde_sha(sha, repo=REPO):
     if error:
         return False, f"no pude leer los check-runs: {error}"
     return check_ci_verde(runs)
+
+
+# --------------------------------------------------------------------------
+# EL GATE ES EL CI DEL FORK (2026-11-21)
+#
+# POR QUE: el gate local (bin/gate.sh -> gate-quick.sh del loop) dio un ROJO
+# FALSO en el PR #20017 (nextest con --ignore-default-filter y
+# SOLIDCRAFT_REQUIRE_GPU=1, contra un baseline de 18 dias) mientras el
+# "Native Linux tests" de upstream pasaba sobre el MISMO head. Y compila 5-7
+# paquetes durante 30+ minutos y llena los 15 GB de la caja. El CONTRIBUTING
+# de upstream dice como ver el CI completo sin esperar el label: correrlo en
+# el fork, en los runners gratis de GitHub, con las variables CI_RUNNER y
+# CI_RUNNER_WINDOWS del fork y `gh workflow run ci.yml --ref <rama>
+# -f cross_compile=true -R <fork>`. Ese run corre los jobs del merge queue:
+# el juez es el que va a usar el merge, no una receta nuestra.
+#
+# Un push a una rama que no es main NO arranca el CI en el fork (ci.yml solo
+# escucha push a main y develop, y el pull_request corre en upstream): el run
+# hay que DESPACHARLO. El run usa el ci.yml DE LA RAMA y prueba la punta de la
+# rama: por eso se despacha solo si la rama del fork esta en el sha pedido.
+#
+# EL MODO (GATE_MODE): fork-ci (el default) o local (bin/gate.sh, el camino
+# viejo). Se lee del entorno o de $LOOP_DIR/config.env. En los dos modos un
+# veredicto local VERDE del head tambien vale: es la alternativa.
+#
+# cross_compile=true (FORK_CI_CROSS=0 lo apaga): agrega DOS jobs ("Compile
+# WebAssembly" y "Compile RISC-V (manual)") a un run de ~55, en un repo
+# publico (los minutos de los runners estandar no se cobran) y en paralelo
+# al camino critico (los tests nativos y la action matrix, de hasta 3 h con
+# CI_RUNNER). Paga: el wasm es un job que el merge queue exige a todo grupo
+# que toca los crates de abajo de las apps (casi todos nuestros PRs) y que
+# `cargo xtask fast` no corre. El RISC-V viene en el mismo paquete pero el
+# merge queue NO lo corre: se informa y no bloquea (FORK_CI_NO_BLOQUEAN).
+#
+# LA API SE RESPETA: un despacho por sha (la marca local se escribe ANTES del
+# efecto y la lista de runs del sha se mira antes de despachar), la lectura
+# del pipeline es UNA lista de runs por pasada, y los jobs se leen solo de los
+# runs terminados que no son un verde limpio (los de un run terminado no
+# cambian: se guardan en $ORCH_DIR/gates/fork-ci/).
+# --------------------------------------------------------------------------
+GATE_MODES = ("fork-ci", "local")
+GATE_MODE_DEFAULT = "fork-ci"
+
+
+def _entero_env(nombre, default):
+    """Un entero del entorno; un valor que no es un entero no rompe el cron."""
+    try:
+        return int((os.environ.get(nombre) or "").strip() or default)
+    except ValueError:
+        return int(default)
+
+
+FORK_CI_WORKFLOW = os.environ.get("FORK_CI_WORKFLOW", "ci.yml")
+FORK_CI_CROSS = (os.environ.get("FORK_CI_CROSS", "1").strip() != "0")
+# Dos runs a la vez: el plan gratis de GitHub corre 20 jobs a la vez y un run
+# del fork tiene ~55; con mas de dos en vuelo los runs se esperan entre ellos
+# y ninguno termina antes.
+FORK_CI_MAX_INFLIGHT = _entero_env("FORK_CI_MAX_INFLIGHT", 2)
+# Cuanto se espera a que aparezca el run de un despacho antes de darlo por
+# perdido (la API tarda unos segundos en listarlo).
+FORK_CI_GRACE_S = _entero_env("FORK_CI_GRACE_S", 900)
+# Un run en vuelo de la MISMA rama con OTRO sha prueba un commit viejo, y el
+# grupo de concurrencia de ci.yml (ci-<evento>-<ref>, sin cancel-in-progress
+# para un despacho) hace que el run nuevo lo ESPERE: horas. Se cancela.
+FORK_CI_CANCEL_STALE = (os.environ.get("FORK_CI_CANCEL_STALE", "1").strip() != "0")
+# Bajo gates/ (que .gitignore ya deja afuera): ORCH_DIR es este repo en la caja.
+FORK_CI_DIR = f"{ORCH}/gates/fork-ci"
+# Los jobs que el merge queue NO corre: se informan, no bloquean.
+FORK_CI_NO_BLOQUEAN = ("Compile RISC-V (manual)", "Nightly alert")
+NINGUNO = "ninguno"
+DESCONOCIDO = "desconocido"
+RE_SHA_HEX = re.compile(r"^[0-9a-fA-F]{7,40}$")
+RE_RAMA = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+
+
+def valor_config(path, clave):
+    """El valor de CLAVE en un config.env de shell ('' si no esta). Gana la ultima."""
+    valor = ""
+    texto = _leer(path)
+    if not texto:
+        return ""
+    patron = re.compile(r"^\s*(?:export\s+)?" + re.escape(clave) + r"=(.*)$")
+    for linea in texto.splitlines():
+        m = patron.match(linea)
+        if not m:
+            continue
+        v = m.group(1).strip()
+        if v[:1] in ("'", '"'):
+            cierre = v.find(v[0], 1)
+            v = v[1:cierre] if cierre > 0 else v[1:]
+        else:
+            v = re.split(r"\s+#", v, maxsplit=1)[0].strip()
+        valor = v
+    return valor
+
+
+def leer_gate_mode(environ=None, config=None):
+    """(modo, origen): el modo del gate. El entorno gana, despues config.env, despues fork-ci.
+
+    Un valor que no es ninguno de los dos modos NO se adivina: se usa el
+    default y el origen lo dice (el log del cron lo muestra).
+    """
+    env = os.environ if environ is None else environ
+    valor = (env.get("GATE_MODE") or "").strip()
+    origen = "el entorno"
+    if not valor:
+        config = config or f"{LOOP_DIR}/config.env"
+        valor = valor_config(config, "GATE_MODE")
+        origen = config
+    if not valor:
+        return GATE_MODE_DEFAULT, "el default"
+    if valor not in GATE_MODES:
+        return GATE_MODE_DEFAULT, f"el default: GATE_MODE={valor!r} de {origen} no es un modo"
+    return valor, origen
+
+
+def gate_local_verde(v):
+    """True si el veredicto LOCAL (verdict_for) es un verde.
+
+    Un VERDICT que empieza con ROJO o que es SKIP NUNCA es verde (2026-11-21):
+    antes bastaba GATE_STATUS=finished con NEW_FAILURES vacio o 0, y un
+    ROJO-SCOPE por fmt:fail (sin tests rotos, NEW_FAILURES=0) contaba como
+    verde. Solo un veredicto sin VERDICT (el formato viejo) cae en esa regla.
+    """
+    if not v:
+        return False
+    veredicto = (v.get("verdict") or "").strip().upper()
+    if veredicto.startswith("VERDE"):
+        return True
+    if veredicto:
+        return False
+    return v.get("status") == "finished" and (v.get("new_failures") or "") == "0"
+
+
+def _api_json(ruta, paginar=False, timeout=120, metodo=None):
+    """(datos, error) de 'gh api RUTA'. paginar: --paginate --slurp (una lista de paginas)."""
+    args = ["api", ruta]
+    if metodo:
+        args += ["-X", metodo]
+    if paginar:
+        args += ["--paginate", "--slurp"]
+    rc, raw, err = gh_run(*args, timeout=timeout)
+    if rc != 0:
+        return None, f"'gh api {ruta}' fallo: rc={rc}: {recortar(err)}"
+    if metodo and not (raw or "").strip():
+        return {}, None
+    try:
+        return json.loads(raw or "null"), None
+    except json.JSONDecodeError as exc:
+        return None, f"'gh api {ruta}' no respondio JSON: {exc}"
+
+
+_CAMPOS_RUN = ("id", "status", "conclusion", "html_url", "head_sha", "head_branch",
+               "event", "created_at", "updated_at", "run_attempt")
+_CAMPOS_JOB = ("id", "name", "status", "conclusion", "started_at", "completed_at",
+               "html_url")
+
+
+def fork_ci_runs(sha=None, repo=FORK):
+    """(runs, error): los runs DESPACHADOS (workflow_dispatch) de ci.yml en el fork.
+
+    Con un sha de 40 se le pide a la API solo ese sha; sin sha (o con uno
+    corto, que la API no acepta) son los 100 mas nuevos y el filtro se hace
+    aca. El filtro del evento tambien se vuelve a aplicar aca: el de la API no
+    es el de la regla.
+    """
+    ruta = (f"repos/{repo}/actions/workflows/{FORK_CI_WORKFLOW}/runs"
+            f"?event=workflow_dispatch&per_page=100")
+    if sha and len(sha) == 40 and RE_SHA_HEX.match(sha):
+        ruta += f"&head_sha={sha}"
+    data, error = _api_json(ruta)
+    if error:
+        return None, error
+    if not isinstance(data, dict) or not isinstance(data.get("workflow_runs"), list):
+        return None, f"'gh api {ruta}' no trajo workflow_runs"
+    runs = []
+    for r in data["workflow_runs"]:
+        if not isinstance(r, dict):
+            continue
+        if (r.get("event") or "workflow_dispatch") != "workflow_dispatch":
+            continue
+        if sha and not same_sha(r.get("head_sha") or "", sha):
+            continue
+        runs.append({k: r.get(k) for k in _CAMPOS_RUN})
+    return runs, None
+
+
+def fork_ci_jobs(run_id, repo=FORK):
+    """(jobs, error): los jobs del ULTIMO intento de un run del fork (filter=latest)."""
+    try:
+        rid = int(run_id)
+    except (TypeError, ValueError):
+        return None, f"el id de run {run_id!r} no es un numero"
+    ruta = f"repos/{repo}/actions/runs/{rid}/jobs?filter=latest&per_page=100"
+    data, error = _api_json(ruta, paginar=True, timeout=180)
+    if error:
+        return None, error
+    jobs = []
+    for pagina in data if isinstance(data, list) else [data]:
+        if not isinstance(pagina, dict):
+            continue
+        for j in pagina.get("jobs") or []:
+            if isinstance(j, dict):
+                jobs.append({k: j.get(k) for k in _CAMPOS_JOB})
+    return jobs, None
+
+
+def _jobs_cacheados(run, repo=FORK):
+    """(jobs, error) de un run TERMINADO, con su cache en $ORCH_DIR/gates/fork-ci/.
+
+    Los jobs de un run terminado no cambian hasta que alguien lo re-corre, y
+    re-correrlo cambia run_attempt y updated_at: esa es la clave.
+    """
+    clave = f"{_id(run)}-{run.get('run_attempt') or 1}-{run.get('updated_at') or ''}"
+    path = f"{FORK_CI_DIR}/jobs-{_id(run)}.json"
+    txt = _leer(path) if os.path.isfile(path) else None
+    if txt:
+        try:
+            guardado = json.loads(txt)
+            if guardado.get("clave") == clave and isinstance(guardado.get("jobs"), list):
+                return guardado["jobs"], None
+        except (ValueError, AttributeError):
+            pass
+    jobs, error = fork_ci_jobs(_id(run), repo)
+    if error is None and _status(run) == "completed":
+        try:
+            os.makedirs(FORK_CI_DIR, exist_ok=True)
+            tmp = f"{path}.tmp.{os.getpid()}"
+            with open(tmp, "w") as fh:
+                json.dump({"clave": clave, "jobs": jobs}, fh)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return jobs, error
+
+
+def _nuevo(runs):
+    """El run mas nuevo (por created_at, y a igualdad el id mas alto)."""
+    return max(runs, key=lambda r: (r.get("created_at") or "", _id(r)))
+
+
+def evaluar_fork_ci(runs, jobs_por_run):
+    """El estado del CI del fork de UN sha. Pura: se testea offline.
+
+    runs: los runs despachados de ese sha. jobs_por_run: {id: [jobs]} de los
+    runs cuyos jobs se leyeron. Devuelve un dict con estado (VERDE, ROJO,
+    PENDIENTE o NINGUNO), detalle, run (la url del run mas nuevo), fallan (los
+    jobs en rojo) e informativos (los rojos que no bloquean).
+
+    LA REGLA ES LA DE evaluar_check_runs: de cada NOMBRE de job manda el mas
+    reciente, entre TODOS los runs del sha (un re-despacho con --force que
+    pasa le gana al rojo del run anterior). Y con dos guardas propias:
+      - mientras el run mas nuevo corre, a lo sumo PENDIENTE (o ROJO si uno de
+        SUS jobs ya fallo): los jobs con 'needs' todavia no estan en la lista,
+        y un "todos verdes" de los primeros no es el verde del run;
+      - el run terminado manda sobre los jobs: un startup_failure no tiene
+        jobs, y un 'failure' sin un job rojo que lo explique no es un verde.
+    """
+    res = {"estado": NINGUNO, "detalle": "el fork no tiene ningun run de ci.yml despachado "
+           "para este sha", "run": "", "fallan": [], "informativos": []}
+    runs = [r for r in (runs or []) if isinstance(r, dict)]
+    if not runs:
+        return res
+    jobs_por_run = jobs_por_run or {}
+    nuevo = _nuevo(runs)
+    res["run"] = nuevo.get("html_url") or ""
+
+    def separar(jobs):
+        bloquean = [j for j in jobs if (j.get("name") or "") not in FORK_CI_NO_BLOQUEAN]
+        info = [j for j in jobs if (j.get("name") or "") in FORK_CI_NO_BLOQUEAN]
+        return bloquean, info
+
+    if _status(nuevo) != "completed":
+        jobs = jobs_por_run.get(_id(nuevo)) or []
+        bloquean, _ = separar(jobs)
+        clasificado = clasificar_check_runs(bloquean)
+        if clasificado and clasificado[0]:
+            res["estado"] = ROJO
+            res["fallan"] = sorted(n for n, _ in clasificado[0])
+            res["detalle"] = (f"ya fallaron {len(res['fallan'])} job(s) y el run sigue "
+                              f"({_status(nuevo)})")
+            return res
+        terminados = sum(1 for j in jobs if _status(j) == "completed")
+        res["estado"] = PENDIENTE
+        res["detalle"] = (f"el run sigue ({_status(nuevo) or 'sin estado'}"
+                          + (f"; {terminados} de {len(jobs)} jobs terminados" if jobs else "")
+                          + ")")
+        return res
+
+    concl = _conclusion(nuevo)
+    if len(runs) == 1 and _id(nuevo) not in jobs_por_run:
+        # El atajo: un solo run, terminado en success, no necesita sus jobs.
+        if concl == "success":
+            res["estado"] = VERDE
+            res["detalle"] = "el run termino en success"
+            return res
+    todos = []
+    for r in runs:
+        todos.extend(jobs_por_run.get(_id(r)) or [])
+    bloquean, info = separar(todos)
+    clasificado_info = clasificar_check_runs(info)
+    if clasificado_info:
+        res["informativos"] = sorted(n for n, _ in clasificado_info[0])
+    clasificado = clasificar_check_runs(bloquean)
+    if clasificado is None:
+        if concl in CHECK_ROJOS:
+            res["estado"] = ROJO
+            res["fallan"] = [f"(el run: {concl})"]
+            res["detalle"] = f"el run termino en {concl} sin jobs"
+        else:
+            res["estado"] = PENDIENTE
+            res["detalle"] = (f"el run termino en {concl or 'sin conclusion'} sin jobs: "
+                              f"no hay veredicto (fork-ci.sh --force lo despacha de nuevo)")
+        return res
+    rojos, pendientes = clasificado
+    if rojos:
+        res["estado"] = ROJO
+        res["fallan"] = sorted(n for n, _ in rojos)
+        res["detalle"] = f"{len(rojos)} job(s) en rojo"
+        return res
+    if pendientes:
+        res["estado"] = PENDIENTE
+        res["detalle"] = ("sin veredicto: " + ", ".join(sorted(f"{n} ({m})" for n, m in pendientes))
+                          + (" (fork-ci.sh --force lo despacha de nuevo)"
+                             if concl == "cancelled" else ""))
+        return res
+    if concl in CHECK_OK or (concl == "failure" and res["informativos"]):
+        res["estado"] = VERDE
+        res["detalle"] = (f"{len(bloquean)} jobs en verde"
+                          + (f" (no bloquean: {', '.join(res['informativos'])})"
+                             if res["informativos"] else ""))
+        return res
+    if concl in CHECK_ROJOS:
+        res["estado"] = ROJO
+        res["fallan"] = [f"(el run: {concl})"]
+        res["detalle"] = f"el run termino en {concl} sin un job rojo que lo explique"
+        return res
+    res["estado"] = PENDIENTE
+    res["detalle"] = f"el run termino en {concl or 'sin conclusion'}: no es un veredicto"
+    return res
+
+
+def _marca_despacho(sha):
+    return f"{FORK_CI_DIR}/{sha}.despacho"
+
+
+def _edad_marca(sha, path=None):
+    """Los segundos desde el despacho de ese sha, o None si no hay marca."""
+    try:
+        return max(0, int(time.time() - os.path.getmtime(path or _marca_despacho(sha))))
+    except OSError:
+        return None
+
+
+# UN DESPACHO RECHAZADO NO SE REINTENTA CADA 5 MINUTOS (2026-11-21).
+#
+# El primer despacho real (rama fix-19690) volvio con "HTTP 422: Actions has
+# been disabled for this repository" aunque actions/permissions decia
+# enabled=true: es una condicion de GitHub que no cambia sola. Sin freno, el
+# cron reintentaba cada pasada y salia rojo cada cinco minutos, el mismo ruido
+# que escondio los avisos de verdad el 20-11-2026 (108 fallos de la cola). El
+# rechazo se guarda; durante FORK_CI_ERROR_BACKOFF_S el sha no se despacha (se
+# dice en el log en cada pasada) y el exit code cuenta solo el rechazo NUEVO.
+FORK_CI_ERROR_BACKOFF_S = _entero_env("FORK_CI_ERROR_BACKOFF_S", 3600)
+
+
+def _marca_rechazo(sha):
+    return f"{FORK_CI_DIR}/{sha}.rechazo"
+
+
+def rechazo_reciente(sha):
+    """(edad, motivo) del ultimo despacho rechazado de ese sha si es reciente; si no, None."""
+    path = _marca_rechazo(sha)
+    edad = _edad_marca(sha, path)
+    if edad is None or edad >= FORK_CI_ERROR_BACKOFF_S:
+        return None
+    return edad, recortar(_leer(path) or "", 240)
+
+
+def _escribir_rechazo(sha, motivo):
+    try:
+        os.makedirs(FORK_CI_DIR, exist_ok=True)
+        tmp = f"{_marca_rechazo(sha)}.tmp.{os.getpid()}"
+        with open(tmp, "w") as fh:
+            fh.write(motivo + "\n")
+        os.replace(tmp, _marca_rechazo(sha))
+    except OSError:
+        pass
+
+
+def estado_fork_ci(sha, lote=None, con_jobs_en_curso=True, repo=FORK):
+    """El estado del CI del fork del sha (el dict de evaluar_fork_ci, con 'sha').
+
+    lote: la lista de runs del fork ya leida (el pipeline la lee UNA vez por
+    pasada); sin lote se le pregunta a la API por este sha. Un error de la
+    API es DESCONOCIDO, nunca un NINGUNO: un NINGUNO despacha, y despachar a
+    ciegas es despachar dos veces.
+    """
+    if lote is None:
+        runs, error = fork_ci_runs(sha, repo)
+        if error:
+            return {"estado": DESCONOCIDO, "detalle": error, "run": "", "fallan": [],
+                    "informativos": [], "sha": sha}
+    else:
+        runs = [r for r in lote if same_sha(r.get("head_sha") or "", sha)]
+    jobs_por_run = {}
+    if runs:
+        nuevo = _nuevo(runs)
+        if _status(nuevo) != "completed":
+            if con_jobs_en_curso:
+                jobs, error = fork_ci_jobs(_id(nuevo), repo)
+                if error is None:
+                    jobs_por_run[_id(nuevo)] = jobs
+        elif not (len(runs) == 1 and _conclusion(nuevo) == "success"):
+            for r in runs:
+                jobs, error = _jobs_cacheados(r, repo)
+                if error:
+                    return {"estado": DESCONOCIDO, "detalle": error,
+                            "run": nuevo.get("html_url") or "", "fallan": [],
+                            "informativos": [], "sha": sha}
+                jobs_por_run[_id(r)] = jobs
+    res = evaluar_fork_ci(runs, jobs_por_run)
+    res["sha"] = sha
+    if res["estado"] == NINGUNO:
+        edad = _edad_marca(sha)
+        rechazo = rechazo_reciente(sha)
+        if edad is not None and edad < FORK_CI_GRACE_S:
+            res["estado"] = PENDIENTE
+            res["detalle"] = f"despachado hace {edad}s: el run todavia no aparece en la API"
+        elif rechazo is not None:
+            res["detalle"] = (f"no hay run: GitHub rechazo el despacho hace {rechazo[0]}s "
+                              f"({rechazo[1]})")
+    return res
+
+
+def fork_rama_head(rama, repo=FORK):
+    """(sha, error, no_existe): la punta de la rama en el fork."""
+    ruta = f"repos/{repo}/git/ref/heads/{rama}"
+    rc, raw, err = gh_run("api", ruta)
+    if rc != 0:
+        no_existe = bool(re.search(r"(?i)not found|HTTP 404", err or ""))
+        return "", f"'gh api {ruta}' fallo: rc={rc}: {recortar(err)}", no_existe
+    try:
+        data = json.loads(raw or "null")
+    except json.JSONDecodeError as exc:
+        return "", f"'gh api {ruta}' no respondio JSON: {exc}", False
+    sha = ((data or {}).get("object") or {}).get("sha") if isinstance(data, dict) else ""
+    if not sha:
+        # Con un prefijo la API devuelve una LISTA de refs: no es esta rama.
+        return "", f"la rama {rama} no esta en el fork", True
+    return sha, None, False
+
+
+def _tomar_marca(sha):
+    """True si esta pasada se quedo con el despacho de ese sha (O_EXCL: uno solo gana)."""
+    try:
+        os.makedirs(FORK_CI_DIR, exist_ok=True)
+    except OSError:
+        return False
+    path = _marca_despacho(sha)
+    edad = _edad_marca(sha)
+    if edad is not None and edad >= FORK_CI_GRACE_S:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    with os.fdopen(fd, "w") as fh:
+        fh.write(f"sha={sha} at={time.strftime('%Y-%m-%dT%H:%M:%S')} pid={os.getpid()}\n")
+    return True
+
+
+# Los resultados de un despacho y su codigo de salida (bin/fork-ci.sh).
+DESPACHO_RC = {"DESPACHADO": 0, "YA_HAY_RUN": 0, "ESPERANDO_RUN": 0, "ERROR": 1,
+               "RECHAZADO": 1,
+               "RAMA_MOVIDA": 4, "RAMA_NO_EXISTE": 4, "OCUPADO": 5, "DESCONOCIDO": 6,
+               "USO": 64}
+
+
+def despachar_fork_ci(rama, sha, forzar=False, cruzado=None, esperar_url=False,
+                      repo=FORK):
+    """Despacha ci.yml en el fork para la punta de RAMA, que tiene que ser SHA.
+
+    Devuelve un dict: accion (una clave de DESPACHO_RC), detalle, run, sha.
+    Es idempotente por sha: un sha que ya tiene un run (en vuelo o
+    terminado) no se vuelve a despachar sin forzar, y la marca local se
+    escribe ANTES del despacho (el run tarda en aparecer en la API).
+    """
+    cruzado = FORK_CI_CROSS if cruzado is None else cruzado
+    out = {"accion": "USO", "detalle": "", "run": "", "sha": sha or "", "rama": rama or ""}
+    if not rama or not RE_RAMA.match(rama) or ".." in rama or rama.startswith("-"):
+        out["detalle"] = f"la rama {rama!r} no es un nombre de rama"
+        return out
+    if not sha or not RE_SHA_HEX.match(sha):
+        out["detalle"] = f"el sha {sha!r} no es un sha"
+        return out
+    rechazo = None if forzar else rechazo_reciente(sha)
+    if rechazo is not None:
+        out["accion"] = "RECHAZADO"
+        out["detalle"] = (f"GitHub rechazo el despacho hace {rechazo[0]}s ({rechazo[1]}); "
+                          f"se reintenta pasados {FORK_CI_ERROR_BACKOFF_S}s o con --force")
+        return out
+    head, error, no_existe = fork_rama_head(rama, repo)
+    if error:
+        out["accion"] = "RAMA_NO_EXISTE" if no_existe else "DESCONOCIDO"
+        out["detalle"] = error
+        return out
+    if not same_sha(head, sha):
+        out["accion"] = "RAMA_MOVIDA"
+        out["detalle"] = (f"la rama {rama} del fork esta en {head[:12]}, no en {sha[:12]}: "
+                          f"el run probaria otro commit")
+        return out
+    sha = head
+    out["sha"] = sha
+    runs, error = fork_ci_runs(sha, repo)
+    if error:
+        out["accion"], out["detalle"] = "DESCONOCIDO", error
+        return out
+    if runs and not forzar:
+        nuevo = _nuevo(runs)
+        out["accion"] = "YA_HAY_RUN"
+        out["run"] = nuevo.get("html_url") or ""
+        out["detalle"] = (f"el sha ya tiene {len(runs)} run(s); el mas nuevo esta "
+                          f"{_status(nuevo)} {_conclusion(nuevo)}".rstrip())
+        return out
+    edad = _edad_marca(sha)
+    if edad is not None and edad < FORK_CI_GRACE_S and not forzar:
+        out["accion"] = "ESPERANDO_RUN"
+        out["detalle"] = f"despachado hace {edad}s: el run todavia no aparece en la API"
+        return out
+    lote, error = fork_ci_runs(None, repo)
+    if error:
+        out["accion"], out["detalle"] = "DESCONOCIDO", error
+        return out
+    en_vuelo = [r for r in lote if _status(r) != "completed"]
+    cancelados = set()
+    if FORK_CI_CANCEL_STALE:
+        for r in en_vuelo:
+            if (r.get("head_branch") or "") == rama and not same_sha(r.get("head_sha") or "", sha):
+                _, err_c = _api_json(f"repos/{repo}/actions/runs/{_id(r)}/cancel", metodo="POST")
+                if err_c is None:
+                    cancelados.add(_id(r))
+                    log(f"  fork-ci: cancelado el run {_id(r)} de {rama} "
+                        f"({(r.get('head_sha') or '')[:12]}): su commit ya no es la punta")
+    otros = [r for r in en_vuelo if _id(r) not in cancelados]
+    if len(otros) >= FORK_CI_MAX_INFLIGHT and not forzar:
+        out["accion"] = "OCUPADO"
+        out["detalle"] = (f"ya hay {len(otros)} run(s) del fork en vuelo (tope "
+                          f"FORK_CI_MAX_INFLIGHT={FORK_CI_MAX_INFLIGHT}): se despacha despues")
+        return out
+    if forzar:
+        try:
+            os.remove(_marca_despacho(sha))
+        except OSError:
+            pass
+    if not _tomar_marca(sha):
+        out["accion"] = "ESPERANDO_RUN"
+        out["detalle"] = "otro proceso acaba de despachar este sha"
+        return out
+    args = ["workflow", "run", FORK_CI_WORKFLOW, "--ref", rama, "-R", repo]
+    if cruzado:
+        args += ["-f", "cross_compile=true"]
+    rc, salida, err = gh_run(*args, timeout=120)
+    if rc != 0:
+        try:
+            os.remove(_marca_despacho(sha))
+        except OSError:
+            pass
+        out["accion"] = "ERROR"
+        out["detalle"] = f"'gh {' '.join(args)}' fallo: rc={rc}: {recortar(err)}"
+        _escribir_rechazo(sha, out["detalle"])
+        return out
+    try:
+        os.remove(_marca_rechazo(sha))
+    except OSError:
+        pass
+    out["accion"] = "DESPACHADO"
+    out["detalle"] = (f"ci.yml despachado en {repo} para {rama} "
+                      f"(cross_compile={'true' if cruzado else 'false'})")
+    if esperar_url:
+        # El run tarda unos segundos en aparecer: el CLI espera su url un rato
+        # (FORK_CI_POLL_S entre lecturas; 0 en los tests).
+        for _ in range(6):
+            time.sleep(max(0, _entero_env("FORK_CI_POLL_S", 5)))
+            runs, error = fork_ci_runs(sha, repo)
+            if runs:
+                out["run"] = _nuevo(runs).get("html_url") or ""
+                break
+    return out
+
+
+# Los estados del CI del fork y su codigo de salida (bin/fork-ci.sh --status).
+ESTADO_RC = {VERDE: 0, ROJO: 1, PENDIENTE: 2, NINGUNO: 3, DESCONOCIDO: 6}
+
+
+def linea_fork_ci(res):
+    """La linea de estado: FORKCI=... SHA=... RUN=... FALLAN=... (FALLAN al final:
+    los nombres de los jobs llevan espacios)."""
+    return (f"FORKCI={res['estado'].upper()} SHA={res.get('sha') or ''} "
+            f"RUN={res.get('run') or ''} FALLAN={','.join(res.get('fallan') or [])}")
+
+
+def _pr_del_issue(issue):
+    """(rama, sha, numero, error, ilegible): nuestro PR abierto de ese issue (el de
+    numero mas bajo). ilegible=True: la lista no se pudo leer (no es un 'no hay')."""
+    prs, error = listar_prs()
+    if error:
+        return "", "", None, error, True
+    candidatos = [p for p in prs if issue_of(p.get("title"), p.get("body")) == str(issue)]
+    if not candidatos:
+        return "", "", None, f"no hay un PR abierto nuestro para el issue #{issue}", False
+    pr = min(candidatos, key=lambda p: p.get("number") or 0)
+    return (pr.get("headRefName") or "", pr.get("headRefOid") or "", pr.get("number"),
+            None, False)
+
+
+USO_FORK_CI = """uso: bash bin/fork-ci.sh <issue|rama> [--sha SHA] [--status] [--force] [--no-cross]
+       bash bin/fork-ci.sh --status --sha SHA
+       bash bin/fork-ci.sh --branch RAMA [--sha SHA] [--status]
+  sin --status despacha ci.yml en el fork para la rama (una vez por sha);
+  --status imprime FORKCI=VERDE|ROJO|PENDIENTE|NINGUNO SHA=... RUN=... FALLAN=...
+  salida de --status: 0 VERDE, 1 ROJO, 2 PENDIENTE, 3 NINGUNO, 4 no hay PR/rama, 6 no se pudo leer
+  salida del despacho: 0 despachado o ya tenia run, 1 el despacho fallo (o fallo hace
+  menos de FORK_CI_ERROR_BACKOFF_S: no se reintenta sin --force), 4 la rama no esta
+  en ese sha, 5 tope de runs en vuelo, 6 no se pudo leer, 64 uso"""
+
+
+def fork_ci_cli(argv):
+    """El CLI de bin/fork-ci.sh. Devuelve el codigo de salida."""
+    objetivo = rama = sha = ""
+    estado = forzar = False
+    cruzado = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-h", "--help"):
+            print(USO_FORK_CI)
+            return 0
+        if a == "--status":
+            estado = True
+        elif a == "--force":
+            forzar = True
+        elif a == "--no-cross":
+            cruzado = False
+        elif a in ("--sha", "--branch"):
+            if i + 1 >= len(argv):
+                print(f"fork-ci: {a} necesita un valor\n{USO_FORK_CI}", file=sys.stderr)
+                return 64
+            if a == "--sha":
+                sha = argv[i + 1].strip()
+            else:
+                rama = argv[i + 1].strip()
+            i += 1
+        elif a.startswith("-"):
+            print(f"fork-ci: opcion desconocida {a}\n{USO_FORK_CI}", file=sys.stderr)
+            return 64
+        elif not objetivo:
+            objetivo = a.strip()
+        else:
+            print(f"fork-ci: sobra el argumento {a}\n{USO_FORK_CI}", file=sys.stderr)
+            return 64
+        i += 1
+    if sha and not RE_SHA_HEX.match(sha):
+        print(f"fork-ci: el sha {sha!r} no es un sha", file=sys.stderr)
+        return 64
+    if objetivo and not rama:
+        if objetivo.isdigit():
+            rama, sha_pr, num, error, ilegible = _pr_del_issue(objetivo)
+            if error:
+                print(f"fork-ci: {error}", file=sys.stderr)
+                return 6 if ilegible else 4
+            print(f"fork-ci: el issue #{objetivo} es el PR #{num} (rama {rama})", file=sys.stderr)
+            sha = sha or sha_pr
+        else:
+            rama = objetivo
+    if not rama and not (estado and sha):
+        print(USO_FORK_CI, file=sys.stderr)
+        return 64
+    if rama and (not RE_RAMA.match(rama) or ".." in rama or rama.startswith("-")):
+        print(f"fork-ci: la rama {rama!r} no es un nombre de rama", file=sys.stderr)
+        return 64
+    if not sha:
+        head, error, no_existe = fork_rama_head(rama)
+        if error:
+            print(f"fork-ci: {error}", file=sys.stderr)
+            return 4 if no_existe else 6
+        sha = head
+    if estado:
+        res = estado_fork_ci(sha)
+        print(linea_fork_ci(res), flush=True)
+        print(f"fork-ci: {res['detalle']}", file=sys.stderr)
+        if res.get("informativos"):
+            print(f"fork-ci: en rojo pero no bloquean: {', '.join(res['informativos'])}",
+                  file=sys.stderr)
+        return ESTADO_RC.get(res["estado"], 6)
+    res = despachar_fork_ci(rama, sha, forzar=forzar, cruzado=cruzado, esperar_url=True)
+    print(f"FORKCI_DESPACHO={res['accion']} SHA={res['sha']} RAMA={res['rama']} "
+          f"RUN={res['run']}", flush=True)
+    print(f"fork-ci: {res['detalle']}", file=sys.stderr)
+    return DESPACHO_RC.get(res["accion"], 1)
 
 
 # --------------------------------------------------------------------------
@@ -818,6 +1546,63 @@ def ya_comentado(num, sha):
     return False, "no hay ningun comentario con el marcador"
 
 
+def slot_ocupado(iss):
+    """True si un agente esta trabajando ahora en el worktree del slot (bin/slot-busy.sh).
+
+    POR QUE (2026-11-21): el agente pushea despues de cada commit que compila
+    (prompts/agent-brief.md) y el draft del claim ya trae 'Fixes #N' y
+    'Changes a default: no'. Despachar el CI del fork en cada push de un
+    trabajo a medias son ~55 jobs de horas por commit, que el siguiente push
+    cancela. Mientras el agente trabaja, no se despacha: el run sale con el
+    commit que el agente dejo al terminar. Sin worktree o sin el script no hay
+    nadie trabajando (el slot cerrado tambien se gatea).
+    """
+    wt = os.path.join(WORKTREES_DIR, f"issue-{iss}")
+    script = f"{ORCH}/bin/slot-busy.sh"
+    if not os.path.isdir(wt) or not os.path.isfile(script):
+        return False
+    try:
+        r = subprocess.run(["bash", script, wt], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def despachar_desde_pipeline(pr, num, iss, sha, lote, despachados, problemas, desconocidos):
+    """Despacha el CI del fork de un draft sin run. Devuelve 1 si lo despacho, 0 si no.
+
+    El tope de runs en vuelo se mira con el lote de la pasada (sin otra
+    llamada) y sin contar el run viejo de la misma rama, que el despacho
+    cancela: si contara, el run viejo le cerraria la puerta al nuevo.
+    """
+    rama = pr.get("headRefName") or ""
+    if slot_ocupado(iss):
+        log(f"  PR #{num} (issue #{iss}): el agente sigue trabajando en el slot -> el CI "
+            f"del fork se despacha cuando termine")
+        return 0
+    en_vuelo = [r for r in (lote or []) if _status(r) != "completed"
+                and not (FORK_CI_CANCEL_STALE and (r.get("head_branch") or "") == rama
+                         and not same_sha(r.get("head_sha") or "", sha))]
+    ocupados = len(en_vuelo) + despachados
+    if ocupados >= FORK_CI_MAX_INFLIGHT:
+        log(f"  PR #{num} (issue #{iss}): ya hay {ocupados} run(s) del fork en vuelo (tope "
+            f"FORK_CI_MAX_INFLIGHT={FORK_CI_MAX_INFLIGHT}) -> espero, no despacho mas")
+        return 0
+    res = despachar_fork_ci(rama, sha)
+    acc = res["accion"]
+    log(f"  PR #{num} (issue #{iss}): CI del fork sin run -> {acc}: {res['detalle']}"
+        + (f" {res['run']}" if res.get("run") else ""))
+    if acc == "DESPACHADO":
+        return 1
+    if acc == "ERROR":
+        # El rechazo NUEVO cuenta en el exit code; el que se esta esperando
+        # (RECHAZADO) ya conto y se dice en el log en cada pasada.
+        problemas.append(f"PR #{num}: el despacho del CI del fork fallo: {res['detalle']}")
+    elif acc == "DESCONOCIDO":
+        desconocidos.append(f"PR #{num}: CI del fork: {res['detalle']}")
+    return 0
+
+
 def main():
     prs, error = listar_prs()
     if error is not None:
@@ -838,6 +1623,24 @@ def main():
     # the UNKNOWN of the repo (exit code 6). They do not make the run
     # "something failed"; they make it "nobody knows".
     desconocidos = []
+
+    # EL MODO DEL GATE (2026-11-21): fork-ci (el CI de upstream en el fork) o
+    # local (bin/gate.sh). La lista de runs del fork se lee UNA vez por pasada,
+    # y solo si hay un draft que la necesite.
+    modo, origen_modo = leer_gate_mode()
+    log(f"modo del gate: {modo} (de {origen_modo})")
+    lote_fork = None
+    error_lote = None
+    en_vuelo_fork = 0
+    despachados = 0
+    fork_conteo = {VERDE: 0, PENDIENTE: 0, ROJO: 0, NINGUNO: 0, DESCONOCIDO: 0}
+    if modo == "fork-ci" and drafts:
+        lote_fork, error_lote = fork_ci_runs()
+        if error_lote:
+            lote_fork = None
+            desconocidos.append(f"CI del fork: no pude leer los runs: {error_lote}")
+        else:
+            en_vuelo_fork = sum(1 for r in lote_fork if _status(r) != "completed")
 
     # El resumen de CI: el numero que al mantenedor le importa (a quien pinguear).
     ci_conteo = {VERDE: 0, PENDIENTE: 0, ROJO: 0}
@@ -937,7 +1740,41 @@ def main():
                 except json.JSONDecodeError:
                     sha = ""
         v = verdict_for(sha)
-        if v is None:
+        local_verde = gate_local_verde(v)
+        if v is not None:
+            verds[num] = v
+
+        # 3. EL GATE. En modo fork-ci: el CI de upstream corrido en el fork sobre el
+        #    head (o, como alternativa, un veredicto local verde del head). En modo
+        #    local: el veredicto de bin/gate.sh, como antes.
+        if modo == "fork-ci":
+            if local_verde:
+                gate_desc = f"gate local {v['verdict'] or v['status']} (slot {v['slot']})"
+            else:
+                if lote_fork is None:
+                    fk = {"estado": DESCONOCIDO, "run": "", "fallan": [],
+                          "detalle": f"no pude leer los runs del fork: {error_lote}"}
+                else:
+                    fk = estado_fork_ci(sha, lote=lote_fork, con_jobs_en_curso=False)
+                    if fk["estado"] == NINGUNO and len(lote_fork) >= 100:
+                        # El lote son los 100 runs mas nuevos: el run de un sha
+                        # viejo puede estar fuera. Se le pregunta por el sha.
+                        fk = estado_fork_ci(sha, con_jobs_en_curso=False)
+                    if fk["estado"] == DESCONOCIDO:
+                        desconocidos.append(f"PR #{num}: CI del fork: {fk['detalle']}")
+                fork_conteo[fk["estado"]] = fork_conteo.get(fk["estado"], 0) + 1
+                if fk["estado"] == NINGUNO:
+                    despachados += despachar_desde_pipeline(
+                        pr, num, iss, sha, lote_fork, despachados, problemas,
+                        desconocidos)
+                    continue
+                if fk["estado"] != VERDE:
+                    fallan = f"; fallan: {', '.join(fk['fallan'])}" if fk.get("fallan") else ""
+                    log(f"  PR #{num} (issue #{iss}): CI del fork {fk['estado'].upper()} "
+                        f"({fk['detalle']}{fallan}) {fk.get('run') or ''} -> sigue en draft")
+                    continue
+                gate_desc = f"CI del fork VERDE ({fk.get('run') or 'sin url'})"
+        elif v is None:
             # 3. sin veredicto: encolar, salvo que la caja ya tenga enough trabajo
             if iss in queued:
                 continue
@@ -962,15 +1799,14 @@ def main():
             log(f"  PR #{num} (issue #{iss}): encolado el gate -> {msg[-1] if msg else 'ok'}")
             pendientes += 1
             continue
-
-        verds[num] = v
-        # 4. verde local -> ready, con el veredicto en el comentario
-        verde = v["verdict"].startswith("VERDE") or (
-            v["status"] == "finished" and v["new_failures"] in ("0", ""))
-        if not verde:
+        elif not local_verde:
             log(f"  PR #{num} (issue #{iss}): gate {v['status']}/{v['verdict']} "
                 f"({v['new_failures']} fallos nuevos) -> sigue en draft")
             continue
+        else:
+            gate_desc = f"gate local {v['verdict'] or v['status']} (slot {v['slot']})"
+
+        # 4. gate verde -> ready (sin comentario: ver abajo)
         if not linea_defaults_presente(body):
             log(f"  PR #{num} (issue #{iss}): gate verde pero falta la linea "
                 f"'Changes a default:' -> sigue en draft (la linea la escribe el autor)")
@@ -982,7 +1818,7 @@ def main():
                 f"correr: lo promovio en la proxima pasada")
             continue
         if estado != VERDE:
-            log(f"  PR #{num} (issue #{iss}): gate local verde pero el CI de GitHub esta "
+            log(f"  PR #{num} (issue #{iss}): {gate_desc} pero el CI de GitHub esta "
                 f"{estado.upper()} ({detalle_ci}) -> sigue en draft")
             continue
         # 'gh pr ready' que falla se loguea y cuenta como problema: y NO se postea
@@ -993,7 +1829,7 @@ def main():
                 f"draft y no comento el veredicto")
             problemas.append(f"PR #{num}: 'gh pr ready' fallo (rc={rc})")
             continue
-        log(f"  PR #{num} (issue #{iss}): gate VERDE y CI de GitHub VERDE -> pasado a ready")
+        log(f"  PR #{num} (issue #{iss}): {gate_desc} y CI de GitHub VERDE -> pasado a ready")
 
         # SIN COMENTARIO DE ESTADO (2026-11-21): el pipeline dejaba en el PR un
         # comentario "Gate local en verde y CI de GitHub en verde" (en castellano,
@@ -1016,6 +1852,11 @@ def main():
 
     log(f"fin: {pendientes} encolado(s) ahora, {len(queued)} en la cola, "
         f"{len(verds)} con veredicto")
+    if modo == "fork-ci":
+        log(f"CI del fork (drafts sin gate local verde): {fork_conteo[VERDE]} verde(s), "
+            f"{fork_conteo[PENDIENTE]} pendiente(s), {fork_conteo[ROJO]} rojo(s), "
+            f"{fork_conteo[NINGUNO]} sin run, {fork_conteo[DESCONOCIDO]} sin leer; "
+            f"{despachados} despachado(s) ahora, {en_vuelo_fork} run(s) en vuelo")
     log(f"CI de GitHub (HEAD SHA): {ci_conteo[VERDE]} verde(s), "
         f"{ci_conteo[PENDIENTE]} pendiente(s), {ci_conteo[ROJO]} rojo(s)")
     if ci_rojos:

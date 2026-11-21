@@ -49,6 +49,13 @@
 #      k3) "Fixes #10181, #10182" closes TWO issues;
 #      k4) two lines, two issues: "Fixes #123" and "Fixes #124" close TWO;
 #      k5) the SAME issue twice closes ONE.
+#   l) (2026-11-21) the gate can be upstream's CI run on the FORK
+#      (bin/fork-ci.sh): green on the head satisfies it without a local
+#      verdict (and without a slot); red, running, or green on another sha
+#      does not; a green local verdict of the head is still the alternative;
+#      a fork that cannot be read is an UNKNOWN; GATE_MODE=local asks for the
+#      local gate; a red job the merge queue does not run (RISC-V) does not
+#      block.
 #
 # THE TESTS ARE HERMETIC: GitHub is NEVER contacted.
 #   * the `gh` of the tests, OUTSIDE the PATH (the verifier reads GH_BIN):
@@ -103,6 +110,13 @@ TESTDIR="$(mktemp -d "${TMPDIR:-/tmp}/verify-pr-test.XXXXXX")"
 trap 'rm -rf "$TESTDIR"' EXIT
 STUBBIN="$TESTDIR/bin"
 mkdir -p "$STUBBIN" "$TESTDIR/home" "$TESTDIR/loop/bin" "$TESTDIR/orch" "$TESTDIR/repo"
+# EL GUARDIA (2026-11-21): el ORCH_DIR del verificador (donde fork-ci.sh deja
+# su cache) nunca es el orquestador vivo.
+if [ -f "$HERE/test-guard.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$HERE/test-guard.sh"
+  test_guard_orch_dir "$TESTDIR/orch"
+fi
 export STUB_FIXTURES="$TESTDIR/fixtures"
 mkdir -p "$STUB_FIXTURES"
 
@@ -129,6 +143,28 @@ FIX="${STUB_FIXTURES:?the fixtures of the test are needed}"
 CLOSING_RE='\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b:?[[:blank:]]+(([[:alnum:]_.-]+/[[:alnum:]_.-]+)?#[0-9]+([[:blank:]]*(,|and|&)[[:blank:]]*)?)+'
 
 case "$cmd $sub" in
+  "api "*)
+    # THE CI OF THE FORK (2026-11-21): the runs of ci.yml and the jobs of a
+    # run. Without a fixture the fork has NO run (the old cases did not know
+    # the fork: for them the gate is the local verdict, as before).
+    path="${sub%%\?*}"
+    if [ -e "$FIX/forkci/fail" ]; then
+      echo "gh: HTTP 502: the fork could not be read" >&2
+      exit 1
+    fi
+    case "$path" in
+      */actions/workflows/*/runs)
+        if [ -s "$FIX/forkci/runs" ]; then cat "$FIX/forkci/runs"
+        else printf '{"total_count":0,"workflow_runs":[]}\n'; fi ;;
+      */actions/runs/*/jobs)
+        rid="${path%/jobs}"; rid="${rid##*/}"
+        # --paginate --slurp: a list of pages.
+        if [ -s "$FIX/forkci/jobs-$rid" ]; then printf '[%s]\n' "$(cat "$FIX/forkci/jobs-$rid")"
+        else printf '[{"total_count":0,"jobs":[]}]\n'; fi ;;
+      *) echo "gh: the stub does not know the api path $path" >&2; exit 1 ;;
+    esac
+    exit 0
+    ;;
   "pr view")
     jq_mode=0
     for a in "$@"; do
@@ -332,6 +368,7 @@ run_verify() {
               SOLIDCRAFT_REPO="$TESTDIR/repo" \
               STUB_FIXTURES="$STUB_FIXTURES" \
               STUB_GH_LOG="$TESTDIR/gh.log" \
+              GATE_MODE="${CASE_GATE_MODE:-}" \
               bash "$VERIFY_PR" "$pr" "$TEST_REPO" "$@" 2>&1)"
   RC=$?
 }
@@ -345,6 +382,9 @@ run_pr() {
   # $1 number, $2 body, $3 branch, $4 files (space separated)
   rm -rf "$TESTDIR/loop/gates"
   rm -rf "$STUB_FIXTURES"
+  # The cache of the jobs of the fork's runs: a case never reads the jobs of
+  # the previous one.
+  rm -rf "$TESTDIR/orch/gates/fork-ci"
   mkdir -p "$STUB_FIXTURES"
   fixture "$1" "$2" "$3" "$4" "$HEAD_SHA"
   run_verify "$1"
@@ -935,6 +975,120 @@ if printf '%s' "$OUT" | grep -q 'de el body (cierra el issue #123)'; then
 else
   bad "k7) the closing phrase of the body is the one that names the slot" \
       "$(printf '%s' "$OUT" | grep -E 'slot 123' | head -1)"
+fi
+
+# --- l) the gate can be the CI of the FORK on the head (2026-11-21) ---------
+# The pipeline gates with upstream's ci.yml dispatched on the fork
+# (bin/fork-ci.sh). Green on the head satisfies the gate; the local verdict
+# is the alternative; a fork that cannot be read is an UNKNOWN, not a red.
+fork_runs() {  # $1 = the list of runs (JSON)
+  mkdir -p "$STUB_FIXTURES/forkci"
+  printf '{"total_count":1,"workflow_runs":%s}\n' "$1" > "$STUB_FIXTURES/forkci/runs"
+}
+fork_jobs() {  # $1 = the id of the run, $2 = the list of its jobs (JSON)
+  mkdir -p "$STUB_FIXTURES/forkci"
+  printf '{"total_count":1,"jobs":%s}' "$2" > "$STUB_FIXTURES/forkci/jobs-$1"
+}
+fork_run() {  # $1 id, $2 status, $3 conclusion, [$4 head sha]
+  local concl="null"
+  [ -n "$3" ] && concl="\"$3\""
+  printf '{"id":%s,"status":"%s","conclusion":%s,"html_url":"https://github.com/acme/fork/actions/runs/%s","head_sha":"%s","head_branch":"fix/issue-%s","event":"workflow_dispatch","created_at":"2026-11-21T10:00:00Z","updated_at":"2026-11-21T12:00:00Z","run_attempt":1}' \
+    "$1" "$2" "$concl" "$1" "${4:-$HEAD_SHA}" "$SLOT"
+}
+fork_job() {  # $1 id, $2 name, $3 conclusion
+  printf '{"id":%s,"name":"%s","status":"completed","conclusion":"%s","started_at":"2026-11-21T10:01:00Z","completed_at":"2026-11-21T11:00:00Z"}' "$1" "$2" "$3"
+}
+CODE_BODY="$(printf 'Fixes #%s\n\nChanges a default: no\n\nthe fix\n' "$SLOT")"
+
+run_pr 4401 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+fork_runs "[$(fork_run 901 completed success)]"
+run_verify 4401
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'el CI del fork esta VERDE en el head del PR (https://github.com/acme/fork/actions/runs/901)'; then
+  ok "l1) the fork's CI green on the head satisfies the gate WITHOUT a local verdict"
+else
+  bad "l1) the fork's CI green on the head satisfies the gate WITHOUT a local verdict" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+run_pr 4402 $'no issue: an internal cleanup.\n\nChanges a default: no\n' \
+  "chore/cleanup" "crates/engine/src/lib.rs"
+fork_runs "[$(fork_run 902 completed success)]"
+run_verify 4402
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'no se puede verificar el gate'; then
+  ok "l2) with the fork's CI green on the head, a PR with no slot does not need one"
+else
+  bad "l2) with the fork's CI green on the head, a PR with no slot does not need one" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+run_pr 4403 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+fork_runs "[$(fork_run 903 completed failure)]"
+fork_jobs 903 "[$(fork_job 1 'Native Linux tests' failure),$(fork_job 2 'Native Linux Clippy' success)]"
+run_verify 4403
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'falta el veredicto del gate del slot' \
+   && printf '%s' "$OUT" | grep -q 'ROJO.*fallan: Native Linux tests'; then
+  ok "l3) the fork's CI RED and no local verdict FAILS, naming the job that fails"
+else
+  bad "l3) the fork's CI RED and no local verdict FAILS, naming the job that fails" \
+      "rc=$RC $(printf '%s' "$OUT" | grep -E 'fork|FAIL' | tr '\n' ' ')"
+fi
+write_verdict "$SLOT" "$SHORT_SHA"
+run_verify 4403
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "el gate local del slot $SLOT esta verde"; then
+  ok "l4) the fork's CI red but a green LOCAL verdict of the head: the alternative holds"
+else
+  bad "l4) the fork's CI red but a green LOCAL verdict of the head: the alternative holds" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+run_pr 4404 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+mkdir -p "$STUB_FIXTURES/forkci"; : > "$STUB_FIXTURES/forkci/fail"
+run_verify 4404
+if [ "$RC" -eq 6 ] && printf '%s' "$OUT" | grep -q 'no se pudo leer el CI del fork'; then
+  ok "l5) a fork that cannot be read and no local verdict is an UNKNOWN (rc=6), not a red"
+else
+  bad "l5) a fork that cannot be read and no local verdict is an UNKNOWN (rc=6), not a red" \
+      "rc=$RC $(printf '%s' "$OUT" | tail -4 | tr '\n' ' ')"
+fi
+
+run_pr 4405 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+fork_runs "[$(fork_run 905 in_progress '')]"
+run_verify 4405
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'el CI del fork esta PENDIENTE'; then
+  ok "l6) the fork's CI still running is not a gate: FAIL, and it says PENDIENTE"
+else
+  bad "l6) the fork's CI still running is not a gate: FAIL, and it says PENDIENTE" \
+      "rc=$RC $(printf '%s' "$OUT" | grep -E 'fork|FAIL' | tr '\n' ' ')"
+fi
+
+run_pr 4406 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+fork_runs "[$(fork_run 906 completed success 9999999999999999999999999999999999999999)]"
+run_verify 4406
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'despachalo (bash bin/fork-ci.sh'; then
+  ok "l7) a green run of ANOTHER sha is not the gate of the head: FAIL, and it says how to dispatch"
+else
+  bad "l7) a green run of ANOTHER sha is not the gate of the head: FAIL, and it says how to dispatch" \
+      "rc=$RC $(printf '%s' "$OUT" | grep -E 'fork|FAIL' | tr '\n' ' ')"
+fi
+
+run_pr 4407 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+CASE_GATE_MODE=local run_verify 4407
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "corré el gate de este slot antes de publicar (bash bin/gate.sh $SLOT"; then
+  ok "l8) with GATE_MODE=local the missing verdict asks for the local gate"
+else
+  bad "l8) with GATE_MODE=local the missing verdict asks for the local gate" \
+      "rc=$RC $(printf '%s' "$OUT" | grep -E 'FAIL' | tr '\n' ' ')"
+fi
+
+run_pr 4408 "$CODE_BODY" "fix/issue-$SLOT-the-engine" "crates/engine/src/lib.rs"
+fork_runs "[$(fork_run 908 completed failure)]"
+fork_jobs 908 "[$(fork_job 1 'Native Linux tests' success),$(fork_job 2 'Compile RISC-V (manual)' failure)]"
+run_verify 4408
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'el CI del fork esta VERDE'; then
+  ok "l9) a red job the merge queue does not run (RISC-V) does not block the gate"
+else
+  bad "l9) a red job the merge queue does not run (RISC-V) does not block the gate" \
+      "rc=$RC $(printf '%s' "$OUT" | grep -E 'fork|FAIL' | tr '\n' ' ')"
 fi
 
 # --- the control: the stub answered and GitHub was never contacted -----------

@@ -411,6 +411,58 @@ $PR_FILES
 EOF
 fi
 
+# THE GATE CAN BE UPSTREAM'S CI RUN ON THE FORK (2026-11-21).
+#    WHY: the local gate (bin/gate.sh -> gate-quick.sh) gave a FALSE red on
+#    PR #20017 while upstream's "Native Linux tests" passed on the same head,
+#    and it compiled for 30+ minutes on a box of 15 GB. The pipeline gates a
+#    pull request with upstream's ci.yml dispatched on the fork
+#    (bin/fork-ci.sh, GATE_MODE=fork-ci, the default), and the verifier asks
+#    the same question: is the fork's CI GREEN ON THE HEAD of the pull
+#    request? If it is, the gate is satisfied. If it is not, the local verdict
+#    of the slot is still accepted (the alternative, and the only gate with
+#    GATE_MODE=local). The rule of the verdict (the newest job of each name
+#    wins) lives in bin/pipeline.py; fork-ci.sh is its door.
+FORK_CI_SH="${FORK_CI_SH:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fork-ci.sh}"
+GATE_MODE_EF="${GATE_MODE:-}"
+if [ -z "$GATE_MODE_EF" ] && [ -f "$LOOP_DIR/config.env" ]; then
+  GATE_MODE_EF="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?GATE_MODE=["'"'"']?([a-z-]+).*/\2/p' "$LOOP_DIR/config.env" | tail -1)"
+fi
+case "$GATE_MODE_EF" in fork-ci|local) ;; *) GATE_MODE_EF="fork-ci" ;; esac
+FORKCI_STATE=""
+FORKCI_RUN=""
+FORKCI_FALLAN=""
+FORKCI_ERR=""
+if [ -f "$FORK_CI_SH" ] && [ -n "$HEAD" ]; then
+  _fkerr="$(mktemp)"
+  FORKCI_LINE="$(GH_BIN="$GH_BIN" ORCH_DIR="$ORCH_DIR" LOOP_DIR="$LOOP_DIR" \
+                 bash "$FORK_CI_SH" --status --sha "$HEAD" 2>"$_fkerr")"
+  FORKCI_ERR="$(grep -v '^fork-ci: en rojo pero no bloquean' "$_fkerr" | tail -1 | sed 's/^fork-ci: //')"
+  rm -f "$_fkerr"
+  FORKCI_STATE="$(printf '%s\n' "$FORKCI_LINE" | sed -nE 's/^FORKCI=([A-Z]+) .*/\1/p' | head -1)"
+  FORKCI_RUN="$(printf '%s\n' "$FORKCI_LINE" | sed -nE 's/.* RUN=([^ ]*) FALLAN=.*/\1/p' | head -1)"
+  case "$FORKCI_LINE" in *FALLAN=*) FORKCI_FALLAN="${FORKCI_LINE##*FALLAN=}" ;; esac
+fi
+[ -n "$FORKCI_STATE" ] || FORKCI_STATE="DESCONOCIDO"
+FORKCI_DESC="$FORKCI_STATE${FORKCI_RUN:+ $FORKCI_RUN}${FORKCI_FALLAN:+ (fallan: $FORKCI_FALLAN)}${FORKCI_ERR:+: $FORKCI_ERR}"
+GATE_BY_FORK=0
+if [ "$FORKCI_STATE" = "VERDE" ]; then
+  ok "el CI del fork esta VERDE en el head del PR (${FORKCI_RUN:-sin url}): el gate esta cumplido"
+  GATE_BY_FORK=1
+else
+  note "  CI del fork en el head (modo del gate: $GATE_MODE_EF): $FORKCI_DESC"
+fi
+# What a missing or useless local verdict needs, said for the mode of the gate.
+gate_hint() {
+  if [ "$GATE_MODE_EF" = "fork-ci" ]; then
+    case "$FORKCI_STATE" in
+      NINGUNO) printf 'el CI del fork no tiene run para el head: despachalo (bash bin/fork-ci.sh %s --sha %s)' "$BRANCH" "$HEAD" ;;
+      *) printf 'el CI del fork esta %s' "$FORKCI_DESC" ;;
+    esac
+  else
+    printf 'corré el gate de este slot antes de publicar (bash bin/gate.sh %s <sha>)' "$SLOT"
+  fi
+}
+
 # THE SLOT COMES FROM THE CLOSING PHRASE (the upstream's parser): the FIRST
 # issue of the body, and only an issue that a closing phrase names with its
 # '#'. A sentence of prose ("This fix 3 problems.") closes nothing and its
@@ -431,7 +483,10 @@ fi
 if [ -n "$SLOT_ARG" ] && [ -n "$ISSUE" ] && [ "$SLOT_ARG" != "$ISSUE" ]; then
   bad "el slot que pediste ($SLOT_ARG) NO es el issue que cierra el PR ($ISSUE): revisa cual de los dos es el correcto (el gate se verifica sobre el slot $SLOT_ARG)"
 fi
-if [ -z "$SLOT" ]; then
+if [ "$GATE_BY_FORK" = "1" ]; then
+  # The fork's CI on the head IS the gate: the local verdict is not needed.
+  [ -n "$SLOT" ] && note "  --   el veredicto local del slot $SLOT no hace falta: el CI del fork ya cubre el head"
+elif [ -z "$SLOT" ]; then
   # WHY A DOCS-ONLY PR IS NOT A FAILURE (01-11-2026): a PR that closes no
   # issue AND changes no default cannot have a slot, because a slot is the
   # scope of a GATE, and a gate judges CODE. A pull request that only
@@ -445,7 +500,7 @@ if [ -z "$SLOT" ]; then
   if [ "$DOCS_ONLY" = "1" ]; then
     note "  --   este PR no cierra ningun issue y es de documentacion: no hay slot y no hay gate que correr (la exencion de docs del upstream)"
   else
-    bad "no se puede verificar el gate de este PR: el body no dice que issue cierra, la rama ($BRANCH) no dice el slot y no se paso ninguno -> pasalo: bash bin/verify-pr.sh $PR $REPO <slot>"
+    bad "no se puede verificar el gate de este PR: el CI del fork no esta verde en el head ($FORKCI_STATE), el body no dice que issue cierra, la rama ($BRANCH) no dice el slot y no se paso ninguno -> pasalo: bash bin/verify-pr.sh $PR $REPO <slot>"
   fi
 else
   VF="$LOOP_DIR/gates/$SLOT/scope.verdict"
@@ -496,13 +551,19 @@ else
     elif [ -z "$HEAD_SHA" ]; then
       bad "no se pudo leer el head del PR: no se puede comprobar que el gate lo haya judged"
     elif [ "$SAME_SHA" != "si" ]; then
-      bad "el gate local del slot $SLOT judged el commit $VERDICT_SHA, NO el head del PR ($HEAD_SHA): el veredicto no sirve"
+      bad "el gate local del slot $SLOT judged el commit $VERDICT_SHA, NO el head del PR ($HEAD_SHA): el veredicto no sirve; $(gate_hint)"
     else
       printf '%s' "$V" | grep -q 'VERDICT=VERDE-SCOPE' && ok "el gate local del slot $SLOT esta verde (commit $VERDICT_SHA)" \
-                                                     || bad "el gate local del slot $SLOT NO esta verde (leé el archivo: $VF)"
+                                                     || bad "el gate local del slot $SLOT NO esta verde (leé el archivo: $VF); $(gate_hint)"
     fi
   else
-    bad "falta el veredicto del gate del slot $SLOT (de $SLOT_FROM): corré el gate de este slot antes de publicar (bash bin/gate.sh $SLOT <sha>)"
+    if [ "$GATE_MODE_EF" = "fork-ci" ] && [ "$FORKCI_STATE" = "DESCONOCIDO" ]; then
+      # Nobody knows: the fork's CI could not be read and there is no local
+      # verdict to fall back on. Not a red, not a green (rule 7).
+      unknown "no se pudo leer el CI del fork ($FORKCI_DESC) y falta el veredicto local del slot $SLOT: no se sabe si el gate esta cumplido"
+    else
+      bad "falta el veredicto del gate del slot $SLOT (de $SLOT_FROM): $(gate_hint)"
+    fi
   fi
 fi
 
