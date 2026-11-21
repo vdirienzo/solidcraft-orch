@@ -242,6 +242,36 @@ if [ -r "$GPU_ICD" ]; then
   export VK_ICD_FILENAMES="$GPU_ICD"
 fi
 
+# --- the data directory of the tests ----------------------------------------
+# The tests run against an EMPTY data directory, and the folder of the
+# developer is NOT read.
+#
+# WHY (2026-11-21): the installed plugins live in the data directory of the
+# user ($XDG_DATA_HOME/solidcraft/plugins), and the tests of the ui READ it:
+# AppState::plugins_dir() falls back to recovery::data_dir(), which is
+# $XDG_DATA_HOME/solidcraft (crates/engine/src/recovery.rs). So the plugin
+# 'woodwork', installed on this box, breaks six ui-egui tests that have
+# nothing to do with the change (the icons, the plugin menu, the toolbar,
+# the painted language, the hole). The gate of the slot 19523 said
+# ROJO-SCOPE for a pull request whose change is GREEN, and the agent had to
+# prove it by hand with XDG_DATA_HOME pointed at an empty directory.
+#
+# The upstream CI runs on a runner with a clean HOME, so the gate has to
+# measure the same thing: the tests of the gate see what the tests of the
+# CI see. A gate that reads the plugins of the developer measures the BOX,
+# not the change.
+#
+# The knob: GATE_QUICK_TEST_XDG_DATA_HOME=0 turns the isolation off, for a
+# box whose tests need the real folder.
+#
+# The directory is created with the run (the $TMP of the run, which the
+# trap of the EXIT removes) and NOT here: this code runs twice (the parent
+# that creates the scope and the child that works inside it), and a
+# directory made here would be left behind by the parent.
+GATE_QUICK_TEST_XDG_DATA_HOME="${GATE_QUICK_TEST_XDG_DATA_HOME:-1}"
+case "$GATE_QUICK_TEST_XDG_DATA_HOME" in 1) ;; *) GATE_QUICK_TEST_XDG_DATA_HOME=0 ;; esac
+TEST_XDG_DATA_HOME=""
+
 # The adapter of the software policy has to be THERE. The ICD names its
 # library relatively, so the loader resolves it through LD_LIBRARY_PATH: if
 # that directory is missing there is NO adapter and the tests that need one
@@ -1745,6 +1775,11 @@ NEXTEST_SLICE=$(( BUDGET - FMT_SLICE - LAYERS_SLICE - CLIPPY_SLICE - CHECK_SLICE
 
 TIMED_OUT=0
 PHASE_STATE="skipped"
+# The data directory of the tests is ready to be used: it is set to 0 when
+# the isolated directory could not be created (the phase is skipped). It is
+# initialized here because the gate can run out of time BEFORE the tests,
+# and the variable is read even then (the script runs with `set -u`).
+XDG_READY=1
 
 seconds_left() {
   echo $(( DEADLINE - $(run_child date +%s) ))
@@ -2031,9 +2066,36 @@ else
     # The share of the threads is decided HERE, at the last moment: the
     # other gate is only visible when it is running its own tests.
     gate_share_threads
+    # The data directory of the tests is created HERE, with the run: the
+    # $TMP of the run exists (the trap of the EXIT removes it) and the
+    # directory is EMPTY, so the plugins of the developer are not read.
+    XDG_READY=1
+    if [ "$GATE_QUICK_TEST_XDG_DATA_HOME" = "1" ]; then
+      TEST_XDG_DATA_HOME="$TMP/xdg-data"
+      rm -rf "$TEST_XDG_DATA_HOME" 2>/dev/null || true
+      mkdir -p "$TEST_XDG_DATA_HOME" 2>/dev/null || TEST_XDG_DATA_HOME=""
+      # A directory that could not be created is NOT a reason to run the
+      # tests against the plugins of the developer: the scope is DEFERRED,
+      # not judged red for the wrong reason. The phase is skipped with the
+      # mechanism of the run that ran out of time.
+      if [ -z "$TEST_XDG_DATA_HOME" ]; then
+        echo "gate-quick: the isolated data directory could not be created:" \
+          "the scope is deferred, not judged" >&2
+        XDG_READY=0
+      fi
+    fi
+  fi
+  if [ "$TIMED_OUT" -eq 0 ] && [ "$XDG_READY" -eq 1 ]; then
     PHASE_SOFT=1
+    # The data directory of the tests goes with the command, in an ARRAY:
+    # a path with spaces would be split by an unquoted expansion.
+    xdg_env_args=()
+    if [ -n "$TEST_XDG_DATA_HOME" ]; then
+      xdg_env_args=( "XDG_DATA_HOME=$TEST_XDG_DATA_HOME" )
+    fi
     phase "nextest (${TEST_SCOPE:-$SCOPE})" "$NEXTEST_SLICE" "$NEXTEST_LOG" \
       env SOLIDCRAFT_GPU=software SOLIDCRAFT_REQUIRE_GPU=1 \
+      "${xdg_env_args[@]}" \
       cargo nextest run "${TEST_SCOPE_ARGS[@]}" --cargo-profile ci --locked \
       --profile local-ci --no-tests=pass --retries 0 \
       --test-threads "$NEXTEST_THREADS" --ignore-default-filter \
@@ -2043,6 +2105,10 @@ else
     if [ "$TIMED_OUT" -eq 1 ]; then
       # The budget was over before the phase could start: there is no run
       # and no log. The scope was NOT judged.
+      NEXTEST_STATE="skipped"
+    elif [ "$XDG_READY" -eq 0 ]; then
+      # The isolated data directory could not be created: the tests did NOT
+      # run against the plugins of the developer. The scope was NOT judged.
       NEXTEST_STATE="skipped"
     else
       NEXTEST_STATE="ran"

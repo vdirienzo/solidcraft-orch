@@ -75,7 +75,16 @@ TMP_TEST="$(mktemp -d "${TMPDIR:-/tmp}/test-gate-quick.XXXXXX" 2>/dev/null)" || 
   echo "FALLO - a temporary directory cannot be created"
   exit 1
 }
-cleanup() { rm -rf "$TMP_TEST"; }
+cleanup() {
+  # The directory of the test is kept when the case asks for it: a failing
+  # case has to leave the evidence of the run behind (the log of the
+  # environment of the stub, the output of the gate).
+  if [ "${KEEP_TEST:-0}" = "1" ]; then
+    echo "test-gate-quick: los artefactos quedan en $TMP_TEST"
+    return
+  fi
+  rm -rf "$TMP_TEST"
+}
 trap cleanup EXIT
 
 REPO_TEST="$TMP_TEST/repo"
@@ -100,9 +109,21 @@ set -uo pipefail
 # has to bound the compilation (CARGO_BUILD_JOBS), and that is only visible
 # from the inside of cargo. The target directory is recorded too: every slot
 # compiles in a directory of its own and the cases have to prove it.
+#
+# The data directory is recorded with WHAT IT SHOWED, not only with its
+# name: the point of the isolation is that the tests did NOT see the
+# plugins of the developer, and a name that does not exist any more (the
+# gate removes its temporary directory when it finishes) would not prove
+# that. So the stub writes the list of the plugins it could see.
 if [ -n "${STUB_ENV_LOG:-}" ]; then
-  printf '%s\t%s\t%s\n' "${1:-}" "${CARGO_BUILD_JOBS:-<unset>}" \
-    "${CARGO_TARGET_DIR:-<unset>}" >> "$STUB_ENV_LOG"
+  seen_plugins="<no-data-dir>"
+  if [ -n "${XDG_DATA_HOME:-}" ] && [ -d "${XDG_DATA_HOME}/solidcraft/plugins" ]; then
+    seen_plugins="$(ls "${XDG_DATA_HOME}/solidcraft/plugins" 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
+    seen_plugins="${seen_plugins:-<empty>}"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "${1:-}" "${CARGO_BUILD_JOBS:-<unset>}" \
+    "${CARGO_TARGET_DIR:-<unset>}" "${XDG_DATA_HOME:-<unset>}" \
+    "$seen_plugins" >> "$STUB_ENV_LOG"
 fi
 case "${1:-}" in
   metadata)
@@ -310,6 +331,19 @@ run_gate() {
   if [ -n "${3:-}" ]; then
     slot_args=(--slot "$3")
   fi
+  # The data directory of the developer only travels when there is one: an
+  # empty XDG_DATA_HOME is not the same as no XDG_DATA_HOME (the engine
+  # falls back to $HOME/.local/share only when the variable is NOT set).
+  #
+  # It travels through `env`, not as a word of the assignment list: a word
+  # built with an expansion is NOT an assignment for bash (it would be taken
+  # as the name of the command and the gate would never run).
+  local xdg_env=()
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    xdg_env=( "XDG_DATA_HOME=$XDG_DATA_HOME" )
+  else
+    xdg_env=( "-u" "XDG_DATA_HOME" )
+  fi
   REPO="$REPO_TEST" \
   LOOP_DIR="$LOOP_TEST" \
   BASELINE_FAILURES="$BASELINE_TEST" \
@@ -322,6 +356,7 @@ run_gate() {
   STUB_CLIPPY_EXIT="${STUB_CLIPPY_EXIT:-0}" \
   STUB_CLIPPY_SLEEP="${STUB_CLIPPY_SLEEP:-}" \
   GATE_CHECK_WORKSPACE="${GATE_CHECK_WORKSPACE:-1}" \
+  GATE_QUICK_TEST_XDG_DATA_HOME="${GATE_QUICK_TEST_XDG_DATA_HOME:-1}" \
   STUB_FMT_EXIT="${STUB_FMT_EXIT:-0}" \
   STUB_LAYERS_EXIT="${STUB_LAYERS_EXIT:-0}" \
   STUB_CHECK_EXIT="${STUB_CHECK_EXIT:-0}" \
@@ -330,6 +365,7 @@ run_gate() {
   STUB_BETA_DEPENDS_ALPHA="${STUB_BETA_DEPENDS_ALPHA:-}" \
   NEXTEST_INCLUDE_DEPENDENTS="${NEXTEST_INCLUDE_DEPENDENTS:-0}" \
   PATH="$STUB_DIR:$PATH" \
+    env "${xdg_env[@]}" \
     bash "$GATE" ${slot_args[@]+"${slot_args[@]}"} "$1" "$2" \
       >"$TMP_TEST/out.txt" 2>"$TMP_TEST/err.txt"
   GATE_RC=$?
@@ -1224,6 +1260,57 @@ fi
 if [ -f "$ORPHAN_PID" ]; then
   kill -KILL "$(cat "$ORPHAN_PID")" 2>/dev/null || true
 fi
+
+# 34. the tests run with an ISOLATED data directory.
+#
+# WHY (2026-11-21): the plugins of the developer live in the data directory
+# of the user ($XDG_DATA_HOME/solidcraft/plugins), and the tests of the ui
+# READ it: AppState::plugins_dir() falls back to recovery::data_dir(), so a
+# third-party plugin installed on this box (the 'woodwork' one) breaks six
+# ui-egui tests that have nothing to do with the change (the icons, the
+# plugin menu, the toolbar, the painted language). The gate of the slot
+# 19523 said ROJO-SCOPE for a pull request whose change is GREEN, and the
+# agent that worked on it had to prove it by hand, with XDG_DATA_HOME
+# pointed at an empty directory.
+#
+# The upstream CI runs on a runner with a clean HOME, so the gate has to
+# measure the same thing: the tests run against an EMPTY data directory,
+# and the folder of the developer is not read.
+#
+# The knob: GATE_QUICK_TEST_XDG_DATA_HOME=0 turns the isolation off (the
+# gate of a box whose tests NEED the real folder).
+GATE_QUICK_TEST_XDG_DATA_HOME="${GATE_QUICK_TEST_XDG_DATA_HOME:-1}"
+case "$GATE_QUICK_TEST_XDG_DATA_HOME" in 1) ;; *) GATE_QUICK_TEST_XDG_DATA_HOME=0 ;; esac
+export STUB_ENV_LOG="$TMP_TEST/env-34.log"
+: > "$STUB_ENV_LOG"
+# A data directory of the developer, with a plugin in it: the gate must not
+# show it to the tests.
+REAL_DATA_HOME="$TMP_TEST/real-data"
+mkdir -p "$REAL_DATA_HOME/solidcraft/plugins/woodwork"
+printf 'plugin\n' > "$REAL_DATA_HOME/solidcraft/plugins/woodwork/plugin.toml"
+XDG_DATA_HOME="$REAL_DATA_HOME" run_gate "$BASE_CODE" "$SHA_CODE" "s34"
+nextest_plugins="$(awk -F'\t' '$1 == "nextest" { print $5 }' "$STUB_ENV_LOG" | head -1)"
+nextest_xdg="$(awk -F'\t' '$1 == "nextest" { print $4 }' "$STUB_ENV_LOG" | head -1)"
+if [ "$nextest_plugins" = "woodwork" ]; then
+  echo "FALLO - caso 34 (los tests vieron el plugin del desarrollador):" \
+    "los plugins de la caja rompen los tests del ui"
+  FAILURES=$((FAILURES + 1))
+elif [ -z "$nextest_plugins" ]; then
+  echo "FALLO - caso 34 (los tests no corrieron: el caso no prueba nada)"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "ok   - caso 34 (los tests no vieron los plugins del desarrollador):" \
+    "$nextest_plugins (XDG_DATA_HOME=$nextest_xdg)"
+fi
+# The knob off: the gate measures the folder of the developer.
+GATE_QUICK_TEST_XDG_DATA_HOME=0
+: > "$STUB_ENV_LOG"
+XDG_DATA_HOME="$REAL_DATA_HOME" run_gate "$BASE_CODE" "$SHA_CODE" "s34b"
+nextest_plugins_off="$(awk -F'\t' '$1 == "nextest" { print $5 }' "$STUB_ENV_LOG" | head -1)"
+check_equal "caso 34 (el knob apagado deja ver los plugins del desarrollador)" \
+  "$nextest_plugins_off" "woodwork"
+unset STUB_ENV_LOG
+GATE_QUICK_TEST_XDG_DATA_HOME=1
 
 # --- the verdict ----------------------------------------------------------
 if [ "$FAILURES" -eq 0 ]; then
