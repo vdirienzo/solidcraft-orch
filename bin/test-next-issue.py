@@ -328,9 +328,15 @@ def more(tmp, orch, run, gh_log):
     cards = os.path.join(orch, "state", "cards")
     os.makedirs(cards, exist_ok=True)
 
+    # The version of the card is the module's: a fixture with its own number
+    # stops being a card the day the module bumps it (2026-11-21).
+    import re as _re
+    with open(os.path.join(HERE, "issue-card.py"), encoding="utf-8") as fh:
+        card_version = int(_re.search(r"^VERSION = (\d+)", fh.read(), _re.M).group(1))
+
     def card(n, kernel=False, llm=None):
         with open(os.path.join(cards, f"{n}.json"), "w", encoding="utf-8") as fh:
-            json.dump({"version": 1, "issue": n, "kernel_cause": kernel, "crates": ["kernel"] if kernel else [],
+            json.dump({"version": card_version, "issue": n, "kernel_cause": kernel, "crates": ["kernel"] if kernel else [],
                        "llm": llm}, fh)
 
     good_llm = {"one_topic": True, "bug_with_repro": True, "maintainer_decided": False,
