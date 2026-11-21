@@ -10,37 +10,49 @@
 # so between the survey and the draft another agent can take the issue. We
 # lost #10134, #10138 and #10079 that way on 31-10-2026 (RULES.md, step 5).
 #
-# THE RULE OF THE CLAIM is the UNION of the two rules of the upstream, which
-# do not agree with each other (and the bot of the upstream applies both):
-#
-#   * the TITLE of the pull request names the issue ("... (#361)")
-#     (upstream scripts/claim/claim.js, referencedIssues), OR
-#   * the BODY of the pull request has a closing verb followed by the issue
-#     (upstream scripts/claim/claim.js and scripts/pr-checks/pr-checks.js,
-#     parseClosing). The '#' is REQUIRED there: it is what tells an issue
-#     reference from prose with a number ("This fix 3 problems." is NOT a
-#     claim). A LIST counts every issue of it ("Fixes #10181, #10182").
-#
-# The old rule of this file (a closing verb over title+body) was BLIND to 193
-# rival pull requests that name the issue in the TITLE (measured over the
-# 836 open pull requests of 2026-11-17, reports/loop-codigo.md, B6): the
-# PR #1608 "Correct mouse and trackpad navigation presets (#361)" held #361
-# and the guard said the issue was free.
+# LA REGLA YA NO VIVE ACA (2026-11-21): vive en bin/claim_rule.py, la UNICA
+# implementacion de "quien tiene el claim" (la usan tambien next-issue.py e
+# issue-card.py). Es la UNION de los dos bots del upstream: claim.js
+# (referencedIssues: `#N` en el titulo, `Fixes #N` en el body SIN sacar nada,
+# MAX_REFS) y pr-checks.js (parseClosing: la lista, owner/repo#N, sin el
+# ruido). El filtro jq de antes sacaba los bloques de codigo como pr-checks.js,
+# y claim.js no: un `Fixes #N` en un bloque de codigo era un claim para el bot
+# y "libre" para nosotros, la direccion cara. bin/test-claim-rule.py compara
+# el modulo con el claim.js y el pr-checks.js de verdad.
 #
 # THE RULE OF THE SAME AUTHOR: our own pull requests do NOT compete with us
 # (upstream scripts/claim/claim.js: a pull request does not lose against an
-# older pull request of the same author). Without it, two of our pull
-# requests open on the same issue made the higher-numbered one LOSE, and the
-# orchestrator CLOSED it: real work thrown away.
+# older pull request of the same author). Without our PR number there is no
+# way to tell ours from the others, so every pull request that claims the
+# issue blocks it, and so does the HOLD of claim.js (somebody assigned, or
+# the 'in progress' label of somebody else's /claim).
+#
+# DE DONDE SALEN LOS PRs (2026-11-21):
+#   * de la FOTO de bin/gh_snapshot.py, con --snapshot FILE (o GH_SNAPSHOT),
+#     si esta completa, tiene menos de --max-age-min minutos (o
+#     GH_SNAPSHOT_MAX_AGE_MIN, 15 por defecto) y conoce el issue: cero
+#     llamadas a GitHub;
+#   * si no, EN VIVO: `gh pr list --limit 2000` con un PRE-filtro jq que solo
+#     deja los PRs cuyo texto contiene "#N" (la regla la aplica claim_rule.py,
+#     no el jq), mas `gh issue view` para el hold cuando no hay PR nuestro.
+# Sin --snapshot ni GH_SNAPSHOT es SIEMPRE en vivo: el gate y publish-pr.sh,
+# los que deciden lo irreversible, no leen una foto vieja sin pedirlo.
 #
 # Usage:
 #   bash bin/claim-verify.sh <issue> [our_pr]
 #   bash bin/claim-verify.sh <issue> --our-pr <our_pr>
+#   bash bin/claim-verify.sh <issue> [--our-pr <our_pr>] --snapshot FILE [--max-age-min N]
+#
+# The output (the contract with gate.sh, publish-pr.sh, close-slot.sh and
+# loop/bin/claim-race.sh, which parse it): "issue=N PRs que lo mencionan: ..."
+# and one "VEREDICTO=OK|OCUPADO|PERDIDO ..." line on stdout, or
+# "VEREDICTO=ERROR ..." on stderr. The notes (where the PRs came from) go to
+# stderr and never carry a '#'.
 #
 # Exit codes (the contract with bin/gate.sh and bin/publish-pr.sh):
 #   0  -> the claim is OURS: no pull request of ANOTHER author with a lower
-#         number claims the issue
-#   1  -> the claim is LOST: another pull request with a lower number has it
+#         number claims the issue (or nobody claims it)
+#   1  -> the claim is LOST (or the issue is TAKEN, without our PR)
 #   2  -> usage error, or it could not be verified (UNKNOWN, never "no")
 #
 # If it is lost, the caller has to:
@@ -49,12 +61,14 @@
 set -uo pipefail
 
 usage() {
-  echo "uso: bash bin/claim-verify.sh <issue> [nuestro_pr|--our-pr <nuestro_pr>]" >&2
+  echo "uso: bash bin/claim-verify.sh <issue> [nuestro_pr|--our-pr <nuestro_pr>] [--snapshot FILE] [--max-age-min N]" >&2
 }
 
 ISSUE=""
 OUR_PR=""
 ISSUE_SET=0
+SNAPSHOT="${GH_SNAPSHOT:-}"
+MAX_AGE="${GH_SNAPSHOT_MAX_AGE_MIN:-15}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --our-pr)
@@ -68,6 +82,25 @@ while [ $# -gt 0 ]; do
       ;;
     --our-pr=*)
       OUR_PR="${1#--our-pr=}"
+      ;;
+    --snapshot)
+      shift
+      if [ $# -eq 0 ]; then
+        echo "--snapshot necesita el archivo de la foto" >&2
+        usage
+        exit 2
+      fi
+      SNAPSHOT="$1"
+      ;;
+    --snapshot=*)
+      SNAPSHOT="${1#--snapshot=}"
+      ;;
+    --max-age-min)
+      shift
+      MAX_AGE="${1:-}"
+      ;;
+    --max-age-min=*)
+      MAX_AGE="${1#--max-age-min=}"
       ;;
     -*)
       echo "opcion desconocida: $1" >&2
@@ -98,6 +131,13 @@ if [ -n "$OUR_PR" ] && ! [[ "$OUR_PR" =~ ^[0-9]+$ ]]; then
   echo "el pull request nuestro tiene que ser un numero: '$OUR_PR'" >&2
   exit 2
 fi
+if ! [[ "$MAX_AGE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "--max-age-min tiene que ser un numero de minutos: '$MAX_AGE'" >&2
+  exit 2
+fi
+# Numbers without leading zeros: "0042" and "42" are the same issue.
+ISSUE=$((10#$ISSUE))
+[ -n "$OUR_PR" ] && OUR_PR=$((10#$OUR_PR))
 
 # The gh of the machine, or the one of a test (the stub lives OUTSIDE the
 # PATH: README rule 4). Without this the only way to test the script is a
@@ -112,116 +152,16 @@ REPO="${SC_REPO:-tangency-labs/solidcraft}"
 # ours, not a top of the tool.
 LIMIT="${SC_PR_LIMIT:-2000}"
 
-# --- the filter of the claim -------------------------------------------------
-# The filter is a jq program in a file of its own: the jq of one line does
-# not survive the escapes of the pattern, and the pattern has to be the
-# upstream's own.
-#
-# The title rule is the one of scripts/claim/claim.js (referencedIssues):
-# '#N' at the start of the title or after a space or a parenthesis.
-# The body rule is the one of scripts/pr-checks/pr-checks.js (parseClosing):
-# a closing verb, an optional colon, and then a LIST of issue references.
-# The '#' is mandatory in the body.
-#
-# THREE THINGS THE FIRST VERSION OF THIS FILTER GOT WRONG (2026-11-17), and
-# all three made the arbiter say TAKEN for an issue that is free - which
-# costs a whole slot of the machine:
-#   1. the NOISE was not stripped. Upstream strips the HTML comments and
-#      the code blocks before it parses (stripNoise, pr-checks.js:25-31), so
-#      a body with "Fixes #361" INSIDE A CODE BLOCK is free. Ours counted it.
-#   2. a reference to ANOTHER REPOSITORY was counted. Upstream skips
-#      "owner/repo#N" when the repo is not ours (parseClosing, the line
-#      `if (ref[1] && repoFullName && ref[1].toLowerCase() !== ...) continue`).
-#   3. the pull request's OWN number was counted. Upstream skips it
-#      (claim.js:297, `if (n === pull.number) continue`).
-#
-# The patterns have NO backslash and NO lookahead on purpose: the jq of gh
-# is gojq (the regexp of Go), where a lookahead does not exist. The rule of
-# the upstream is written as ONE pattern: the verb, then the items of the
-# list that come BEFORE the issue, then the issue. That is the rule of the
-# upstream (the list of parseClosing) and it counts every issue of the list
-# ("Fixes #10181, #10182" claims the two).
-TITLE_RE="(^|[[:space:](])#${ISSUE}([^0-9A-Za-z_]|\$)"
-BODY_RE="(?i)(?:^|[^0-9A-Za-z_])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*(?:(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+[[:space:]]*(?:,|and|&)[[:space:]]*)*(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#${ISSUE}([^0-9A-Za-z_]|\$)"
-# The repository of a reference: "owner/repo#N" only counts when it is ours.
-REPO_OWNER="${REPO%%/*}"
-REPO_NAME="${REPO#*/}"
-CLAIM_JQ="$(mktemp)"
-trap 'rm -f "$CLAIM_JQ"' EXIT
-cat >"$CLAIM_JQ" <<JQ
-# The noise of upstream's stripNoise (pr-checks.js:25-31): the HTML comments
-# and the code blocks are examples, not claims. The inline code is NOT
-# stripped: upstream's parseClosing keeps it.
-def sin_ruido:
-  gsub("<!--[^>]*-->"; "")
-  | gsub("\`\`\`[^<\`]*\`\`\`"; "")
-  | gsub("~~~[^<~]*~~~"; "");
-
-# A reference to ANOTHER repository is not a claim on ours (upstream skips
-# it in parseClosing). Ours counts, so it becomes the plain form; any other
-# repo-qualified reference to the issue is removed.
-def sin_otros_repos:
-  gsub("(?i)${REPO_OWNER}/${REPO_NAME}#${ISSUE}"; "#${ISSUE}")
-  | gsub("(?i)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#${ISSUE}"; "");
-
-.[] | select(
-    # the title: the rule of the claim bot (referencedIssues)
-    ((.title // "") | test("${TITLE_RE}"))
-    or
-    # the body: the rule of the pull request check (parseClosing), with the
-    # noise out and the references to other repositories out
-    (((.body // "") | sin_ruido | sin_otros_repos) | test("${BODY_RE}"))
-  )
-  # a pull request does not claim ITSELF (claim.js:297: "if (n === pull.number)
-  # continue"): the PR whose number IS the issue we are asking about is not a
-  # holder of it. It is NOT about excluding OUR pull request from the hits:
-  # that is the rule of the same author, which is decided further down.
-  | select((.number | tostring) != "${ISSUE}")
-  | "\(.number)\t\(.author.login // "")"
-JQ
-
-# gh pr list (and not gh api) because the listing of the api returns the body
-# empty in some pull requests and the filter over the body finds nothing.
-# The author comes with it: the rule of the same author needs to know WHO
-# wrote each pull request.
-HITS="$("$GH_BIN" pr list --repo "$REPO" --state open --limit "$LIMIT" \
-        --json number,title,body,author \
-        --jq "$(cat "$CLAIM_JQ")" 2>/dev/null)"
-
-# The hits, one per line: "number<TAB>author" (the author is empty when the
-# tool did not say it).
-HIT_NUMBERS=()
-HIT_AUTHORS=()
-while IFS=$'\t' read -r num author; do
-  num="${num//[!0-9]/}"
-  [ -n "$num" ] || continue
-  author="${author//[[:space:]]/}"
-  HIT_NUMBERS+=("$num")
-  HIT_AUTHORS+=("$author")
-done <<<"$HITS"
-
-if [ "${#HIT_NUMBERS[@]}" -eq 0 ]; then
-  # Distinguish "there is none" from "gh failed": check that the list of
-  # pull requests could be read.
-  #
-  # THE PROBE USES THE SAME FILTER (2026-11-17). The probe used to ask for
-  # the numbers WITHOUT the filter: if the FILTER was what failed (a jq
-  # that does not understand the program, a pattern that does not compile),
-  # the probe answered "the list can be read", the hits were empty, and the
-  # arbiter said THE ISSUE IS FREE. That is the most expensive direction
-  # there is: the orchestrator takes an issue that somebody else holds.
-  if [ -n "${HITS//[[:space:]]/}" ] || ! "$GH_BIN" pr list --repo "$REPO" --state open --limit 1 \
-        --json number,title,body,author --jq "$(cat "$CLAIM_JQ")" >/dev/null 2>&1; then
-    echo "VEREDICTO=ERROR no se pudo leer los PRs de $REPO (gh fallo, o el filtro no se pudo aplicar?)" >&2
-    exit 2
-  fi
-  echo "issue=$ISSUE PRs que lo mencionan: (ninguno)"
-  if [ -n "$OUR_PR" ]; then
-    echo "VEREDICTO=OK el claim es nuestro (PR #$OUR_PR, nadie mas lo menciona)"
-  else
-    echo "VEREDICTO=OK el issue esta libre (nadie lo menciona)"
-  fi
-  exit 0
+# --- the rule ------------------------------------------------------------------
+# The module next to this script, or the one of the orchestrator's bin (a
+# copy of this script that runs outside bin/). Without it the answer is
+# UNKNOWN: an arbiter without its rule does not say "free".
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RULE="$HERE/claim_rule.py"
+[ -f "$RULE" ] || RULE="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}/bin/claim_rule.py"
+if [ ! -f "$RULE" ]; then
+  echo "VEREDICTO=ERROR no esta la regla del claim (claim_rule.py) junto a $0" >&2
+  exit 2
 fi
 
 # --- who we are --------------------------------------------------------------
@@ -246,74 +186,75 @@ resolve_our_author() {
     ''|*[!A-Za-z0-9-]*) OUR_AUTHOR="$OUR_AUTHOR_DEFAULT" ;;
   esac
 }
+# Always: the hold (who is assigned, who the bot says claimed it) has to
+# know who WE are, with or without our pull request.
+resolve_our_author
 
-# Is this pull request OURS?
-is_ours() {
-  local author="$1"
-  [ -n "$author" ] || return 1
-  [ -n "$OUR_AUTHOR" ] || return 1
-  [ "${author,,}" = "${OUR_AUTHOR,,}" ]
+RULE_ARGS=(verify --issue "$ISSUE" --me "$OUR_AUTHOR" --repo "$REPO")
+[ -n "$OUR_PR" ] && RULE_ARGS+=(--our-pr "$OUR_PR")
+
+TMPD="$(mktemp -d "${TMPDIR:-/tmp}/claim-verify.XXXXXX")"
+trap 'rm -rf "$TMPD"' EXIT
+
+# The verdict of the rule, checked: an exit code without its VEREDICTO line
+# (a python that died: an uncaught exception exits 1) is NOT a lost claim.
+# close-slot.sh CLOSES our pull request on rc=1.
+run_rule() {
+  local out rc
+  out="$(python3 "$RULE" "${RULE_ARGS[@]}" "$@")"
+  rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out" | grep -q '^VEREDICTO=OK' || rc=99 ;;
+    1) printf '%s\n' "$out" | grep -qE '^VEREDICTO=(OCUPADO|PERDIDO)' || rc=99 ;;
+  esac
+  if [ "$rc" -eq 99 ]; then
+    echo "VEREDICTO=ERROR la regla del claim no dio un veredicto (claim_rule.py)" >&2
+    return 2
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return "$rc"
 }
 
-# --- the winner --------------------------------------------------------------
-# The pull request with the lowest number that COMPETES.
+# --- 1. the photo, when it was given and it serves -----------------------------
+if [ -n "$SNAPSHOT" ]; then
+  run_rule --snapshot "$SNAPSHOT" --max-age-min "$MAX_AGE"
+  RC=$?
+  # 10: the photo does not serve (missing, old, incomplete, does not know the
+  # issue): the rule said why on stderr, and the answer comes from GitHub.
+  [ "$RC" -ne 10 ] && exit "$RC"
+fi
+
+# --- 2. live -------------------------------------------------------------------
+# THE PREFILTER, NOT THE RULE: it keeps the open pull requests whose title or
+# body contains "#N" (or "#0N": claim.js reads "#07058" as 7058) and gives
+# them whole, one JSON per line; claim_rule.py decides. Every claim of either
+# bot contains that text, so the prefilter never hides a claimant.
 #
-# Our own pull requests do NOT compete with us (the upstream skips the pull
-# requests of the same author): the work stacked does not compete with
-# itself. The one that is being verified always competes. Without our pull
-# request there is no way to tell ours from the others, so every pull
-# request that claims the issue blocks it.
-OUR_HOLDER=""
-WINNER=""
-WINNER_AUTHOR=""
-if [ -n "$OUR_PR" ]; then
-  resolve_our_author
-fi
-for i in "${!HIT_NUMBERS[@]}"; do
-  num="${HIT_NUMBERS[$i]}"
-  author="${HIT_AUTHORS[$i]}"
-  if [ -n "$OUR_PR" ] && [ "$num" != "$OUR_PR" ] && is_ours "$author"; then
-    if [ -z "$OUR_HOLDER" ] || [ "$num" -lt "$OUR_HOLDER" ]; then
-      OUR_HOLDER="$num"
-    fi
-    continue
-  fi
-  if [ -z "$WINNER" ] || [ "$num" -lt "$WINNER" ]; then
-    WINNER="$num"
-    WINNER_AUTHOR="$author"
-  fi
-done
+# The pattern has no backslash and no lookahead: the jq of gh is gojq (the
+# regexp of Go). "#N" is the FIRST "#digits" of the program on purpose: the
+# stubs of the tests read the issue from there.
+PREFILTER=".[] | select(((.title // \"\") + \" \" + (.body // \"\")) | test(\"#${ISSUE}([^0-9]|\$)\") or test(\"#0+${ISSUE}([^0-9]|\$)\")) | {number, author: (.author.login // \"\"), title: (.title // \"\"), body: (.body // \"\")} | @json"
 
-echo "issue=$ISSUE PRs que lo mencionan: $(printf '%s\n' "${HIT_NUMBERS[@]}" | tr '\n' ' ')(gana el ${WINNER:-$OUR_HOLDER})"
-if [ -n "$OUR_HOLDER" ]; then
-  echo "issue=$ISSUE PRs nuestros (no compiten con nosotros): $OUR_HOLDER"
+# gh pr list (and not gh api) because the listing of the api returns the body
+# empty in some pull requests and the filter over the body finds nothing.
+# Its exit code is the answer to "could the list be read": a jq that gh does
+# not understand fails the call too, so a broken filter is never "free".
+if ! "$GH_BIN" pr list --repo "$REPO" --state open --limit "$LIMIT" \
+      --json number,title,body,author \
+      --jq "$PREFILTER" >"$TMPD/prs" 2>"$TMPD/prs.err"; then
+  echo "VEREDICTO=ERROR no se pudo leer los PRs de $REPO (gh fallo, o el filtro no se pudo aplicar?)" >&2
+  exit 2
 fi
 
-if [ -n "$OUR_PR" ]; then
-  if [ -z "$WINNER" ]; then
-    # Nobody of another author claims the issue: the claim is OURS (another
-    # of our pull requests holds it).
-    echo "issue=$ISSUE el claim lo tiene nuestro PR #$OUR_HOLDER: no se pierde"
-    echo "VEREDICTO=OK el claim es nuestro (PR #$OUR_PR)"
-    exit 0
-  fi
-  if [ "$WINNER" = "$OUR_PR" ]; then
-    echo "VEREDICTO=OK el claim es nuestro (PR #$OUR_PR)"
-    exit 0
-  fi
-  echo "VEREDICTO=PERDIDO el PR #$OUR_PR perdio contra el #$WINNER"
-  if [ -n "$WINNER_AUTHOR" ]; then
-    echo "  el PR #$WINNER es de $WINNER_AUTHOR"
-  fi
-  echo "  cerralo con: gh pr close $OUR_PR"
-  echo "  libera el slot con: bash bin/slot-lock.sh --slot $ISSUE --release"
-  exit 1
+# The hold of claim.js (somebody assigned, the 'in progress' label), only
+# without our pull request: after our draft the bot labels the issue for US.
+# An issue that cannot be read leaves the hold unchecked (the rule says so on
+# stderr); it does not turn the PR verdict into UNKNOWN.
+if [ -z "$OUR_PR" ]; then
+  "$GH_BIN" issue view "$ISSUE" --repo "$REPO" --json number,labels,assignees,comments \
+    >"$TMPD/issue" 2>/dev/null || : >"$TMPD/issue"
+  run_rule --prs-lines "$TMPD/prs" --issue-json "$TMPD/issue"
+else
+  run_rule --prs-lines "$TMPD/prs"
 fi
-
-# Without our pull request: only says who won.
-if [ -n "$WINNER" ] && [ "$WINNER" -le 0 ]; then
-  echo "VEREDICTO=OK el issue esta libre (nadie lo menciona)"
-  exit 0
-fi
-echo "VEREDICTO=OCUPADO el PR #$WINNER ya reclama #$ISSUE"
-exit 1
+exit $?

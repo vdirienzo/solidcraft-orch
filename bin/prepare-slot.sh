@@ -29,9 +29,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
-# The siblings: the cron runs a COPY of this script from ~/.hermes/scripts/,
-# where the siblings are NOT. They live in the orchestrator's bin. When this
-# script runs from the repo, they are right here.
+# The siblings live next to this script: the crontab runs the scripts of the
+# repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
+# that runs outside bin/ without them.
 if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_BIN:-$ORCH_DIR/bin}"; fi
 REPO="${SOLIDCRAFT_REPO:-/home/user/Projects/solidcraft-orch}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
@@ -67,10 +67,17 @@ fi
 # 1. EL ARBITRO DEL CLAIM. Si dice que lo tiene otro, no se toca nada.
 # Lo que dice el arbitro va al stderr: la wave lo escribe en su salida, y un
 # "no se pudo preparar" sin el motivo no se puede arreglar.
+#
+# LA FOTO DE next-issue.py (2026-11-21): la wave llama a next-issue.py y en
+# seguida a este script, y los dos le preguntaban a GitHub por los ~1000 PRs
+# abiertos (~11 paginas cada vez). El arbitro lee la foto de bin/gh_snapshot.py
+# si tiene menos de GH_SNAPSHOT_MAX_AGE_MIN minutos (15) y conoce el issue; si
+# no, pregunta en vivo como antes. El gate y publish-pr.sh siguen en vivo.
+SNAPSHOT="${GH_SNAPSHOT:-$ORCH_DIR/state/cache/gh-snapshot.json}"
 if [ -n "$OUR_PR" ]; then
-  CLAIM_OUT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" --our-pr "$OUR_PR" 2>&1)"
+  CLAIM_OUT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" --our-pr "$OUR_PR" --snapshot "$SNAPSHOT" 2>&1)"
 else
-  CLAIM_OUT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" 2>&1)"
+  CLAIM_OUT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" --snapshot "$SNAPSHOT" 2>&1)"
 fi
 CLAIM_RC=$?
 if [ "$CLAIM_RC" -ne 0 ]; then

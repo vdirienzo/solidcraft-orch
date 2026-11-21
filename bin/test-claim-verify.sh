@@ -90,6 +90,12 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   fi
   exit 0
 fi
+# `gh issue view N --json labels,assignees,comments` (2026-11-21): the hold
+# of claim.js. Without GH_ISSUE_FIXTURE it answers `[]`, like before.
+if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ -n "${GH_ISSUE_FIXTURE:-}" ]; then
+  cat "$GH_ISSUE_FIXTURE"
+  exit 0
+fi
 printf '[]\n'
 exit 0
 STUB
@@ -303,26 +309,46 @@ else
   bad "el rival con el issue en el titulo y en el body lo reclama" "rc=$RC"
 fi
 
-# THE THREE CASES THAT MADE THE ARBITER SAY "TAKEN" FOR A FREE ISSUE
-# (2026-11-17). The three of them come from upstream's own parser:
-#   - the noise: upstream strips the HTML comments and the code blocks
-#     before it parses (stripNoise, pr-checks.js:25-31), so a "Fixes #N"
-#     INSIDE A CODE BLOCK is an example, not a claim;
-#   - another repository: upstream skips "owner/repo#N" when the repo is
-#     not ours (parseClosing);
+# THE CASES OF UPSTREAM'S OWN PARSERS (2026-11-17, corrected 2026-11-21):
+#   - the noise: pr-checks.js strips the HTML comments and the code blocks
+#     before it parses (stripNoise), but the CLAIM BOT (claim.js,
+#     referencedIssues) does NOT: for the bot a "Fixes #N" inside a code
+#     block IS a claim. This case used to say "free": it encoded the
+#     stripNoise of pr-checks.js alone, and "free" for an issue the bot gives
+#     to somebody else is the expensive direction (a whole slot on an issue
+#     that was never free). The rule is the UNION of the two bots now
+#     (bin/claim_rule.py; bin/test-claim-rule.py runs the real claim.js);
+#   - another repository: neither bot counts "owner/repo#N" when the repo is
+#     not ours (claim.js needs a space before the '#', parseClosing skips it);
 #   - our own pull request does not claim its own number (claim.js:297).
-# Each of them costs a whole slot of the machine when it goes wrong.
 # The bodies with real newlines: the write_fixture takes the body as one
 # argument, and a literal "\n" would be two characters, not a line break.
 CUERPO_EN_BLOQUE=$'```\nFixes #361\n```'
 CUERPO_CON_RUIDO=$'antes\n```\nFixes #362\n```\ndespues\nFixes #361'
 write_fixture "1700|un titulo sin issue|$CUERPO_EN_BLOQUE"
 claim_verify 361
-if [ "$RC" -eq 0 ]; then
-  ok "un 'Fixes #361' dentro de un bloque de codigo NO lo reclama (el upstream saca el ruido)"
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'OCUPADO el PR #1700 ya reclama #361'; then
+  ok "un 'Fixes #361' dentro de un bloque de codigo SI lo reclama (claim.js no saca el ruido)"
 else
-  bad "un 'Fixes #361' dentro de un bloque de codigo NO lo reclama" \
+  bad "un 'Fixes #361' dentro de un bloque de codigo SI lo reclama (claim.js no saca el ruido)" \
       "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+write_fixture '1703|un titulo sin issue|<!-- Fixes #361 -->'
+claim_verify 361
+if [ "$RC" -eq 1 ]; then
+  ok "un 'Fixes #361' dentro de un comentario HTML SI lo reclama (claim.js)"
+else
+  bad "un 'Fixes #361' dentro de un comentario HTML SI lo reclama (claim.js)" "rc=$RC"
+fi
+
+# claim.js reads "#07058" as the issue 7058 (Number("07058")).
+write_fixture '1704|Fix|Fixes #07058'
+claim_verify 7058
+if [ "$RC" -eq 1 ]; then
+  ok "'Fixes #07058' reclama el #7058 (claim.js lee el numero)"
+else
+  bad "'Fixes #07058' reclama el #7058 (claim.js lee el numero)" "rc=$RC"
 fi
 
 write_fixture '1701|otro titulo|Fixes other/repo#361'
@@ -546,6 +572,117 @@ if printf '%s' "$OUT" | grep -q 'VEREDICTO=PERDIDO el PR #900 perdio contra el #
 else
   bad "el texto de VEREDICTO=PERDIDO es el de siempre" \
       "$(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+
+# ============================================================================
+# THE PHOTO (--snapshot) AND THE HOLD (2026-11-21)
+# ============================================================================
+echo
+echo "== la foto de bin/gh_snapshot.py y el hold de claim.js =="
+
+# write_snapshot <file> <age_min> <complete> <issues_json> <prs_json>
+write_snapshot() {
+  python3 - "$@" <<'PY'
+import json, sys, time
+path, age, complete, issues, prs = sys.argv[1:6]
+now = time.time() - float(age) * 60
+json.dump({"version": 1, "complete": complete == "yes", "repo": "tangency-labs/solidcraft",
+           "generated_epoch": now, "started_epoch": now, "full_epoch": now, "mode": "full",
+           "issues": json.loads(issues), "prs": json.loads(prs)}, open(path, "w"))
+PY
+}
+SNAP="$TESTDIR/snap.json"
+ISSUE_361='[{"number":361,"title":"t","labels":[],"assignees":[],"comments":[]}]'
+RIVAL_361='[{"number":1608,"title":"Correct presets (#361)","body":"","author":{"login":"rival"}}]'
+
+# A fresh photo answers WITHOUT asking GitHub for the pull requests.
+write_snapshot "$SNAP" 2 yes "$ISSUE_361" "$RIVAL_361"
+write_fixture '9|nada|nada'
+: >"$GH_LOG"
+claim_verify 361 --snapshot "$SNAP"
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'OCUPADO el PR #1608 ya reclama #361' \
+   && ! grep -q '^pr list' "$GH_LOG"; then
+  ok "--snapshot: la foto fresca responde sin pedirle los PRs a GitHub (rc=1)"
+else
+  bad "--snapshot: la foto fresca responde sin pedirle los PRs a GitHub" \
+      "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ') gh: $(tr '\n' ' ' <"$GH_LOG")"
+fi
+
+GH_SNAPSHOT="$SNAP" claim_verify 361 --our-pr 1608
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'VEREDICTO=OK el claim es nuestro (PR #1608)'; then
+  ok "GH_SNAPSHOT hace lo mismo que --snapshot (y con --our-pr)"
+else
+  bad "GH_SNAPSHOT hace lo mismo que --snapshot (y con --our-pr)" "rc=$RC $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+# A photo that is too old, incomplete or that does not know the issue: live.
+write_snapshot "$SNAP" 60 yes "$ISSUE_361" "$RIVAL_361"
+: >"$GH_LOG"
+claim_verify 361 --snapshot "$SNAP" --max-age-min 15
+if [ "$RC" -eq 0 ] && grep -q '^pr list' "$GH_LOG" && printf '%s' "$OUT" | grep -q 'se pregunta a GitHub en vivo'; then
+  ok "una foto vieja no se usa: se pregunta en vivo (y la fixture en vivo esta libre)"
+else
+  bad "una foto vieja no se usa: se pregunta en vivo" "rc=$RC $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+write_snapshot "$SNAP" 1 no "$ISSUE_361" "$RIVAL_361"
+: >"$GH_LOG"
+claim_verify 361 --snapshot "$SNAP"
+if [ "$RC" -eq 0 ] && grep -q '^pr list' "$GH_LOG"; then
+  ok "una foto incompleta no se usa: se pregunta en vivo"
+else
+  bad "una foto incompleta no se usa: se pregunta en vivo" "rc=$RC"
+fi
+write_snapshot "$SNAP" 1 yes '[]' "$RIVAL_361"
+: >"$GH_LOG"
+claim_verify 361 --snapshot "$SNAP"
+if [ "$RC" -eq 0 ] && grep -q '^pr list' "$GH_LOG"; then
+  ok "una foto que no conoce el issue no lo juzga: se pregunta en vivo"
+else
+  bad "una foto que no conoce el issue no lo juzga: se pregunta en vivo" "rc=$RC"
+fi
+claim_verify 361 --snapshot "$TESTDIR/no-existe.json"
+if [ "$RC" -eq 0 ]; then
+  ok "sin foto (el archivo no esta) se pregunta en vivo"
+else
+  bad "sin foto (el archivo no esta) se pregunta en vivo" "rc=$RC"
+fi
+GH_FAIL=1 claim_verify 361 --snapshot "$TESTDIR/no-existe.json"
+if [ "$RC" -eq 2 ]; then
+  ok "sin foto y sin GitHub: UNKNOWN (rc=2), nunca libre"
+else
+  bad "sin foto y sin GitHub: UNKNOWN (rc=2), nunca libre" "rc=$RC"
+fi
+
+# The hold: the 'in progress' label of somebody else's /claim, no PR.
+HELD='[{"number":361,"title":"t","labels":[{"name":"in progress"}],"assignees":[],"comments":[{"author":{"login":"github-actions"},"body":"Claimed by @alguien. Please open a draft PR."}]}]'
+write_snapshot "$SNAP" 1 yes "$HELD" '[]'
+claim_verify 361 --snapshot "$SNAP"
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "VEREDICTO=OCUPADO el issue #361 lo retiene alguien (etiqueta 'in progress')"; then
+  ok "la etiqueta 'in progress' de un /claim ajeno retiene el issue (rc=1)"
+else
+  bad "la etiqueta 'in progress' de un /claim ajeno retiene el issue" "rc=$RC $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
+fi
+claim_verify 361 --our-pr 4242 --snapshot "$SNAP"
+if [ "$RC" -eq 0 ]; then
+  ok "con nuestro PR el hold no cuenta (el bot etiqueta el issue por NUESTRO draft)"
+else
+  bad "con nuestro PR el hold no cuenta" "rc=$RC"
+fi
+# The same hold, live: `gh issue view` answers the record of the issue.
+printf '%s\n' '{"number":361,"labels":[],"assignees":[{"login":"otra"}],"comments":[]}' >"$TESTDIR/issue.json"
+write_fixture '9|nada|nada'
+GH_ISSUE_FIXTURE="$TESTDIR/issue.json" claim_verify 361
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q 'lo retiene otra (asignado)'; then
+  ok "en vivo, un asignado ajeno retiene el issue (rc=1)"
+else
+  bad "en vivo, un asignado ajeno retiene el issue" "rc=$RC $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
+fi
+printf '%s\n' '{"number":361,"labels":[],"assignees":[{"login":"ourfork"}],"comments":[]}' >"$TESTDIR/issue.json"
+GH_ISSUE_FIXTURE="$TESTDIR/issue.json" claim_verify 361
+if [ "$RC" -eq 0 ]; then
+  ok "en vivo, asignado a nosotros no nos lo retiene (rc=0)"
+else
+  bad "en vivo, asignado a nosotros no nos lo retiene" "rc=$RC"
 fi
 
 # --- the summary -------------------------------------------------------------
