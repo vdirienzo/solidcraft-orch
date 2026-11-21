@@ -46,7 +46,16 @@ AGENT_MODEL="${AGENT_MODEL:-$(read_policy MODEL 2>/dev/null || true)}"
 AGENT_NAME="${AGENT_NAME:-$(read_policy AGENT_NAME 2>/dev/null || true)}"
 [ -n "$AGENT_NAME" ] || AGENT_NAME="build"
 
+# EL TECHO DE TIEMPO DEL AGENTE (2026-11-21): dispatch-slot.sh lanzaba el
+# opencode sin techo, y un agente trabado quemaba tokens y tenia el slot (y su
+# lock) tomado hasta que alguien lo viera. full-stop incluye compilar, probar y
+# capturar evidencia, asi que el techo es holgado; la politica de la maquina lo
+# puede bajar con AGENT_TIMEOUT_MIN en config.env.
+AGENT_TIMEOUT_MIN="${AGENT_TIMEOUT_MIN:-$(read_policy AGENT_TIMEOUT_MIN 2>/dev/null || true)}"
+[[ "$AGENT_TIMEOUT_MIN" =~ ^[0-9]+$ ]] || AGENT_TIMEOUT_MIN=180
+
 printf 'AGENT_BIN=%s\n' "$AGENT_BIN"
+printf 'AGENT_TIMEOUT_MIN=%s\n' "$AGENT_TIMEOUT_MIN"
 printf 'AGENT_MODEL=%s\n' "$AGENT_MODEL"
 printf 'AGENT_NAME=%s\n' "$AGENT_NAME"
 

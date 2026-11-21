@@ -306,10 +306,73 @@ done < "$TMP/matched.tsv"
 #
 # Asi que primero se termina lo que esta a medias: el slot se vuelve a
 # preparar (el worktree y la rama ya estan, no se tocan) y se despacha.
+#
+# EL MOTIVO, NO UN "NO SE PUDO" (2026-11-21): el stderr de prepare-slot.sh
+# iba a /dev/null, y el slot 19690 fallo turno tras turno con "no se pudo
+# preparar" sin que nadie supiera por que (el arbitro tomaba nuestro propio PR
+# #20081 por un competidor). Ahora el codigo de salida y el stderr van a la
+# salida de la wave, y cada fallo suma en el contador `resume_failures` del
+# slot (state-set.py --merge): despues de WAVE_MAX_RESUME_FAILS fallos
+# seguidos la wave deja de reintentarlo, y un humano lo mira. Un despacho que
+# arranca pone el contador a 0.
+MAX_RESUME_FAILS="${WAVE_MAX_RESUME_FAILS:-3}"
+# Los fallos de un turno de la wave, con su motivo, en la salida de la wave.
+log_failure_output() {
+  [ -s "$1" ] || return 0
+  sed 's/^/wave:     /' "$1" | tail -5
+}
+# Suma un fallo al contador del slot guardado (y guarda el ultimo motivo).
+count_resume_failure() {
+  [ -n "$DRY" ] && return 0
+  python3 "$ORCH_BIN/state-set.py" --merge slots "$1" "$(python3 - "$2" "$3" <<'PY'
+import json, sys
+print(json.dumps({
+    "resume_failures": int(sys.argv[1]),
+    "resume_last_error": sys.argv[2][-400:],
+}))
+PY
+)" >/dev/null 2>&1 || true
+}
 FREE_SAVED="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
 FREE="${FREE_SAVED:-0}"
 if [ "${FREE:-0}" -gt 0 ]; then
-  for SAVED in $(python3 - "$ORCH_DIR/state.json" <<'PY'
+  while IFS=$'\t' read -r SAVED FAILS; do
+    [ -n "$SAVED" ] || continue
+    FAILS="${FAILS:-0}"
+    # LA CAJA MIDE: un slot libre, un agente. Esta caja cabe UNO (mem_slots=1),
+    # asi que el trabajo a medias se retoma de a uno, no de a dos.
+    [ "${FREE:-0}" -gt 0 ] || break
+    if [ "$FAILS" -ge "$MAX_RESUME_FAILS" ]; then
+      echo "wave: el slot $SAVED fallo $FAILS veces seguidas al retomarlo: no se reintenta (ver resume_last_error en su estado; con resume_failures=0 se vuelve a probar)"
+      continue
+    fi
+    if [ -n "$DRY" ]; then
+      echo "wave: (seco) retomaría el slot $SAVED (el trabajo está a medias en el fork)"
+      FREE=$((FREE - 1))
+      continue
+    fi
+    BRIEF="$(bash "$ORCH_BIN/prepare-slot.sh" "$SAVED" "wave-$$" </dev/null 2>"$TMP/prepare-$SAVED.err")"
+    RC=$?
+    if [ "$RC" -ne 0 ] || [ -z "$BRIEF" ]; then
+      FAILS=$((FAILS + 1))
+      echo "wave: el slot $SAVED no se pudo preparar (prepare-slot rc=$RC, fallo $FAILS de $MAX_RESUME_FAILS): se sigue con los issues nuevos"
+      log_failure_output "$TMP/prepare-$SAVED.err"
+      count_resume_failure "$SAVED" "$FAILS" "prepare-slot rc=$RC: $(tail -3 "$TMP/prepare-$SAVED.err" 2>/dev/null | tr '\n' ' ')"
+      continue
+    fi
+    LOG="$(bash "$ORCH_BIN/dispatch-slot.sh" "$SAVED" </dev/null 2>"$TMP/dispatch-$SAVED.err")"
+    RC=$?
+    if [ -z "$LOG" ]; then
+      FAILS=$((FAILS + 1))
+      echo "wave: el agente del slot $SAVED no arrancó (dispatch-slot rc=$RC, fallo $FAILS de $MAX_RESUME_FAILS)"
+      log_failure_output "$TMP/dispatch-$SAVED.err"
+      count_resume_failure "$SAVED" "$FAILS" "dispatch-slot rc=$RC: $(tail -3 "$TMP/dispatch-$SAVED.err" 2>/dev/null | tr '\n' ' ')"
+      continue
+    fi
+    echo "wave: el agente del slot $SAVED arrancó con el trabajo a medias (log: $LOG)"
+    python3 "$ORCH_BIN/state-set.py" --merge slots "$SAVED" '{"resume_failures": 0}' >/dev/null 2>&1 || true
+    FREE=$((FREE - 1))
+  done < <(python3 - "$ORCH_DIR/state.json" <<'PY'
 import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -323,56 +386,82 @@ for name, slot in (data.get("slots") or {}).items():
         continue
     if slot.get("pr"):
         continue
-    print(name)
+    try:
+        fails = int(slot.get("resume_failures") or 0)
+    except (TypeError, ValueError):
+        fails = 0
+    print(f"{name}\t{fails}")
 PY
-  ); do
-    [ -n "$SAVED" ] || continue
-    # LA CAJA MIDE: un slot libre, un agente. Esta caja cabe UNO (mem_slots=1),
-    # asi que el trabajo a medias se retoma de a uno, no de a dos.
-    [ "${FREE:-0}" -gt 0 ] || break
-    if [ -n "$DRY" ]; then
-      echo "wave: (seco) retomaría el slot $SAVED (el trabajo está a medias en el fork)"
-      FREE=$((FREE - 1))
-      continue
-    fi
-    BRIEF="$(bash "$ORCH_BIN/prepare-slot.sh" "$SAVED" "wave-$$" 2>/dev/null)"
-    if [ -z "$BRIEF" ]; then
-      echo "wave: el slot $SAVED no se pudo preparar: se sigue con los issues nuevos"
-      continue
-    fi
-    LOG="$(bash "$ORCH_BIN/dispatch-slot.sh" "$SAVED" 2>/dev/null)"
-    if [ -z "$LOG" ]; then
-      echo "wave: el agente del slot $SAVED no arrancó"
-      continue
-    fi
-    echo "wave: el agente del slot $SAVED arrancó con el trabajo a medias (log: $LOG)"
-    FREE=$((FREE - 1))
-  done
+  )
 fi
 
 # --- 4. EMPEZAR LOS SLOTS QUE ESTAN LIBRES ----------------------------------
+#
+# UN FALLO ES UN INTENTO (2026-11-21). Antes, cuando prepare-slot.sh o
+# dispatch-slot.sh fallaban, el bucle hacia `continue` sin bajar FREE, y
+# next-issue.py (que no tiene memoria) devolvia el MISMO issue: un bucle sin
+# fin que no despachaba nada. Ahora:
+#   - la wave lleva la lista TRIED de lo que ya probo en el turno y se la pasa
+#     al selector (--exclude), que no la devuelve otra vez;
+#   - TRIED empieza con los slots que ya existen (estado, locks, worktrees): un
+#     issue con su slot en vuelo o guardado no es un issue nuevo;
+#   - un issue cuyo lock esta tomado o cuyo worktree ya existe se salta;
+#   - cada fallo cuenta, y despues de WAVE_MAX_FAILS fallos el turno termina.
+MAX_FAILS="${WAVE_MAX_FAILS:-3}"
+TRIED="$(python3 - "$TMP/slots.json" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        slots = json.load(fh)
+except (OSError, json.JSONDecodeError):
+    slots = []
+print(",".join(str(s["issue"]) for s in slots if isinstance(s, dict) and "issue" in s))
+PY
+)"
+FAILED=0
 FREE="$(bash "$ORCH_BIN/slots.sh" 2>/dev/null | grep -oE 'free_slots=[0-9]+' | head -1 | cut -d= -f2)"
 FREE="${FREE:-0}"
 echo "wave: free_slots=$FREE"
 while [ "${FREE:-0}" -gt 0 ]; do
-  ISSUE="$(python3 "$ORCH_BIN/next-issue.py" 2>/dev/null | head -1)"
+  if [ "$FAILED" -ge "$MAX_FAILS" ]; then
+    echo "wave: $FAILED intentos fallaron en este turno: se para aca (los probados: ${TRIED:-ninguno})"
+    break
+  fi
+  ISSUE="$(python3 "$ORCH_BIN/next-issue.py" --exclude "$TRIED" 2>"$TMP/next-issue.err" | head -1)"
   if [ -z "$ISSUE" ] || ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
     echo "wave: no hay ningún issue libre que valga un agente ahora"
+    log_failure_output "$TMP/next-issue.err"
     break
+  fi
+  TRIED="${TRIED:+$TRIED,}$ISSUE"
+  if ! bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --status >/dev/null 2>&1; then
+    # --status sale 0 cuando el lock esta LIBRE (la convencion del repo).
+    echo "wave: el slot $ISSUE ya tiene el lock tomado: se salta"
+    continue
+  fi
+  if [ -d "$WORKTREES_DIR/issue-$ISSUE" ]; then
+    echo "wave: el slot $ISSUE ya tiene worktree ($WORKTREES_DIR/issue-$ISSUE): se salta, no es un issue nuevo"
+    continue
   fi
   if [ -n "$DRY" ]; then
     echo "wave: (seco) prepararía el slot $ISSUE"
     FREE=$((FREE - 1))
     continue
   fi
-  BRIEF="$(bash "$ORCH_BIN/prepare-slot.sh" "$ISSUE" "wave-$$" 2>/dev/null)"
-  if [ -z "$BRIEF" ]; then
-    echo "wave: el issue #$ISSUE no se pudo preparar (el claim lo tiene otro): se prueba el siguiente"
+  BRIEF="$(bash "$ORCH_BIN/prepare-slot.sh" "$ISSUE" "wave-$$" 2>"$TMP/prepare-$ISSUE.err")"
+  RC=$?
+  if [ "$RC" -ne 0 ] || [ -z "$BRIEF" ]; then
+    FAILED=$((FAILED + 1))
+    echo "wave: el issue #$ISSUE no se pudo preparar (prepare-slot rc=$RC, fallo $FAILED de $MAX_FAILS): se prueba el siguiente"
+    log_failure_output "$TMP/prepare-$ISSUE.err"
     continue
   fi
-  LOG="$(bash "$ORCH_BIN/dispatch-slot.sh" "$ISSUE" 2>/dev/null)"
+  LOG="$(bash "$ORCH_BIN/dispatch-slot.sh" "$ISSUE" 2>"$TMP/dispatch-$ISSUE.err")"
+  RC=$?
   if [ -z "$LOG" ]; then
-    echo "wave: el agente del slot $ISSUE no arrancó"
+    FAILED=$((FAILED + 1))
+    echo "wave: el agente del slot $ISSUE no arrancó (dispatch-slot rc=$RC, fallo $FAILED de $MAX_FAILS)"
+    log_failure_output "$TMP/dispatch-$ISSUE.err"
     continue
   fi
   echo "wave: el agente del slot $ISSUE arrancó (log: $LOG)"

@@ -448,6 +448,11 @@ def menciona_issue(body):
     return bool(RE_NUMERO.search(body or ""))
 
 
+def titulo_sin_numero(title):
+    """El titulo de un PR listo: sin el " (#N)" del final que lleva el draft del claim."""
+    return re.sub(r"\s*\(#\d+\)\s*$", "", title or "").strip()
+
+
 def reparar_body(body, title):
     """El body con la referencia al issue que le falta, o None si no hay que tocarlo.
 
@@ -902,15 +907,19 @@ def main():
         # La referencia al issue: SOLO si el body no menciona ninguno. Un body que solo
         # menciona el issue puede ser un fix parcial, y escribirle 'Fixes #N' le
         # cerraria un issue al autor por sorpresa.
+        #
+        # EL PIPELINE YA NO EDITA EL BODY (2026-11-21): `gh pr edit --body` vuelve
+        # a correr los checks de upstream y bin/publish-pr.sh lo prohibe; el body
+        # lo escribe el agente al publicar. Un body sin issue se dice y el PR
+        # queda en draft.
         nuevo = reparar_body(body, title)
         if nuevo is not None:
-            rc, _ = gh("pr", "edit", str(num), "--repo", REPO, "--body", nuevo)
-            if rc == 0:
-                log(f"  PR #{num}: le agregue 'Fixes #{issue_del_titulo(title)}' "
-                    f"(el body no mencionaba ningun issue)")
-                edite = True
-            else:
-                problemas.append(f"PR #{num}: 'gh pr edit' fallo (rc={rc})")
+            log(f"  PR #{num}: el body no menciona ningun issue (falta 'Fixes "
+                f"#{issue_del_titulo(title)}') -> sigue en draft; el body no se edita "
+                f"desde aca")
+            problemas.append(f"PR #{num}: el body no tiene 'Fixes #N'")
+            estado = PENDIENTE
+            detalle_ci = "el body no tiene 'Fixes #N'"
         if edite:
             # Se edito el body: el workflow pr-checks vuelve a correr (types: edited) y su
             # check todavia no existe. El CI que acabamos de leer judged el body VIEJO.
@@ -986,48 +995,24 @@ def main():
             continue
         log(f"  PR #{num} (issue #{iss}): gate VERDE y CI de GitHub VERDE -> pasado a ready")
 
-        # El comentario del veredicto: con marcador, y UNA sola vez por head sha.
-        marcador = MARCADOR_VERDICT % sha
-        if clave_ya_escrita(num, sha):
-            log(f"  PR #{num} (issue #{iss}): el veredicto de este SHA ya se habia "
-                f"comentado -> no lo repito")
-            continue
-        ya, detalle = ya_comentado(num, sha)
-        if ya is None:
-            # No se pudo saber si ya esta: ante la duda no se postea (un comentario
-            # repetido cada 5 minutos en un PR publico es peor que uno que falta).
-            log(f"  PR #{num} (issue #{iss}): no se pudo saber si el veredicto ya estaba "
-                f"comentado ({detalle}) -> no lo posteo ahora")
-            problemas.append(f"PR #{num}: no se pudo leer los comentarios del PR")
-            continue
-        if ya:
-            escribir_clave(num, sha)
-            log(f"  PR #{num} (issue #{iss}): el veredicto de este SHA ya estaba en el PR "
-                f"-> no lo repito")
-            continue
-        # La clave de idempotencia, ANTES del efecto.
-        ok, err = escribir_clave(num, sha)
-        if not ok:
-            log(f"  PR #{num} (issue #{iss}): no se pudo escribir la clave del veredicto "
-                f"({err}) -> no lo posteo (mejor no repetir que duplicar)")
-            problemas.append(f"PR #{num}: no se pudo escribir la clave del veredicto")
-            continue
-        cuerpo = (f"{marcador}\n\n"
-                  f"Gate local en verde y CI de GitHub en verde.\n\n"
-                  f"- SHA: `{sha}`\n"
-                  f"- Veredicto: `{v['verdict']}` (GATE_STATUS: {v['status']})\n"
-                  f"- Fallos nuevos: {v['new_failures'] or '0'}\n"
-                  f"- Fallos preexistentes en origin/main: {v['preexisting'] or '0'}\n")
-        rc, _ = gh("pr", "comment", str(num), "--repo", REPO, "--body", cuerpo)
-        if rc != 0:
-            # Lo que no se hizo, se vuelve a hacer en la pasada siguiente.
-            borrar_clave(num, sha)
-            log(f"  PR #{num} (issue #{iss}): 'gh pr comment' fallo -> no quedo el "
-                f"comentario del veredicto")
-            problemas.append(f"PR #{num}: 'gh pr comment' fallo (rc={rc})")
-            continue
-        log(f"  PR #{num} (issue #{iss}): deje el comentario del veredicto con el "
-            f"marcador del head sha")
+        # SIN COMENTARIO DE ESTADO (2026-11-21): el pipeline dejaba en el PR un
+        # comentario "Gate local en verde y CI de GitHub en verde" (en castellano,
+        # en un repo que exige ingles). La guia de upstream
+        # (.agents/skills/solidcraft-babysit-pr/SKILL.md) dice "No status
+        # comments": el veredicto queda en el log y en el estado, no en GitHub.
+        #
+        # EL TITULO SIN EL NUMERO (2026-11-21): el draft del claim se titula
+        # "<resumen> (#N)" (el bot del claim lee el #N), pero un PR listo para
+        # revisar no lleva el numero en el titulo: el merge le agrega "(#PR)"
+        # (.agents/skills/solidcraft-file-pr/SKILL.md). El "Fixes #N" del body
+        # sigue sosteniendo el claim.
+        limpio = titulo_sin_numero(title)
+        if limpio and limpio != title:
+            rc, _ = gh("pr", "edit", str(num), "--repo", REPO, "--title", limpio)
+            if rc == 0:
+                log(f"  PR #{num} (issue #{iss}): titulo sin el numero del issue -> {limpio!r}")
+            else:
+                problemas.append(f"PR #{num}: 'gh pr edit --title' fallo (rc={rc})")
 
     log(f"fin: {pendientes} encolado(s) ahora, {len(queued)} en la cola, "
         f"{len(verds)} con veredicto")

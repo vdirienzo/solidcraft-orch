@@ -68,15 +68,37 @@ eval "$(bash "$ORCH_BIN/agent-env.sh")" || {
   exit 4
 }
 MSG="$(cat "$BRIEF")"
+# EL TURNO CON TECHO, TITULO Y CUENTA (2026-11-21):
+# - `timeout`: un agente trabado ya no tiene el slot para siempre (el techo es
+#   AGENT_TIMEOUT_MIN de bin/agent-env.sh; --kill-after si no sale con TERM).
+# - `--title issue-N`: la sesion se encuentra en `opencode session list`.
+# - `--format json`: los eventos del agente (con su uso de tokens) van a
+#   logs/<N>-wave.jsonl; el .log queda para lo que dice este script y el
+#   stderr. Los dos se AGREGAN (>>): antes un re-despacho borraba la
+#   transcripcion del turno anterior, que es lo que hace falta para saber por
+#   que murio.
+# - No se usa `--continue`/`--session` para retomar: upstream dice "don't
+#   --resume a session whose prompt cache has gone cold" (CONTRIBUTING.md); el
+#   turno nuevo arranca del brief y de lo que ya esta pusheado en el fork.
+JSONL="${LOG%.log}.jsonl"
+STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '\n===== %s dispatch-slot: issue %s, modelo %s, techo %s min =====\n' \
+  "$STAMP" "$ISSUE" "$AGENT_MODEL" "$AGENT_TIMEOUT_MIN" >> "$LOG"
 setsid nohup env \
   CARGO_TARGET_DIR="$TD" \
   CARGO_BUILD_JOBS=4 \
   CARGO_INCREMENTAL=0 \
   SCCACHE_MAX_CACHE_SIZE=60G \
   MAX_HEAVY_TOKENS=1 \
-  bash -c 'cd "$1" && exec "$2" run --standalone --auto -m "$3" --agent "$4" "$5"' \
-  _ "$WT" "$AGENT_BIN" "$AGENT_MODEL" "$AGENT_NAME" "$MSG" \
-  > "$LOG" 2>&1 < /dev/null &
+  bash -c 'cd "$1" || exit 4
+    timeout --kill-after=120 "${7}m" "$2" run --standalone --auto --format json \
+      --title "issue-$6" -m "$3" --agent "$4" "$5" >> "$8"
+    rc=$?
+    printf "===== %s dispatch-slot: el agente del issue %s salio con rc=%s%s =====\n" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$6" "$rc" "$([ "$rc" = 124 ] && echo " (techo de tiempo)")"
+    exit "$rc"' \
+  _ "$WT" "$AGENT_BIN" "$AGENT_MODEL" "$AGENT_NAME" "$MSG" "$ISSUE" "$AGENT_TIMEOUT_MIN" "$JSONL" \
+  >> "$LOG" 2>&1 < /dev/null &
 
 # El estado: el slot deja de estar "preparado" y pasa a "corriendo". Una
 # sesion que llega despues ve que hay un agente en vuelo.

@@ -33,3 +33,9 @@ __pycache__/
 # secretos
 .env
 *.env
+
+# los briefs de cada slot: los renderiza prepare-slot.sh desde
+# prompts/agent-brief.md; son estado de la maquina, no codigo.
+prompts/agent-[0-9]*.md
+prompts/repair-[0-9]*.md
+prompts/old/

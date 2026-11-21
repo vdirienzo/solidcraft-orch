@@ -1,147 +1,45 @@
-# The brief of one agent
+# One SolidCraft issue, all the way to a PR ready for review
 
-You are working on ONE issue of the SolidCraft repository (upstream:
-https://github.com/tangency-labs/solidcraft), from the fork `vdirienzo/solidcraft`.
-Your worktree, your branch and your target directory are already prepared. You
-cannot ask questions; act.
-
-ISSUE:      {{ISSUE}}
-TITLE:      {{TITLE}}
-REPO:       {{REPO}}
-WORKTREE:   {{WORKTREE}}
-BRANCH:     {{BRANCH}}
+ISSUE:      #{{ISSUE}} {{TITLE}}
+OUR PR:     {{PR}}
+WORKTREE:   {{WORKTREE}}  (branch `{{BRANCH}}`, already checked out)
 TARGET_DIR: {{TARGET_DIR}}
 
-## THE RULES OF THIS REPO (they decide whether your work lands)
+Nobody is watching and you cannot ask questions. Follow
+`.agents/skills/solidcraft-full-stop/SKILL.md` in the worktree; it routes to the
+file-pr, babysit-pr and area skills. `AGENTS.md` is the law. If `.agents/skills/` is
+missing, the branch is old: rebase it onto `origin/main` first.
 
-- Read `/home/user/Projects/solidcraft-orch/AGENTS.md`, `CONTRIBUTING.md` and
-  `skills/solidcraft-contributing/SKILL.md` before you touch anything. The repo is
-  the source of truth; this brief only tells you what to do here.
-- The code, the comments, the commit messages and the test names are in ENGLISH.
-- Never `unwrap`, `expect`, `panic` or `unsafe` outside tests. Clippy runs with
-  `-D warnings`.
-- A regression test goes in the EXISTING test file of the area. Never a new file
-  named after the bug.
-- The kernel is PAUSED: never touch `crates/kernel` or `solidcore/`. If the cause
-  is there, measure it, report it as an issue in `tangency-labs/solidcore` (you
-  may open issues there) and say so in the report. That IS a deliverable.
-- A change of the design format is ONE new file in `crates/doc/src/format/pending/`.
-- A new user-visible string goes in `assets/locales/pending/<slug>.json`, with
-  the complete catalogues (ar, he, ja, vi, zh).
-- One topic, one issue, one PR. Push daily: a draft with no pushes for 72 hours
-  may be taken over.
+## What is different here
+1. **Claim first, before any code**, unless OUR PR above is a number:
+   `git commit --allow-empty -m "claim: #{{ISSUE}}"`, `git push fork {{BRANCH}}`, then open
+   a DRAFT titled `<summary> (#{{ISSUE}})` whose body has `Fixes #{{ISSUE}}` and
+   `Changes a default: no`. Then run
+   `bash ~/.local/share/solidcraft-orch/bin/claim-verify.sh {{ISSUE}} --our-pr <PR>`.
+   Exit 1 means you lost the claim: close your draft and stop with verdict `blocked`.
+   Exit 2 means it could not be checked: stop with verdict `blocked`.
+2. **Remotes:** push only to `fork` (vdirienzo/solidcraft). Never push to `origin`.
+3. **This box is small** (12 cores, 15 GB). Use `--profile ci`, `nice -n 19` and
+   `CARGO_TARGET_DIR={{TARGET_DIR}}`. Take the heavy-build token around `cargo xtask fast`
+   and other big builds:
+   `bash ~/.local/share/solidcraft-orch/bin/slot-lock.sh --heavy --take --wait 3600`, then
+   `--heavy --release`. Never build the whole workspace by hand; `cargo xtask fast` decides
+   what to build.
+4. **Kernel cause:** if the root cause is in `solidcore/` or `crates/kernel`, measure it,
+   write it down and stop with verdict `blocked`. This box does not build the kernel.
+5. **Push after every commit that builds** (the RED test first, then the fix). A turn that
+   dies keeps only what is in the fork.
+6. **Waiting for CI:** run `pr-wait` from babysit-pr once, with `--until green --max-hours 1`.
+   Do not wait for `approved-for-ci` and never ask for it.
+7. **Do not clean up.** Leave the worktree, the target dir and the locks alone: the
+   orchestrator removes them. If you opened a browser through chrome-devtools, close its
+   pages before you finish.
 
-## THE CLAIM IS DECIDED BY A SCRIPT, NOT BY YOU
+## Your last message
+One JSON object and nothing else:
 
-    bash /home/user/Projects/solidcraft-orch/solidcraft-orch/bin/claim-verify.sh {{ISSUE}}
-
-Run it BEFORE you write any code. Exit 0 = the issue is free. Exit 1 = somebody
-else holds it (a lower-numbered open PR): do NOT work on it, do NOT open a PR,
-report that and stop. Exit 2 = the claim could not be verified: do not publish
-either.
-
-Run it AGAIN after you open your draft PR, with your PR number:
-
-    bash /home/user/Projects/solidcraft-orch/solidcraft-orch/bin/claim-verify.sh {{ISSUE}} <your PR>
-
-If it says you lost: close YOUR PR, save the work (the branch stays), offer it on
-the PR that won, and report it. The work of a lost claim is never thrown away.
-
-## THE CYCLE (the RED comes first)
-
-1. Reproduce it and MEASURE it. The headless CLI is the instrument:
-   `cargo run --profile ci -p solidcraft-cli -- eval --in <design.sc>` (see
-   `solidcraft-cli --help` for `script`, `run`, `bench-open`, `mcp`). Say the load
-   of the machine in every measurement.
-2. Write the test that fails, RUN IT, and see it fail. Commit the test alone.
-3. **PUSH THE BRANCH TO THE FORK NOW** (`git push fork <branch>`), with the RED test
-   in it. A branch that is in the fork is what survives the death of this turn: on
-   19-11-2026 two agents of the same slot died with the RED test and the fix only
-   in the worktree, and the work was lost with them. A turn that ends with the work
-   unpushed has not delivered anything, whatever its report says.
-4. Implement the fix. Commit it alone. Push it again.
-5. The model that comes out has to be THE SAME model: the same bodies, the same
-   timeline, the same numbers. You are making the work cheaper, not the result
-   different. If the result changes, you are not fixing a performance problem,
-   you are changing behaviour: that needs a decision, not a PR.
-
-## THE GATE (this box is small: 12 cores, 15.3 GB of RAM)
-
-- The full `cargo xtask ci` does NOT fit here. The scoped gate does:
-      cargo fmt --all -- --check
-      cargo clippy --profile ci -p <the crates you touched> --all-targets -- -D warnings
-      cargo test --profile ci -p <the crates you touched> --lib
-- The HEAVY compiles are serialized: take the token before you compile and
-  release it when you are done:
-      bash /home/user/Projects/solidcraft-orch/solidcraft-orch/bin/slot-lock.sh --heavy --take --wait 3600
-      bash /home/user/Projects/solidcraft-orch/solidcraft-orch/bin/slot-lock.sh --heavy --release
-  On THIS box only one heavy build at a time fits: two builds of the engine need
-  about 10 GB of rustc between them.
-- Compile with `nice -n 19`, `CARGO_INCREMENTAL=0` and
-  `CARGO_TARGET_DIR={{TARGET_DIR}}` (your own directory, never the checkout's).
-- Never build the kernel in release: that profile fills 66 GB. Everything is
-  `--profile ci`.
-- NEVER compile the whole workspace yourself (2026-11-20): no `cargo build`,
-  no `cargo check --workspace`, no `cargo test` without `-p`. The box has
-  15 GB of RAM and one heavy build at a time: a workspace build pulls in the
-  kernel and solidcore (the kernel is PAUSED), it takes the RAM that the other
-  slot's agent needs, and it is what left the box with 0 GB free on 20-11.
-  For a directed test use ONE crate and ONE test in your own target
-  directory; for the gate use the token and the queue (below).
-- If the cause of the issue is in the kernel or in solidcore: MEASURE it and
-  report it as an issue in `tangency-labs/solidcore`, and say so in the
-  report. That IS a deliverable. Do not build the kernel to prove it.
-- A test that fails and is NOT yours: verify it against the parent commit
-  (`git stash` or `git checkout HEAD~1 -- <file>`) and count it as pre-existing.
-
-## THE PULL REQUEST
-
-- Title for a reader who never saw the issue: `<Area>: <what a user sees> (#{{ISSUE}})`.
-- Body: `Fixes #{{ISSUE}}` on its own line, exactly one line
-  `Changes a default: no` (or `Changes a default: yes - <what>, old behaviour kept
-  behind preference <name>` if you really changed a default), the problem, what
-  the app does now, and the validation WITH NUMBERS (before and after).
-- Plain, literal English. One idea per sentence. Active voice.
-- Evidence: for anything observable, a screenshot you captured yourself. If the
-  change is a command or a file format, the numbers are the evidence.
-- Open it as a DRAFT first (the draft IS the claim), push to the fork
-  (`git push fork <branch>`), NEVER to origin. Then verify the claim again (see
-  above), then `gh pr ready` when the gate is green.
-- Do not add `approved-for-ci`: that label is the maintainer's.
-
-## WHEN YOU FINISH: THE CLEANUP IS NOT YOURS
-
-**Do NOT delete the worktree, the target directory or the lock.** The orchestrator
-cleans up the slot when your pull request is up (`bin/close-slot.sh`, called by
-`bin/wave.sh`): it removes the target directory (5.6 GB), the worktree (700 MB),
-the brief of the slot and the lock, and only when the gate of the slot is NOT
-running and NOT queued.
-
-Why this matters: the gate of your slot compiles IN your worktree and IN your
-target directory, and the pipeline queues that gate AFTER you open the pull
-request. If you delete the worktree by hand, the gate runs on a tree that no
-longer exists, it dies with "Could not locate working directory", and it writes
-a ROJO verdict about a pull request that is fine (it happened to PR #20017 on
-20-11-2026).
-
-So your job ends with: the branch pushed to the fork, the pull request open, the
-claim verified, the report written. The branch and the PR are what survive; the
-rest is the orchestrator's.
-
-If you opened a browser (the MCP of chrome-devtools), CLOSE IT before you
-report: with the MCP of chrome-devtools every page you open is a renderer, and
-a Chrome left alive eats 3.7 GB of this box's 15 GB. Close the pages you
-opened (`mcp__chrome_devtools__close_page`) and, if you launched the browser
-yourself, kill it. The loop also reaps the browsers whose MCP is gone
-(`bash bin/kill-orphan-browsers.sh`), but a browser that lives until then
-slows the whole box down while you work.
-
-## WHAT TO REPORT (plain text, no filler)
-
-1. What you changed and why (3 lines).
-2. The RED: the command and how it failed (with the numbers).
-3. The GREEN: the command and how it passes (with the numbers).
-4. The gate: the commands and their results.
-5. The commits (hash and message) and the URL of the PR.
-6. What you did NOT do, and why (honest).
-7. The files you touched.
+```json
+{"verdict": "ready|waiting|blocked", "pr": 0, "head": "<sha>",
+ "proof": "<the RED and GREEN commands, and what they printed>",
+ "fast": "<the cargo xtask fast result>", "blocked": "<what blocks it, or empty>"}
+```

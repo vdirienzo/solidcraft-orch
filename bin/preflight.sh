@@ -34,7 +34,6 @@ ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
-HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"
 # The root of THIS repo: the comparison with the copy has to be with an
 # absolute path, or the check is silently skipped when the preflight is
 # run from anywhere but the root.
@@ -80,40 +79,9 @@ done
 
 # EL RUNTIME DEL AGENTE (2026-11-21): el loop corre sus agentes con opencode
 # (`opencode run`, bin/dispatch-slot.sh) y sus crons con el CRONTAB del
-# usuario (bin/install-crontab.sh). Antes era hermes: el binario de hermes y
-# las copias de sus scripts en ~/.hermes/scripts. Si hermes esta instalado, el
-# chequeo viejo sigue valiendo (esa maquina corre los crons de hermes); si no,
-# lo que vale es el binario del agente y el crontab.
-if [ -d "$HERMES_SCRIPTS" ]; then
-  # The hermes scripts: the cron runs a COPY from there, not the repo. So a
-  # fix in this repo does NOT reach the cron until the copy is updated. The
-  # copy of ping-ready.sh has to be byte-identical to the canonical one; the
-  # rest only have to EXIST, but a copy that is older than the repo is a
-  # cron running old code.
-  CRONS_FILE="$(cd "$(dirname "$0")" && pwd)/crons.txt"
-  if [ -f "$CRONS_FILE" ]; then
-    while IFS='|' read -r job schedule script node rest; do
-      case "$job" in ''|\#*) continue ;; esac
-      # The fields are padded for the eye: they have to be trimmed, or
-      # basename gets a name with spaces in it and the check looks for a
-      # file that does not exist.
-      job="$(printf '%s' "$job" | tr -d '[:space:]')"
-      script="$(printf '%s' "$script" | tr -d '[:space:]')"
-      [ -n "$script" ] || continue
-      base="$(basename "$script")"
-      if [ ! -f "$HERMES_SCRIPTS/$base" ]; then
-        say_missing "$HERMES_SCRIPTS/$base" "el cron $job corre esa copia, no el repo: sin ella el cron no hace nada"
-      elif [ -f "$REPO_DIR/$script" ] && ! diff -q "$HERMES_SCRIPTS/$base" "$REPO_DIR/$script" >/dev/null 2>&1; then
-        say_warn "$HERMES_SCRIPTS/$base" "la copia del cron $job NO es identica a $script: el cron corre codigo viejo"
-      fi
-    done < "$CRONS_FILE"
-  fi
-  if [ ! -f "$HERMES_SCRIPTS/ping-ready.sh" ]; then
-    say_missing "$HERMES_SCRIPTS/ping-ready.sh" "el cron solidcraft-ping-ready corre esa copia; tiene que ser identica a bin/ping-ready.sh"
-  elif ! diff -q "$HERMES_SCRIPTS/ping-ready.sh" "$(dirname "$0")/ping-ready.sh" >/dev/null 2>&1; then
-    say_missing "$HERMES_SCRIPTS/ping-ready.sh" "la copia del cron NO es identica a bin/ping-ready.sh: el cron corre codigo viejo"
-  fi
-else
+# usuario (bin/install-crontab.sh). La rama vieja de hermes (las copias de los
+# scripts en ~/.hermes/scripts) se saco: hermes no se usa mas.
+if true; then
   # SIN HERMES: el runtime es opencode + el crontab del usuario.
   AGENT_ENV="$(cd "$(dirname "$0")" && pwd)/agent-env.sh"
   if [ ! -f "$AGENT_ENV" ]; then
@@ -134,6 +102,11 @@ else
   else
     CRONTAB_JOBS="$(crontab -l 2>/dev/null | grep -c 'cd .*solidcraft-orch' || true)"
     REGISTER_JOBS="$(grep -cE '^[[:space:]]*[^#[:space:]][^|]*\|' "$(cd "$(dirname "$0")" && pwd)/crons.txt" 2>/dev/null || echo 0)"
+    # EL PATH DEL BLOQUE (2026-11-21): sin el, cron corre con /usr/bin:/bin y
+    # gh, opencode y cargo no estan: la wave no despacha a nadie y no lo dice.
+    if ! crontab -l 2>/dev/null | awk '/^# >>> solidcraft-orch >>>/{b=1} b&&/^PATH=/{f=1} /^# <<< solidcraft-orch <<</{b=0} END{exit !f}'; then
+      say_missing "PATH del crontab" "el bloque del loop no define PATH: gh, opencode y cargo no estan para el cron (bash bin/install-crontab.sh)"
+    fi
     if [ "${CRONTAB_JOBS:-0}" -lt "${REGISTER_JOBS:-0}" ]; then
       say_warn "crontab del usuario" "hay $CRONTAB_JOBS job(s) del loop y el registro (bin/crons.txt) tiene $REGISTER_JOBS: un job del registro que no esta en el crontab es un trabajo que nadie hace"
     fi

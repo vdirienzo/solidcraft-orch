@@ -10,6 +10,10 @@
 #   - an issue with no reproduction at all          -> dropped (no cause)
 #   - an issue that needs hardware                 -> dropped (not headless)
 #   - a free issue with a script and a cause       -> KEPT
+#   - (2026-11-21) Drawings (rama drawings), a feature request, a title with
+#     several topics, a platform bug without a released build's version and
+#     log (upstream repro-first)                   -> dropped
+#   - --exclude: the issues the wave already tried are not returned again
 #
 # IT NEVER TOUCHES GITHUB: the gh of the PATH is a stub that reads the fixture.
 #
@@ -72,6 +76,22 @@ ISSUES = [
     # A lowercase "step" is a geometry step (the wall of a step), not the
     # format: this one is kept.
     issue(0, "Sketch: the corner lookup refuses a clip at a step wall's edge", body=SCRIPT),
+    # 2026-11-21: lo que la lista del 21-11 tomaba y no valia un agente.
+    # Los planos se trabajan en la rama `drawings` del upstream, no en main.
+    issue(11, "Drawings: the view label is clipped at the sheet border", body=SCRIPT),
+    issue(18, "el planito", labels=["area:drawings"], body=SCRIPT),
+    issue(19, "Drawing sheets: let plugins draw geometry in a sheet sketch", body=SCRIPT),
+    # Una feature no es un bug: por el titulo y por la etiqueta.
+    issue(12, "Integrate the 3D sketching tools into the sketch workspace", body=SCRIPT),
+    issue(13, "Sketch: allow a slot by three points", labels=["enhancement"], body=SCRIPT),
+    # Varios temas en un titulo.
+    issue(14, "Issues in v45 compared to v40 rc3", body=SCRIPT),
+    # Repro-first: plataforma sin la version y el log de un build publicado.
+    issue(15, "Wayland: the window does not open", body=SCRIPT),
+    # La misma plataforma CON version y log: se toma.
+    issue(16, "Wayland: the window does not open", body=SCRIPT + "\nSolidCraft v45.1 (release)\n```\nerror: no surface\n```"),
+    # "window" en singular es una ventana de la UI, no el sistema operativo.
+    issue(17, "Sketch: the dimension window shows the wrong command name", body=SCRIPT),
 ]
 
 
@@ -158,6 +178,13 @@ def main():
         (8, "tiene asignado"),
         (9, "el STEP esta en el codigo aparcado"),
         (10, "el Boolean es una operacion del kernel aparcado"),
+        (11, "Drawings va en la rama drawings, no en main (titulo)"),
+        (18, "Drawings va en la rama drawings, no en main (etiqueta)"),
+        (19, "Drawing sheets tambien es de planos"),
+        (12, "una feature por el titulo (Integrate)"),
+        (13, "una feature por la etiqueta enhancement"),
+        (14, "varios temas en un titulo (Issues in)"),
+        (15, "repro-first: plataforma sin version ni log"),
     ):
         line = [l for l in listing.splitlines() if l.startswith(f"#{number} ")]
         if line and "SE DEJA" in line[0]:
@@ -176,11 +203,50 @@ def main():
     else:
         no("#0 se toma (un 'step' en minusculas es la geometria, no el formato)", line[0] if line else "no esta en la lista")
 
+    for number, reason in (
+        (16, "repro-first: plataforma CON version y log"),
+        (17, "'window' en singular no es el sistema operativo"),
+    ):
+        line = [l for l in listing.splitlines() if l.startswith(f"#{number} ")]
+        if line and "SE TOMA" in line[0]:
+            ok(f"#{number} se toma ({reason})")
+        else:
+            no(f"#{number} se toma ({reason})", line[0] if line else "no esta en la lista")
+
     done = run()
-    if done.returncode == 0 and done.stdout.strip() == "6":
-        ok("el modo normal imprime el issue que se toma")
+    if done.returncode == 0 and done.stdout.strip() == "17":
+        ok("el modo normal imprime el issue que se toma (el mas nuevo)")
     else:
-        no("el modo normal imprime el issue que se toma", f"rc={done.returncode} out={done.stdout!r}")
+        no("el modo normal imprime el issue que se toma (el mas nuevo)", f"rc={done.returncode} out={done.stdout!r}")
+
+    # --exclude (2026-11-21): la wave le pasa los que ya probo en el turno, y
+    # el selector NO le devuelve el mismo (el bucle sin fin de la wave).
+    done = run("--exclude", "17,16")
+    if done.returncode == 0 and done.stdout.strip() == "6":
+        ok("--exclude N,M salta los que la wave ya probo")
+    else:
+        no("--exclude N,M salta los que la wave ya probo", f"rc={done.returncode} out={done.stdout!r}")
+    done = run("--exclude=17", "--exclude", "16,6")
+    if done.returncode == 0 and done.stdout.strip() == "0":
+        ok("--exclude se puede repetir y acepta la forma --exclude=N")
+    else:
+        no("--exclude se puede repetir y acepta la forma --exclude=N", f"rc={done.returncode} out={done.stdout!r}")
+    done = run("--exclude", "")
+    if done.returncode == 0 and done.stdout.strip() == "17":
+        ok("--exclude vacio no excluye nada")
+    else:
+        no("--exclude vacio no excluye nada", f"rc={done.returncode} out={done.stdout!r}")
+    done = run("--exclude", "17,16,6,0")
+    if done.returncode == 1 and not done.stdout.strip():
+        ok("con todos excluidos no hay issue (rc=1)")
+    else:
+        no("con todos excluidos no hay issue (rc=1)", f"rc={done.returncode} out={done.stdout!r}")
+    done = run("--list", "--exclude", "17")
+    line = [l for l in done.stdout.splitlines() if l.startswith("#17 ")]
+    if line and "SE DEJA" in line[0] and "exclude" in line[0]:
+        ok("--list con --exclude dice que el issue se deja por la wave")
+    else:
+        no("--list con --exclude dice que el issue se deja por la wave", line[0] if line else done.stdout[-300:])
 
     done = run("--explain", "6")
     if done.returncode == 0 and "SE TOMA" in done.stdout:

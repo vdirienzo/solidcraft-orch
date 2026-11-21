@@ -6,7 +6,8 @@
 #   1. state-set.py writes a key in the state and the artifact is rebuilt.
 #   2. prepare-slot.sh takes the lock, creates the worktree and the branch,
 #      renders the brief and writes the slot in the state.
-#   3. the slot is refused when the claim is not free (the arbiter says no).
+#   3. the slot is refused when the claim is not free (the arbiter says no),
+#      and our own open PR on the slot's branch is not a competitor.
 #   4. close-slot.sh releases the lock, removes the worktree and the target
 #      dir, and writes the PR in the state.
 #   5. slot-busy.sh tells a live slot from a dead one (the wave never
@@ -161,6 +162,51 @@ if [ "$?" = "3" ]; then
 else
   no "prepare-slot se niega cuando el claim no esta libre" "$OUT"
 fi
+
+# --- 3b. NUESTRO PROPIO PR NO ES UN COMPETIDOR (2026-11-21) ----------------
+# El slot 19690 tenia nuestro PR #20081 abierto (rama fix-19690) y el arbitro,
+# llamado SIN nuestro numero de PR, lo tomaba por un competidor: el slot no se
+# podia volver a preparar nunca. prepare-slot busca nuestro PR de la rama del
+# slot y se lo pasa al arbitro de verdad (--our-pr).
+cat > "$TMP/propio.json" <<'JSON'
+[{"number":20081,"title":"nuestro (#9007)","body":"Fixes #9007","author":{"login":"vdirienzo"},"headRefName":"fix-9007","isDraft":true}]
+JSON
+export GH_FAKE_LIST="$TMP/propio.json"
+OUT="$(bash "$REPO_ROOT/bin/prepare-slot.sh" 9007 "test" 2>&1)"
+RC=$?
+if [ "$RC" = "0" ]; then
+  ok "prepare-slot prepara un slot que ya tiene nuestro PR abierto (rc=0)"
+else
+  no "prepare-slot prepara un slot que ya tiene nuestro PR abierto" "rc=$RC: $OUT"
+fi
+if python3 - "$ORCH/state.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+slot = (data.get("slots") or {}).get("9007") or {}
+raise SystemExit(0 if slot.get("pr") == 20081 else 1)
+PY
+then
+  ok "el PR nuestro queda en el estado del slot"
+else
+  no "el PR nuestro queda en el estado del slot"
+fi
+# Un PR de OTRO autor en la rama fix-9008 no es el nuestro: el claim sigue
+# perdido (rc=3) y el motivo del arbitro sale en el stderr.
+cat > "$TMP/ajeno.json" <<'JSON'
+[{"number":4250,"title":"otro (#9008)","body":"Fixes #9008","author":{"login":"otro"},"headRefName":"fix-9008","isDraft":true}]
+JSON
+export GH_FAKE_LIST="$TMP/ajeno.json"
+OUT="$(bash "$REPO_ROOT/bin/prepare-slot.sh" 9008 "test" 2>&1 >/dev/null)"
+RC=$?
+if [ "$RC" = "3" ] && printf '%s' "$OUT" | grep -q "claim-verify rc=1"; then
+  ok "el PR de otro en la rama del slot no cuenta como nuestro (rc=3, con el motivo)"
+else
+  no "el PR de otro en la rama del slot no cuenta como nuestro" "rc=$RC: $OUT"
+fi
+bash "$REPO_ROOT/bin/slot-lock.sh" --slot 9007 --release >/dev/null 2>&1
+git -C "$UP" worktree remove --force "$WORKTREES_DIR/issue-9007" >/dev/null 2>&1
+python3 "$REPO_ROOT/bin/state-set.py" --delete slots "9007" >/dev/null 2>&1
 
 # --- 4. close-slot.sh --------------------------------------------------------
 cat > "$TMP/nuestro.json" <<'JSON'

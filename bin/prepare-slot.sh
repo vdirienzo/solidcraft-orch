@@ -10,7 +10,9 @@
 #   3. creates the worktree and the branch from the upstream's main.
 #   4. creates the target directory of the slot: every slot compiles in its
 #      own directory, or cargo queues the builds in front of each other.
-#   5. renders the brief (prompts/agent-brief.md) into prompts/agent-<issue>.md.
+#   5. renders the brief (prompts/agent-brief.md) into prompts/agent-<issue>.md,
+#      ALWAYS from the template, plus the repair note prompts/repair-<issue>.md
+#      when there is one.
 #   6. writes the slot in the state, so a session that dies finds the work
 #      where it was left.
 #
@@ -38,10 +40,41 @@ ISSUE="${1:-}"
 OWNER="${2:-wave-$$}"
 
 [ -n "$ISSUE" ] || { echo "prepare-slot: falta el issue" >&2; exit 2; }
+BRANCH="fix-$ISSUE"
+
+# 0. NUESTRO PROPIO PR, ANTES DEL CLAIM (2026-11-21).
+#
+# POR QUE: el arbitro sin nuestro numero de PR no sabe cual es el nuestro, y
+# nuestro propio PR abierto (el #20081, rama fix-19690, del slot 19690) le
+# parecia un competidor: OCUPADO. El slot 19690 no se podia volver a preparar
+# NUNCA, y la wave lo reintentaba en cada turno. Se busca el PR abierto de la
+# rama del slot cuyo autor somos nosotros (solo lectura) y se le pasa al
+# arbitro con --our-pr. El filtro por la rama va tambien en el --jq: el
+# resultado no depende de que el --head del gh filtre bien.
+# Quien somos: la misma fuente que el arbitro (FORK_OWNER, despues gh).
+ME="${OUR_LOGIN:-${FORK_OWNER:-$(gh api user --jq .login 2>/dev/null || true)}}"
+[ -n "$ME" ] || ME="vdirienzo"
+OUR_PR="$(gh pr list -R "$UPSTREAM_REPO" --head "$BRANCH" --state open --json number,author,headRefName \
+  --jq "[.[] | select(.headRefName == \"$BRANCH\" and .author.login == \"$ME\")] | .[0].number // empty" 2>/dev/null | head -1)"
+[[ "$OUR_PR" =~ ^[0-9]+$ ]] || OUR_PR=""
+if [ -n "$OUR_PR" ]; then
+  echo "prepare-slot: el slot $ISSUE ya tiene nuestro PR #$OUR_PR (rama $BRANCH)" >&2
+  # El PR queda en el estado YA: la wave deja de tratar el slot como "guardado
+  # sin PR" aunque el resto de la preparacion falle.
+  python3 "$ORCH_BIN/state-set.py" --merge slots "$ISSUE" "{\"pr\": $OUR_PR}" >/dev/null 2>&1 || true
+fi
 
 # 1. EL ARBITRO DEL CLAIM. Si dice que lo tiene otro, no se toca nada.
-if ! bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" >/dev/null 2>&1; then
-  echo "prepare-slot: el issue #$ISSUE no está libre (el claim lo tiene otro PR)" >&2
+# Lo que dice el arbitro va al stderr: la wave lo escribe en su salida, y un
+# "no se pudo preparar" sin el motivo no se puede arreglar.
+if [ -n "$OUR_PR" ]; then
+  CLAIM_OUT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" --our-pr "$OUR_PR" 2>&1)"
+else
+  CLAIM_OUT="$(bash "$ORCH_BIN/claim-verify.sh" "$ISSUE" 2>&1)"
+fi
+CLAIM_RC=$?
+if [ "$CLAIM_RC" -ne 0 ]; then
+  echo "prepare-slot: el issue #$ISSUE no está libre (claim-verify rc=$CLAIM_RC${OUR_PR:+, nuestro PR #$OUR_PR}): $(printf '%s' "$CLAIM_OUT" | tail -3 | tr '\n' ' ')" >&2
   exit 3
 fi
 
@@ -51,13 +84,14 @@ if ! bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --take --owner "$OWNER" >/dev
   exit 4
 fi
 
-BRANCH="fix-$ISSUE"
 WT="$WORKTREES_DIR/issue-$ISSUE"
 BRIEF="$ORCH_DIR/prompts/agent-$ISSUE.md"
 TEMPLATE="$ORCH_DIR/prompts/agent-brief.md"
 # The template of the brief lives in the repo: on a machine where ORCH_DIR is
 # not the repo (a symlink, a copy), the repo's copy is the one that is there.
 [ -f "$TEMPLATE" ] || TEMPLATE="$(cd "$ORCH_BIN/.." && pwd)/prompts/agent-brief.md"
+REPAIR="$ORCH_DIR/prompts/repair-$ISSUE.md"
+[ -f "$REPAIR" ] || REPAIR="$(cd "$ORCH_BIN/.." && pwd)/prompts/repair-$ISSUE.md"
 
 # 3. EL WORKTREE CON SU RAMA, desde el main del upstream.
 if [ ! -f "$TEMPLATE" ]; then
@@ -108,19 +142,27 @@ TD="$(bash "$ORCH_BIN/slot-target-dir.sh" --slot "$ISSUE" 2>/dev/null)"
 
 # 5. EL BRIEF, con lo único que cambia por issue.
 #
-# UN BRIEF ESCRITO A MANO NO SE PISA (2026-11-20): el brief de un slot es lo
-# que el agente lee, y un brief escrito a mano (un repair de un PR que ya esta
-# abierto, con los tests que fallan y el log del gate) es informacion que la
-# plantilla no tiene. Si el brief ya existe, se rellenan sus marcadores y se
-# deja su texto como estaba.
+# SIEMPRE DESDE LA PLANTILLA (2026-11-21). Antes un brief que ya existia
+# (prompts/agent-<N>.md) ganaba a la plantilla, y los briefs viejos seguian
+# mandando lo que la plantilla ya no dice: el de 19690 le pedia al agente
+# `rm -rf` de su target y `git worktree remove --force` de su worktree
+# (lineas 109-110), con el gate en cola usandolos. Un brief generado es un
+# artefacto: se regenera en cada preparacion.
+#
+# Lo que el brief escrito a mano tenia de valioso (un repair: los tests que
+# fallan, el log del gate) va en prompts/repair-<N>.md, que se agrega al final
+# bajo "## Notes for this slot", con sus marcadores rellenados tambien.
 TITLE="$(gh issue view "$ISSUE" -R "$UPSTREAM_REPO" --json title --jq .title 2>/dev/null)"
-python3 - "$TEMPLATE" "$BRIEF" "$ISSUE" "$TITLE" "$REPO" "$WT" "$BRANCH" "$TD" <<'PY'
+python3 - "$TEMPLATE" "$BRIEF" "$ISSUE" "$TITLE" "$REPO" "$WT" "$BRANCH" "$TD" "$OUR_PR" "$REPAIR" <<'PY'
 import os, sys
-template, out, issue, title, repo, wt, branch, target = sys.argv[1:9]
-# The brief that is already there wins over the template: a hand written brief
-# (the repair of a pull request that is already open) is the information the
-# agent needs, and the template does not have it.
-text = open(out, encoding="utf-8").read() if os.path.exists(out) else open(template, encoding="utf-8").read()
+template, out, issue, title, repo, wt, branch, target, pr, repair = sys.argv[1:11]
+with open(template, encoding="utf-8") as fh:
+    text = fh.read()
+if os.path.isfile(repair):
+    with open(repair, encoding="utf-8") as fh:
+        note = fh.read().strip()
+    if note:
+        text = text.rstrip("\n") + "\n\n## Notes for this slot\n\n" + note + "\n"
 for key, value in {
     "{{ISSUE}}": issue,
     "{{TITLE}}": title,
@@ -128,17 +170,19 @@ for key, value in {
     "{{WORKTREE}}": wt,
     "{{BRANCH}}": branch,
     "{{TARGET_DIR}}": target,
+    "{{PR}}": pr or "none yet",
 }.items():
     text = text.replace(key, value)
+os.makedirs(os.path.dirname(out), exist_ok=True)
 with open(out, "w", encoding="utf-8") as fh:
     fh.write(text)
 PY
 
 # 6. EL ESTADO: el slot queda escrito para que otra sesion lo encuentre.
-python3 "$ORCH_BIN/state-set.py" slots "$ISSUE" "$(python3 - "$ISSUE" "$OWNER" "$BRANCH" "$WT" "$BRIEF" "$TD" <<'PY'
+python3 "$ORCH_BIN/state-set.py" slots "$ISSUE" "$(python3 - "$ISSUE" "$OWNER" "$BRANCH" "$WT" "$BRIEF" "$TD" "$OUR_PR" <<'PY'
 import json, sys
-issue, owner, branch, wt, brief, target = sys.argv[1:7]
-print(json.dumps({
+issue, owner, branch, wt, brief, target, pr = sys.argv[1:8]
+entry = {
     "issue": int(issue),
     "status": "prepared",
     "phase": "el brief está escrito; el agente todavía no arrancó",
@@ -147,7 +191,11 @@ print(json.dumps({
     "worktree": wt,
     "brief": brief,
     "target_dir": target,
-}))
+}
+# Nuestro PR, si lo hay: el slot no es "guardado sin PR" (2026-11-21).
+if pr.isdigit():
+    entry["pr"] = int(pr)
+print(json.dumps(entry))
 PY
 )" >/dev/null 2>&1
 

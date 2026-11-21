@@ -55,9 +55,14 @@ solidcraft-gate-queue       | 3,8,13,18,23,28,33,38,43,48,53,58 * * * * | bin/ga
 solidcraft-pipeline         | 2,7,12,17,22,27,32,37,42,47,52,57 * * * * | bin/pipeline.py         | pipeline      | corrige bodies, encola gates, pasa a ready
 solidcraft-comment-watch    | 4,19,34,49 * * * *   | bin/comment_watch.py    | comment-watch | lee los comentarios del maintainer y arma la cola de tareas
 solidcraft-nice-compilations| 1,11,21,31,41,51 * * * * | bin/nice-compilations.sh| -             | baja la prioridad de las compilaciones nuevas
-solidcraft-ping-ready       | 25,55 * * * *       | bin/ping-ready.sh       | -             | pide el approved-for-ci en los PRs listos
 solidcraft-reporte-diario   | 16,46 * * * *       | bin/daily-report.py     | -             | el reporte diario, sin LLM
 solidcraft-gc-disk          | 14,44 * * * *       | bin/gc-disk.sh         | -             | limpia el disco: artefactos y targets muertos
 solidcraft-loop-status      | 6,36 * * * *        | bin/loop-status.py      | -             | el estado del loop en el chat, sin LLM
-solidcraft-wave-prompt-guard| 9,24,39,54 * * * *  | bin/wave-prompt-guard.py| -             | el prompt del cron de la wave tiene que ser el canonico
 solidcraft-wave             | */10 * * * *        | bin/wave.sh           | -             | la wave: cierra los slots terminados y arranca los agentes libres
+# SACADOS DEL REGISTRO (2026-11-21):
+# - solidcraft-ping-ready: pedia el label approved-for-ci en cada head sha. La guia
+#   de upstream (.agents/skills/solidcraft-babysit-pr/SKILL.md) dice "Don't ask
+#   again and again" y "No status comments": el maintainer pone el label despues de
+#   revisar. bin/ping-ready.sh queda para correrlo a mano con --report (solo lee).
+# - solidcraft-wave-prompt-guard: vigilaba el prompt de un cron de hermes; hermes ya
+#   no existe en esta maquina y la wave corre como script.

@@ -17,6 +17,7 @@
 #   bash bin/next-issue.py                # the next issue, on stdout
 #   bash bin/next-issue.py --list         # every candidate and why it was kept
 #   bash bin/next-issue.py --explain <N>  # why this one was kept or dropped
+#   bash bin/next-issue.py --exclude N,M  # skip these (the wave already tried them)
 #
 # EXIT CODES:
 #   0  an issue is on stdout (and the reason for keeping it, on stderr)
@@ -118,6 +119,67 @@ NEEDS_HARDWARE = (
     "arduino",
     "raspberry",
 )
+# DRAWINGS NO ES DE MAIN (2026-11-21): el upstream manda el trabajo de los
+# planos a la rama `drawings`, y el orquestador solo trabaja sobre main. Un PR
+# de planos contra main no se revisa: el agente quema su turno para nada. La
+# lista del 21-11 tenia a #20181 ("Drawings: ...") entre los que se tomaban.
+DRAWINGS_LABELS = {"area:drawings"}
+# "Drawing sheets: ..." (#20481) es lo mismo con otro titulo; un "Drawing a
+# line ..." de un sketch NO es de planos, por eso no basta con "Drawing".
+DRAWINGS_PREFIXES = ("Drawings", "Drawing:", "Drawing sheet", "Drawing view")
+# UNA FEATURE NO ES UN ARREGLO (2026-11-21, docs/issue-selection.md, "A feature
+# request, not a bug"): lo que vale un agente es un bug con una reproduccion
+# clara. #20223 ("Integrate the 3D sketching tools...") es un trabajo de
+# diseno de varias semanas y estaba en la lista de los que se toman.
+FEATURE_LABELS = {"enhancement", "feature", "type:feature", "feature request", "kind:feature"}
+FEATURE_PREFIXES = ("Integrate", "Add support", "Feature request", "Implement", "[Feature")
+# VARIOS TEMAS EN UN TITULO (2026-11-21, filtro 6): "Issues in v45 compared to
+# v40 rc3" (#20178) son varios bugs en un issue, y un PR que los arregla todos
+# no se revisa. El filtro viejo (" and " en un titulo largo) no lo veia.
+MULTI_TOPIC_PHRASES = ("issues in", "several", "multiple bugs", "multiple issues", "and other")
+# REPRO-FIRST DEL UPSTREAM (2026-11-21, .agents/skills/solidcraft-repro-first/
+# SKILL.md en origin/main): los bugs de un sistema operativo, de un sistema de
+# ventanas, de un backend grafico o un driver, del escalado de pantalla o del
+# updater/instalador necesitan EVIDENCIA DE UN BUILD PUBLICADO (la version y
+# el log) antes de cualquier fix. Esta caja no tiene esas maquinas: sin esa
+# evidencia en el issue, el agente escribe un fix adivinado, que es justo lo
+# que la regla prohibe. Las palabras van con bordes de palabra: "windows" no
+# es "window" (una ventana de la UI es un bug normal). "Metal" no esta: "Sheet
+# metal" es un area del producto. El escalado va como "display/ui scaling":
+# "scaling" solo es escalar una geometria.
+PLATFORM_WORDS = (
+    "windows",
+    "macos",
+    "mac os",
+    "wayland",
+    "x11",
+    "xwayland",
+    "driver",
+    "drivers",
+    "gpu",
+    "vulkan",
+    "dx12",
+    "directx",
+    "opengl",
+    "updater",
+    "installer",
+    "msi",
+    "dmg",
+    "flatpak",
+    "appimage",
+    "hidpi",
+    "high dpi",
+    "high-dpi",
+    "display scaling",
+    "ui scaling",
+    "fractional scaling",
+    "scale factor",
+)
+PLATFORM_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in PLATFORM_WORDS) + r")\b", re.IGNORECASE)
+# La evidencia de un build publicado: una version (v45, 0.45.1, nightly) Y un
+# log (un bloque de codigo, un adjunto .log, una traza).
+VERSION_RE = re.compile(r"\b(v\d+(\.\d+)*|\d+\.\d+(\.\d+)?|nightly|rc\d+)\b", re.IGNORECASE)
+LOG_RE = re.compile(r"(```|\.log\b|\blog:|\bstack ?trace\b|\bbacktrace\b|\bpanicked at\b)", re.IGNORECASE)
 
 
 def gh(*args):
@@ -184,6 +246,8 @@ def classify(issue):
     vetoed = labels & VETO_LABELS
     if vetoed:
         return False, "vetado por etiqueta: " + ", ".join(sorted(vetoed))
+    if labels & DRAWINGS_LABELS or any(title.strip().lower().startswith(p.lower()) for p in DRAWINGS_PREFIXES):
+        return False, "es de planos: el upstream lo trabaja en la rama drawings, no en main"
     for subject in PAUSED_SUBJECTS:
         if subject in title:
             return False, f"el asunto esta en el codigo aparcado ({subject})"
@@ -198,6 +262,12 @@ def classify(issue):
         return False, "ya tiene asignado a " + ", ".join(a["login"] for a in issue["assignees"])
     if title.strip().startswith("[RFC]"):
         return False, "es un RFC, no un arreglo"
+    features = labels & FEATURE_LABELS
+    if features:
+        return False, "es una feature, no un bug (etiqueta: " + ", ".join(sorted(features)) + ")"
+    for prefix in FEATURE_PREFIXES:
+        if title.strip().lower().startswith(prefix.lower()):
+            return False, f"es una feature, no un bug (el titulo empieza con '{prefix}')"
 
     # 3. DEAD, by the triage comments.
     low = triage.lower()
@@ -228,16 +298,57 @@ def classify(issue):
     # 5. Verifiable headless.
     if any(h in evidence for h in NEEDS_HARDWARE):
         return False, "la reproduccion necesita hardware que esta caja no tiene"
+    # The upstream's repro-first rule: the TITLE and the LABELS say what the
+    # bug is about (a body mentions "Windows" in its environment section for
+    # every bug, so the body does not decide the subject); the BODY decides
+    # whether the evidence from a released build is there.
+    platform = PLATFORM_RE.search(" ".join([title, *sorted(labels)]))
+    if platform:
+        has_evidence = VERSION_RE.search(body) and LOG_RE.search(body)
+        if not has_evidence:
+            return False, (
+                f"es de plataforma ({platform.group(1).lower()}): repro-first pide la version y el log "
+                "de un build publicado, y el issue no los trae"
+            )
 
     # 6. One topic.
     if " and " in title.lower() and len(title) > 70:
         return False, "el titulo parece más de un tema"
+    low_title = title.lower()
+    for phrase in MULTI_TOPIC_PHRASES:
+        if re.search(r"\b" + re.escape(phrase) + r"\b", low_title):
+            return False, f"el titulo junta varios temas ('{phrase}')"
 
     return True, "libre, con causa señalable y verificable headless"
 
 
+def parse_exclude(args):
+    """The issues the wave already tried in this turn (--exclude N,M or
+    --exclude=N,M). An empty value is no exclusion: the wave passes the list
+    as it is, also when it is still empty."""
+    raw = []
+    for i, arg in enumerate(args):
+        if arg == "--exclude" and i + 1 < len(args):
+            raw.append(args[i + 1])
+        elif arg.startswith("--exclude="):
+            raw.append(arg[len("--exclude="):])
+    out = set()
+    for chunk in raw:
+        for part in re.split(r"[,\s]+", chunk):
+            part = part.strip().lstrip("#")
+            if part.isdigit():
+                out.add(int(part))
+    return out
+
+
 def main():
     args = sys.argv[1:]
+    # POR QUE --exclude (2026-11-21): este script no tiene memoria, y la wave le
+    # pedia "el siguiente" despues de un prepare-slot que fallaba: le devolvia
+    # el MISMO issue, y la wave daba vueltas sin fin sin despachar nada. La
+    # wave le pasa los que ya probo en el turno.
+    exclude = parse_exclude(args)
+    list_mode = "--list" in args
     all_issues = issues()
     if all_issues is None:
         print("next-issue: no se pudo leer el upstream", file=sys.stderr)
@@ -267,10 +378,13 @@ def main():
     # survived them: asking GitHub for three hundred issues took five minutes.
     shortlist = []
     for issue in all_issues:
-        keep, reason = classify(issue)
+        if issue["number"] in exclude:
+            keep, reason = False, "la wave ya lo probo en este turno (--exclude)"
+        else:
+            keep, reason = classify(issue)
         if keep:
             shortlist.append((issue, reason))
-        elif args == ["--list"]:
+        elif list_mode:
             print(f"#{issue['number']:<6} {'SE DEJA':<8} {reason[:70]}")
 
     kept = []
@@ -285,14 +399,14 @@ def main():
             keep = False
         else:
             keep = True
-        if args == ["--list"]:
+        if list_mode:
             print(f"#{issue['number']:<6} {'SE TOMA' if keep else 'SE DEJA':<8} {reason[:70]:<70} {issue['title'][:50]}")
         if keep:
             kept.append((issue, reason))
-            if args != ["--list"]:
+            if not list_mode:
                 break
 
-    if args == ["--list"]:
+    if list_mode:
         return 0
     if not kept:
         print("next-issue: no hay ningun issue libre que valga un agente ahora", file=sys.stderr)

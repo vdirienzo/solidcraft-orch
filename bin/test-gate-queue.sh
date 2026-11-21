@@ -123,6 +123,124 @@ else
   ok "el slot sin worktree sale de la cola (no se reintenta para siempre)"
 fi
 
+# --- 5. el lock de un runner MUERTO no bloquea -----------------------------
+# POR QUE: el lock era un mkdir y decidia "lock viejo" con pgrep -f
+# gate-queue.sh, que siempre encontraba el "sh -c" del cron. El runner que
+# murio en el reinicio del 2026-11-21 dejo gates/queue.lock y la cola quedo
+# parada un dia entero. Ahora es un flock: el kernel lo suelta al morir.
+echo "== el lock de un runner muerto no bloquea =="
+: > "$ORCH/logs/gate-stub.log"
+: > "$ORCH/gates/queue.txt"
+mkdir -p "$ORCH/gates/queue.lock"                 # lo que deja el esquema viejo
+touch -d '2026-11-20 17:50' "$ORCH/gates/queue.lock"
+# un runner con flock que murio de verdad: el archivo queda, el lock no
+# (las llaves se tragan el aviso "Killed" del shell)
+{ ( exec 9>>"$ORCH/gates/queue.flock"; flock -n 9; kill -9 $BASHPID ); } 2>/dev/null
+run_queue --enqueue 4242 abc1234 >/dev/null
+out="$(run_queue --run 0)"; rc=$?
+sleep 1
+if grep -q '4242' "$ORCH/logs/gate-stub.log" 2>/dev/null; then
+  ok "con el lock de un runner muerto la cola igual lanza el gate"
+else
+  no "con el lock de un runner muerto la cola igual lanza el gate" "rc=$rc out=[$out]"
+fi
+if [ ! -d "$ORCH/gates/queue.lock" ]; then
+  ok "el directorio queue.lock del esquema viejo se borra"
+else
+  no "el directorio queue.lock del esquema viejo se borra" "$out"
+fi
+
+# --- 6. un runner VIVO si bloquea al segundo ---------------------------------
+echo "== un runner vivo bloquea al segundo =="
+: > "$ORCH/logs/gate-stub.log"
+# exec sleep: el pid de $! ES el que tiene el lock. Con "flock archivo sleep
+# 30 &" el kill mataba a flock y el sleep huerfano seguia con el lock.
+( exec 9>>"$ORCH/gates/queue.flock"; flock -n 9; exec sleep 30 ) &
+holder=$!
+sleep 0.5
+run_queue --enqueue 4242 abc1234 >/dev/null
+out="$(run_queue --run 0)"; rc=$?
+if printf '%s' "$out" | grep -q 'otro runner esta trabajando'; then
+  ok "con otro runner vivo la cola dice 'otro runner esta trabajando'"
+else
+  no "con otro runner vivo la cola dice 'otro runner esta trabajando'" "$out"
+fi
+sleep 1
+if [ ! -s "$ORCH/logs/gate-stub.log" ] && grep -q '^4242 ' "$ORCH/gates/queue.txt"; then
+  ok "el runner rechazado no lanza nada y deja la cola intacta"
+else
+  no "el runner rechazado no lanza nada y deja la cola intacta" \
+      "stub=[$(cat "$ORCH/logs/gate-stub.log")] cola=[$(cat "$ORCH/gates/queue.txt")]"
+fi
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+: > "$ORCH/gates/queue.txt"
+
+# --- 7. el gate en segundo plano NO se queda con el lock ---------------------
+# El lock cubre al runner, no a los gates (como el mkdir, que se borraba al
+# salir el runner): si el gate heredara el descriptor, la cola quedaria
+# cerrada mientras compila.
+echo "== el gate en segundo plano no retiene el lock =="
+cat > "$ORCH/bin/gate.sh" <<'EOS'
+#!/usr/bin/env bash
+echo "gate.sh $*" >> "$ORCH/logs/gate-stub.log"
+sleep 5
+EOS
+run_queue --enqueue 4242 abc1234 >/dev/null
+run_queue --run 0 >/dev/null
+if flock -n "$ORCH/gates/queue.flock" true; then
+  ok "con el gate todavia corriendo, el lock esta libre al salir el runner"
+else
+  no "con el gate todavia corriendo, el lock esta libre al salir el runner"
+fi
+cat > "$ORCH/bin/gate.sh" <<'EOS'
+#!/usr/bin/env bash
+echo "gate.sh $*" >> "$ORCH/logs/gate-stub.log"
+EOS
+sleep 5
+
+# --- 8. reencolar con OTRO sha reemplaza; con el mismo, no hace nada ---------
+# POR QUE: la cola deduplicaba por slot y descartaba el sha nuevo: gateaba
+# el commit viejo.
+echo "== reencolar con otro sha reemplaza =="
+: > "$ORCH/gates/queue.txt"
+run_queue --enqueue 1111 aaa0001 >/dev/null
+run_queue --enqueue 4242 abc1234 >/dev/null
+run_queue --enqueue 2222 bbb0002 >/dev/null
+out="$(run_queue --enqueue 4242 fff9999)"
+if [ "$(sed -n 2p "$ORCH/gates/queue.txt")" = "4242 fff9999" ] \
+   && [ "$(grep -c '^4242 ' "$ORCH/gates/queue.txt")" -eq 1 ] \
+   && [ "$(wc -l < "$ORCH/gates/queue.txt")" -eq 3 ]; then
+  ok "el sha nuevo reemplaza al viejo en su lugar de la cola"
+else
+  no "el sha nuevo reemplaza al viejo en su lugar de la cola" "$(cat "$ORCH/gates/queue.txt")"
+fi
+if printf '%s' "$out" | grep -q 'reemplazado' && printf '%s' "$out" | grep -q 'abc1234'; then
+  ok "la salida dice que reemplazo y cual era el sha viejo"
+else
+  no "la salida dice que reemplazo y cual era el sha viejo" "$out"
+fi
+before="$(cat "$ORCH/gates/queue.txt")"
+out="$(run_queue --enqueue 4242 fff9999)"
+if [ "$(cat "$ORCH/gates/queue.txt")" = "$before" ] && printf '%s' "$out" | grep -q 'ya esta en la cola'; then
+  ok "el mismo slot con el mismo sha no cambia la cola"
+else
+  no "el mismo slot con el mismo sha no cambia la cola" "out=[$out] cola=[$(cat "$ORCH/gates/queue.txt")]"
+fi
+: > "$ORCH/gates/queue.txt"
+
+# --- 9. el log del slot se agrega, no se pisa --------------------------------
+echo "== el log del slot se agrega con un separador fechado =="
+rm -f "$ORCH/logs/gate-queue-4242.log"
+run_queue --enqueue 4242 sha00001 >/dev/null; run_queue --run 0 >/dev/null; sleep 1
+run_queue --enqueue 4242 sha00002 >/dev/null; run_queue --run 0 >/dev/null; sleep 1
+log="$ORCH/logs/gate-queue-4242.log"
+if [ "$(grep -c '^===== .* gate-queue: gate del slot 4242' "$log" 2>/dev/null)" -eq 2 ] \
+   && grep -q 'sha00001' "$log" && grep -q 'sha00002' "$log"; then
+  ok "las dos corridas quedan en el log, cada una con su separador"
+else
+  no "las dos corridas quedan en el log, cada una con su separador" "$(cat "$log" 2>&1)"
+fi
+
 printf '\n%d casos, %d fallan\n' "$((pass+fail))" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit 0

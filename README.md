@@ -266,11 +266,9 @@ Los crons (todos sin LLM: no gastan tokens):
 | solidcraft-pipeline | 5 min (2,7,12…) | pipeline.py | corrige bodies, encola gates, pasa a ready |
 | solidcraft-comment-watch | 15 min (4,19,34,49) | comment_watch.py | lee los comentarios del maintainer y arma la cola de tareas |
 | solidcraft-nice-compilations | 10 min (1,11,21…) | nice-compilations.sh | baja la prioridad de las compilaciones nuevas |
-| solidcraft-ping-ready | 30 min (25,55) | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
 | solidcraft-reporte-diario | 16 y 46 | daily-report.py | el reporte, sin LLM |
 | solidcraft-gc-disk | 30 min (14,44) | gc-disk.sh | limpia el disco: artefactos y targets muertos |
 | solidcraft-loop-status | 30 min (6,36) | loop-status.py | el estado del loop, sin LLM |
-| solidcraft-wave-prompt-guard | 15 min (9,24,39,54) | wave-prompt-guard.py | la wave corre como script: no hay prompt que se pueda romper |
 | solidcraft-wave | 10 min (0,10,20…) | wave.sh | la wave: cierra los slots terminados y arranca los agentes libres |
 
 **Ningún par de crons cae en el mismo minuto** (2026-11-20): el orden dentro del
@@ -369,13 +367,11 @@ verde, 1 si rojo, 2 si pendiente, 3 si el uso esta mal. El veredicto lo dice
 `pipeline.evaluar_check_runs` (la MISMA regla que usan `ping-ready.sh` y `gate.sh`): el
 helper no tiene una copia de la regla, la usa.
 
-El ping CORRE SOLO: el cron `solidcraft-ping-ready` (cada 30 min, en el crontab del usuario
-que instala `bin/install-crontab.sh`) ejecuta `bin/ping-ready.sh` del repo: un cambio llega al
-cron al instante, sin copias. El script resuelve el orquestador por la REGLA DEL CI (el
-directorio que tiene `bin/pipeline.py`), no por su propia ubicacion.
-
-El ping es una ACCION HACIA GITHUB, no un aviso: al usuario no le llega nada. El script es idempotente por head sha, asi que correr de
-mas no genera ruido: el comentario se deja UNA vez por PR y por sha.
+**El ping YA NO CORRE SOLO (2026-11-21).** El cron `solidcraft-ping-ready` salio del registro:
+la guia de upstream (`.agents/skills/solidcraft-babysit-pr/SKILL.md`) dice que el maintainer
+pone `approved-for-ci` despues de revisar, "Don't ask again and again" y "No status comments".
+Un pedido por cada head sha es justo eso. `bash bin/ping-ready.sh --report` sigue sirviendo
+para LEER el estado de los PRs (no toca GitHub); el modo que comenta no se usa.
 
 LA TANDA de los pedidos `approved-for-ci`: el maintainer mergea EN GRUPOS POR AREA, asi que nunca
 hay mas de `MAX_PEDIDOS` (2) pedidos EN CURSO a la vez (un pedido en curso = nuestro comentario de

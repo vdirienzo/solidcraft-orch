@@ -831,67 +831,34 @@ else
 fi
 rm -f "$TMP/ready-fail"
 
-# --- N: el comentario del veredicto se postea UNA vez -----------------------
-echo "== el comentario del veredicto se postea una sola vez =="
-set_pulls <<'EOF'
-14003|Preset numbers|1|abc123def4567890|Arregla\n\nFixes #12418\n\nChanges a default: no\n|[]
-EOF
+# --- N: el pipeline NO deja comentarios de estado (2026-11-21) -------------
+# La guia de upstream (.agents/skills/solidcraft-babysit-pr/SKILL.md) dice "No
+# status comments": pasar a ready no deja comentario. Y el titulo del claim
+# "<resumen> (#N)" pierde el numero al pasar a ready (solidcraft-file-pr).
+echo "== pasar a ready no deja comentario y le saca el numero al titulo =="
+set_pulls <<'EOF2'
+14003|Preset numbers (#12418)|1|abc123def4567890|Arregla\n\nFixes #12418\n\nChanges a default: no\n|[]
+EOF2
 rm -f "$TMP/comments/14003.json"
 : > "$TMP/calls.log"
 run_pipeline
-run_pipeline
-n=$(grep -c "^COMMENT:14003" "$TMP/calls.log" || true)
-if [ "$n" -eq 1 ]; then
-  ok "dos corridas del pipeline postean UN solo comentario"
-else
-  no "dos corridas del pipeline postean UN solo comentario" "comentarios=$n"
-fi
-if grep -q "pipeline-verdict: sha=abc123def4567890" "$TMP/calls.log"; then
-  ok "el comentario del veredicto lleva el marcador con el head sha"
-else
-  no "el comentario del veredicto lleva el marcador con el head sha" "$(cat "$TMP/calls.log")"
-fi
-# sin la clave local, el marcador que esta EN EL PR sigue alcanzando:
-rm -rf "$ORCH_DIR/pipeline/verdicts"
-: > "$TMP/calls.log"
 run_pipeline
 n=$(grep -c "^COMMENT:14003" "$TMP/calls.log" || true)
 if [ "$n" -eq 0 ]; then
-  ok "el marcador del comentario que ya esta en el PR impide repetirlo"
+  ok "dos corridas del pipeline NO postean ningun comentario de estado"
 else
-  no "el marcador del comentario que ya esta en el PR impide repetirlo" "comentarios=$n"
+  no "dos corridas del pipeline NO postean ningun comentario de estado" "comentarios=$n"
 fi
-if grep -q "^READY:14003" "$TMP/calls.log" && grep -q "ya estaba en el PR" "$TMP/out.log"; then
-  ok "el pipeline llego al comentario y lo salteo POR EL MARCADOR"
+if grep -q "^READY:14003" "$TMP/calls.log"; then
+  ok "el PR verde pasa a ready igual (sin comentario)"
 else
-  no "el pipeline llego al comentario y lo salteo POR EL MARCADOR" "$(cat "$TMP/out.log")"
+  no "el PR verde pasa a ready igual (sin comentario)" "$(cat "$TMP/calls.log")"
 fi
-rm -f "$TMP/comments/14003.json"
-
-# --- N2: si no se puede saber si el veredicto ya esta, NO se postea --------
-echo "== si no se pueden leer los comentarios, no se postea el veredicto =="
-: > "$TMP/comments-fail"
-set_pulls <<'EOF'
-14006|Preset numbers|1|abc123def4567890|Arregla\n\nFixes #12418\n\nChanges a default: no\n|[]
-EOF
-: > "$TMP/calls.log"
-run_pipeline; rc=$?
-if [ "$rc" -ne 0 ]; then
-  ok "sin poder leer los comentarios, la corrida sale con rc distinto de cero (rc=$rc)"
+if grep -q "titulo sin el numero del issue" "$TMP/out.log"; then
+  ok "al pasar a ready, el titulo pierde el ' (#N)' del claim"
 else
-  no "sin poder leer los comentarios, la corrida sale con rc distinto de cero" "rc=$rc"
+  no "al pasar a ready, el titulo pierde el ' (#N)' del claim" "$(cat "$TMP/out.log")"
 fi
-if grep -q "^COMMENT:14006" "$TMP/calls.log"; then
-  no "sin poder leer los comentarios NO se postea el veredicto (no se sabe si ya estaba)"
-else
-  ok "sin poder leer los comentarios NO se postea el veredicto (no se sabe si ya estaba)"
-fi
-if grep -q "no se pudo saber" "$TMP/out.log"; then
-  ok "el log dice que no se pudo saber si el veredicto ya estaba comentado"
-else
-  no "el log dice que no se pudo saber si el veredicto ya estaba comentado" "$(cat "$TMP/out.log")"
-fi
-rm -f "$TMP/comments-fail"
 
 # --- O: la lista de PRs no esta truncada a 30 ------------------------------
 echo "== la lista de PRs no esta truncada a 30 =="
@@ -943,10 +910,16 @@ set_pulls <<'EOF'
 EOF
 : > "$TMP/calls.log"
 run_pipeline
+# El pipeline YA NO edita el body (2026-11-21): lo dice y deja el PR en draft.
 if grep -qE "Fixes #123([^0-9]|$)" "$TMP/calls.log"; then
-  ok "un body sin referencias se repara con 'Fixes #123' (el issue del titulo)"
+  no "un body sin referencias NO se edita desde el pipeline" "$(cat "$TMP/calls.log")"
 else
-  no "un body sin referencias se repara con 'Fixes #123'" "$(cat "$TMP/calls.log")"
+  ok "un body sin referencias NO se edita desde el pipeline"
+fi
+if grep -q "falta 'Fixes #123'" "$TMP/out.log"; then
+  ok "el log dice que al body le falta 'Fixes #123' (el issue del titulo)"
+else
+  no "el log dice que al body le falta 'Fixes #123'" "$(cat "$TMP/out.log")"
 fi
 if grep -qE "Fixes #3([^0-9]|$)" "$TMP/calls.log"; then
   no "el numero de la prosa NO gana al issue del titulo"

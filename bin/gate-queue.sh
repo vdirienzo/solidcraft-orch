@@ -19,7 +19,7 @@
 #   bash gate-queue.sh --run [max_wait_minutes]  -> drains the queue
 #
 # The runner is safe to run from a cron every few minutes: it takes a
-# lock (an atomic mkdir) so only one runner works at a time.
+# lock (flock on gates/queue.flock) so only one runner works at a time.
 # ------------------------------------------------------------------
 set -uo pipefail
 
@@ -34,16 +34,42 @@ SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 BIN="$ORCH_DIR/bin"
 QUEUE="$ORCH_DIR/gates/queue.txt"
-LOCK="$ORCH_DIR/gates/queue.lock"
+# El lock es un flock sobre un ARCHIVO, no un mkdir (2026-11-21). El
+# mkdir dependia de un trap para borrarse y de "pgrep -f gate-queue.sh"
+# para decidir si su dueno vivia; pgrep siempre encontraba el "sh -c" del
+# cron y el subshell $(...) del propio runner, asi que el lock de un runner
+# muerto (reinicio de la caja el 2026-11-21) no se libero nunca y la cola
+# quedo parada desde el 2026-11-20 17:50. Un flock lo suelta el kernel
+# cuando muere el proceso que tiene el descriptor: no hay lock viejo.
+# Nombre NUEVO a proposito: el directorio queue.lock del esquema viejo no
+# puede chocar con el archivo (ver OLD_LOCK_DIR en run).
+LOCK="$ORCH_DIR/gates/queue.flock"
+OLD_LOCK_DIR="$ORCH_DIR/gates/queue.lock"
 LOGDIR="$ORCH_DIR/logs"
 mkdir -p "$ORCH_DIR/gates" "$LOGDIR"
 
 enqueue(){
   local issue="$1" sha="$2"
-  # an entry that is already queued is not queued twice
-  if [ -f "$QUEUE" ] && grep -qE "^${issue}[[:space:]]" "$QUEUE"; then
-    echo "gate-queue: el slot $issue ya esta en la cola"
-    return 0
+  # El mismo slot con el mismo sha no se encola dos veces. El mismo slot
+  # con OTRO sha reemplaza la linea (2026-11-21): antes se descartaba el sha
+  # nuevo y la cola gateaba el commit viejo, un verdict que no dice nada del
+  # pull request tal como esta. La linea se reemplaza EN SU LUGAR: el slot
+  # no pierde su turno por haber empujado otro commit.
+  if [ -f "$QUEUE" ]; then
+    local queued
+    queued="$(awk -v i="$issue" '$1 == i {print $2; exit}' "$QUEUE")"
+    if [ -n "$queued" ] || awk -v i="$issue" '$1 == i {f=1} END {exit !f}' "$QUEUE"; then
+      if [ "$queued" = "$sha" ]; then
+        echo "gate-queue: el slot $issue ya esta en la cola ($sha)"
+        return 0
+      fi
+      local tmpq="$QUEUE.tmp.$$"
+      awk -v i="$issue" -v s="$sha" '
+        $1 == i { if (!done) { print i " " s; done=1 }; next }
+        { print }' "$QUEUE" > "$tmpq" && mv "$tmpq" "$QUEUE"
+      echo "gate-queue: el slot $issue ya estaba en la cola con ${queued:-sin sha}: reemplazado por $sha"
+      return 0
+    fi
   fi
   printf '%s %s\n' "$issue" "$sha" >> "$QUEUE"
   echo "gate-queue: encolado el gate del slot $issue ($sha)"
@@ -57,29 +83,28 @@ list(){
 
 run(){
   local max_wait="${1:-240}"
-  # one runner at a time. A lock left behind by a runner that was killed
-  # (the same thing happened to the build tokens: a trap that does not run
-  # leaves the lock forever) is released here when it is old and no runner
-  # is alive: the liveness of a lock is its AGE and its owner, never its pid.
-  if ! mkdir "$LOCK" 2>/dev/null; then
-    local lock_age=0
-    [ -d "$LOCK" ] && lock_age=$(( ( $(date +%s) - $(stat -c %Y "$LOCK") ) / 60 ))
-    local alive
-    alive="$(pgrep -f 'gate-queue.sh' 2>/dev/null | grep -v "^$$\$" | head -3 | tr '\n' ' ')"
-    if [ "$lock_age" -ge 20 ] && [ -z "$alive" ]; then
-      rmdir "$LOCK" 2>/dev/null || true
-      if ! mkdir "$LOCK" 2>/dev/null; then
-        echo "gate-queue: otro runner esta trabajando (lock $(basename "$LOCK"))"
-        return 0
-      fi
-      echo "gate-queue: se libero un lock viejo (${lock_age} min sin runner vivo)"
-    else
-      echo "gate-queue: otro runner esta trabajando (lock $(basename "$LOCK"))"
-      return 0
-    fi
+  # Un runner a la vez: flock -n sobre el descriptor 9, que queda abierto
+  # toda la vida del runner. Si el runner muere (kill -9, reinicio) el kernel
+  # cierra el descriptor y el lock se suelta solo: no hace falta trap, ni
+  # edad, ni adivinar con pgrep quien es el dueno. El archivo NO se borra al
+  # salir: borrarlo dejaria a un runner con flock sobre un inodo huerfano y
+  # a otro con flock sobre el archivo nuevo, dos runners a la vez.
+  if ! exec 9>>"$LOCK"; then
+    echo "gate-queue: no pude abrir el lock $LOCK" >&2
+    return 1
   fi
-  trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
-  trap 'rmdir "$LOCK" 2>/dev/null || true; exit 143' TERM INT
+  if ! flock -n 9; then
+    exec 9>&-
+    echo "gate-queue: otro runner esta trabajando (lock $(basename "$LOCK"))"
+    return 0
+  fi
+  # LA TRANSICION: un runner del esquema viejo (mkdir) que murio deja el
+  # directorio queue.lock. Ya no bloquea a nadie (el lock es otro archivo),
+  # pero se borra para que nadie lo lea como "hay un runner". rmdir solo
+  # borra un directorio vacio, que es lo que dejaba el esquema viejo.
+  if [ -d "$OLD_LOCK_DIR" ] && rmdir "$OLD_LOCK_DIR" 2>/dev/null; then
+    echo "gate-queue: se borro el lock viejo $(basename "$OLD_LOCK_DIR") (del esquema mkdir)"
+  fi
   echo "gate-queue: $(date +%H:%M:%S) runner activo (espera maxima ${max_wait} min)"
   local waited=0
   local sin_worktree=0
@@ -88,7 +113,8 @@ run(){
     # LAST number for both, so it read "2 used of 2" and the queue never
     # started a gate even with the box empty.
     local used total
-    read -r used total <<< "$(bash "$BIN/build-slot.sh" --status 2>/dev/null \
+    # 9>&-: nada que lance el runner hereda el lock (ver el gate abajo).
+    read -r used total <<< "$(bash "$BIN/build-slot.sh" --status 2>/dev/null 9>&- \
         | awk '{print $(NF-3), $NF}')"
     local free=$(( total - used ))
     # free is the number of FREE slots (total - used): there is no slot when
@@ -131,9 +157,18 @@ run(){
       # by timeout and the gate reports ROJO-SCOPE with fmt:fail and NO failed test:
       # a false red that keeps the pull request in draft for nothing. 120 min gives the
       # phase 144 s and it passes. (skill: solidcraft-gate-fmt-slice)
+      #
+      # El log del slot se AGREGA con un separador fechado (2026-11-21): antes
+      # cada corrida lo pisaba y el rojo anterior se perdia al relanzar.
+      printf '\n===== %s gate-queue: gate del slot %s (%s) =====\n' \
+          "$(date '+%Y-%m-%d %H:%M:%S')" "$issue" "$sha"
       GATE_QUICK_TIMEOUT_MIN="${GATE_QUICK_TIMEOUT_MIN:-120}" \
-      bash "$BIN/gate.sh" "$issue" "$sha" > "$LOGDIR/gate-queue-$issue.log" 2>&1
-    ) &
+      bash "$BIN/gate.sh" "$issue" "$sha"
+    ) >> "$LOGDIR/gate-queue-$issue.log" 2>&1 9>&- &
+    # 9>&- arriba: el gate corre en segundo plano y dura mucho mas que el
+    # runner. El lock cubre al RUNNER (como el mkdir, que se borraba al salir
+    # el runner con los gates todavia corriendo); si el gate heredara el
+    # descriptor, la cola quedaria cerrada hasta que terminara cada gate.
     sleep "${GATE_STAGGER:-90}"   # delay medido: con 90 s el 2do gate encuentra el sccache caliente
     waited=0
   done

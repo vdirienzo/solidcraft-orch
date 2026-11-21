@@ -52,11 +52,43 @@ esac
 command -v crontab >/dev/null 2>&1 || { echo "install-crontab: no hay crontab en esta maquina" >&2; exit 2; }
 
 # --- el bloque del orquestador ------------------------------------------------
+# EL PATH DEL CRON (2026-11-21): cron arranca los jobs con PATH=/usr/bin:/bin,
+# y en esta maquina gh (~/.local/bin), opencode (~/.opencode/bin) y cargo
+# (~/.cargo/bin) no estan ahi. Sin ellos claim-verify.sh respondia ERROR en
+# cada pasada, prepare-slot no preparaba ningun slot, next-issue.py no veia
+# ningun issue libre y la wave arrancaba CERO agentes, sin decir por que. El
+# PATH del bloque se arma con los directorios donde ESTA maquina tiene esas
+# herramientas al instalar, mas los del sistema.
+cron_path() {
+  local p="" dir tool
+  for tool in gh opencode cargo python3 git; do
+    dir="$(dirname "$(command -v "$tool" 2>/dev/null)" 2>/dev/null)"
+    [ -n "$dir" ] && [ "$dir" != "." ] || continue
+    case ":$p:" in *":$dir:"*) ;; *) p="${p:+$p:}$dir" ;; esac
+  done
+  for dir in "$HOME/.local/bin" "$HOME/.cargo/bin" /usr/local/bin /usr/bin /bin; do
+    case ":$p:" in *":$dir:"*) ;; *) p="${p:+$p:}$dir" ;; esac
+  done
+  printf '%s' "$p"
+}
+
+# EL INTERPRETE SALE DE LA EXTENSION (2026-11-21): el bloque corria TODO con
+# `bash <script>`, tambien los .py: pipeline.py, comment_watch.py,
+# daily-report.py y loop-status.py fallaban en cada pasada con "import:
+# command not found" (bash leyendo Python) y nadie lo veia.
+interpreter_for() {
+  case "$1" in
+    *.py) printf 'python3' ;;
+    *) printf 'bash' ;;
+  esac
+}
+
 build_block() {
   printf '%s\n' "$BEGIN"
   printf '# Los crons del loop de SolidCraft. Generado por bin/install-crontab.sh;\n'
   printf '# el registro de verdad es bin/crons.txt. No editar a mano: el proximo\n'
   printf '# install-crontab.sh reescribe este bloque.\n'
+  printf 'PATH=%s\n' "$(cron_path)"
   while IFS='|' read -r job schedule script node rest; do
     case "$job" in ''|\#*) continue ;; esac
     job="$(printf '%s' "$job" | tr -d '[:space:]')"
@@ -71,8 +103,8 @@ build_block() {
     # no existe (y el registro dice que existe).
     # El horario del registro ya tiene sus cinco campos: el cron no admite un
     # sexto (un campo de mas y el cron no dice nada: el job no existe).
-    printf '%s cd %s && %s bash %s >> %s/logs/cron-%s.log 2>&1\n' \
-      "$schedule" "$REPO_ROOT" "/usr/bin/env" "$script" "$REPO_ROOT" "$job"
+    printf '%s cd %s && %s %s %s >> %s/logs/cron-%s.log 2>&1\n' \
+      "$schedule" "$REPO_ROOT" "/usr/bin/env" "$(interpreter_for "$script")" "$script" "$REPO_ROOT" "$job"
   done < "$REGISTER"
   printf '%s\n' "$END"
 }

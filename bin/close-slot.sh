@@ -138,10 +138,12 @@ WINNER="$(printf '%s\n' "$VERDICT" | grep -oE '#([0-9]+)' | head -1 | tr -d '#')
 if [ "$RC" = "1" ]; then
   # EL CLAIM SE PERDIÓ: se cierra nuestro PR, se guarda el trabajo y se ofrece.
   if [ -n "$OUR_PR" ]; then
+    # In English (2026-11-21): upstream's rule is "English throughout", and
+    # this comment is public.
     gh pr close "$OUR_PR" -R "$UPSTREAM_REPO" --comment \
-      "Cierro este PR: el claim lo tiene el #$WINNER, que tiene el número menor y por lo tanto gana. \
-Dejo el trabajo en la rama \`$(git -C "$REPO" branch --list "fix-$ISSUE" --format='%(refname:short)' | head -1)\` \
-y el diagnóstico en el comentario del PR ganador." >/dev/null 2>&1
+      "Closing this PR: #$WINNER claimed the same issue first, and the lowest-numbered open PR wins. \
+The work stays on the branch \`$(git -C "$REPO" branch --list "fix-$ISSUE" --format='%(refname:short)' | head -1)\` \
+in case it helps there." >/dev/null 2>&1
   fi
   STAMP="$(date -u +%Y%m%d-%H%M%S)"
   SAVE="$ORCH_DIR/logs/claims-lost/$ISSUE-$STAMP"
