@@ -68,7 +68,7 @@ ISSUE_FIELDS = """
         author { login }
         labels(first: 30) { nodes { name } }
         assignees(first: 10) { nodes { login } }
-        comments(last: 5) { totalCount nodes { author { login } body createdAt } }
+        comments(last: 5) { totalCount nodes { author { login } authorAssociation body createdAt } }
 """
 PR_FIELDS = """
         number title body isDraft headRefName baseRefName createdAt updatedAt
@@ -353,7 +353,7 @@ def norm_issue(n):
         "labels": [{"name": l.get("name") or ""} for l in _nodes(n.get("labels"))],
         "assignees": [{"login": a.get("login") or ""} for a in _nodes(n.get("assignees"))],
         "comments": [
-            {"author": {"login": _login(c.get("author"))}, "body": c.get("body") or "", "createdAt": c.get("createdAt") or ""}
+            {"author": {"login": _login(c.get("author"))}, "association": c.get("authorAssociation") or "", "body": c.get("body") or "", "createdAt": c.get("createdAt") or ""}
             for c in _nodes(comments)
         ],
         "commentsCount": int(comments.get("totalCount") or 0) if isinstance(comments, dict) else 0,

@@ -294,6 +294,29 @@ def run_tests(tmp):
     else:
         no("parse_events: sin objeto no inventa uno", repr(obj))
 
+    # El veto del maintainer exige su cita (2026-11-21): #17196 salia
+    # "decidido" sin ningun comentario de un maintainer.
+    decided_issue = {"comments": [
+        {"association": "CONTRIBUTOR", "body": "This is by design, I think, we should not change it."},
+        {"association": "MEMBER", "body": "This is intended behaviour and we won't change it for now."},
+    ]}
+    for quote, want, name in (
+        ("This is intended behaviour and we won't change it", True, "una cita de un MEMBER sostiene el veto"),
+        ("This is by design, I think, we should not change it", False, "la cita de un CONTRIBUTOR no es un veto"),
+        ("the maintainer must decide the schema", False, "una cita que no esta en el issue no es un veto"),
+        ("", False, "un veto sin cita no cuenta"),
+    ):
+        got = mod.ground_decision({"maintainer_decided": True, "decision_quote": quote, "reason": "r"}, decided_issue)
+        if got["maintainer_decided"] is want and got.get("maintainer_decided_raw") is True:
+            ok(f"ground_decision: {name}")
+        else:
+            no(f"ground_decision: {name}", repr(got))
+    got = mod.ground_decision({"maintainer_decided": False, "decision_quote": "", "reason": "r"}, decided_issue)
+    if got["maintainer_decided"] is False and "maintainer_decided_raw" not in got:
+        ok("ground_decision: sin veto no cambia nada")
+    else:
+        no("ground_decision: sin veto no cambia nada", repr(got))
+
 
 if __name__ == "__main__":
     sys.exit(main())

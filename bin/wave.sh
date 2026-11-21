@@ -42,6 +42,13 @@ ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
 WORKTREES_DIR="${WORKTREES_DIR:-$HOME/solidcraft-wt}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-tangency-labs/solidcraft}"
 STALE_MIN="${SLOT_LOCK_STALE_MIN:-240}"
+# LA FICHA DE CADA ISSUE EN LA WAVE (2026-11-21): next-issue.py aplica la
+# ficha (bin/issue-card.py) solo con NEXT_ISSUE_TRIAGE=1. Una ficha con el
+# modelo cuesta ~$0,002 y hay a lo sumo 5 cada 10 minutos; un agente que
+# arranca sobre un issue que no vale (el #18344: el maintainer ya habia dicho
+# que el comportamiento es el correcto) cuesta un turno entero. Se apaga con
+# NEXT_ISSUE_TRIAGE=0.
+export NEXT_ISSUE_TRIAGE="${NEXT_ISSUE_TRIAGE:-1}"
 DRY=""
 [ "${1:-}" = "--dry-run" ] && DRY="--dry-run"
 
