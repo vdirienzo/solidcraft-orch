@@ -109,18 +109,32 @@ the PR that won, and report it. The work of a lost claim is never thrown away.
   above), then `gh pr ready` when the gate is green.
 - Do not add `approved-for-ci`: that label is the maintainer's.
 
-## WHEN YOU FINISH: CLEAN UP AFTER YOURSELF
+## WHEN YOU FINISH: THE CLEANUP IS NOT YOURS
 
-The next agent starts as soon as you are done, and this box has 260 GB of disk:
-a slot's target directory is 5.6 GB and the worktree another 700 MB.
+**Do NOT delete the worktree, the target directory or the lock.** The orchestrator
+cleans up the slot when your pull request is up (`bin/close-slot.sh`, called by
+`bin/wave.sh`): it removes the target directory (5.6 GB), the worktree (700 MB),
+the brief of the slot and the lock, and only when the gate of the slot is NOT
+running and NOT queued.
 
-    cd /home/user/Projects/solidcraft-orch/solidcraft-orch
-    bash bin/slot-lock.sh --slot {{ISSUE}} --release
-    rm -rf {{TARGET_DIR}}
-    git -C /home/user/Projects/solidcraft-orch/solidcraft-orch worktree remove --force {{WORKTREE}}
+Why this matters: the gate of your slot compiles IN your worktree and IN your
+target directory, and the pipeline queues that gate AFTER you open the pull
+request. If you delete the worktree by hand, the gate runs on a tree that no
+longer exists, it dies with "Could not locate working directory", and it writes
+a ROJO verdict about a pull request that is fine (it happened to PR #20017 on
+20-11-2026).
 
-Do that BEFORE you report, and only after your branch is pushed (the branch and
-the PR are what survive; the worktree is what does not have to).
+So your job ends with: the branch pushed to the fork, the pull request open, the
+claim verified, the report written. The branch and the PR are what survive; the
+rest is the orchestrator's.
+
+If you opened a browser (the MCP of chrome-devtools), CLOSE IT before you
+report: with the MCP of chrome-devtools every page you open is a renderer, and
+a Chrome left alive eats 3.7 GB of this box's 15 GB. Close the pages you
+opened (`mcp__chrome_devtools__close_page`) and, if you launched the browser
+yourself, kill it. The loop also reaps the browsers whose MCP is gone
+(`bash bin/kill-orphan-browsers.sh`), but a browser that lives until then
+slows the whole box down while you work.
 
 ## WHAT TO REPORT (plain text, no filler)
 

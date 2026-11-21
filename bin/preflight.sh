@@ -78,14 +78,18 @@ for entry in \
   say_missing "$LOOP_DIR/bin/$file" "$what - lo necesitan: $who"
 done
 
-# The hermes scripts: the cron runs a COPY from there, not the repo. So a
-# fix in this repo does NOT reach the cron until the copy is updated. The
-# copy of ping-ready.sh has to be byte-identical to the canonical one; the
-# rest only have to EXIST, but a copy that is older than the repo is a
-# cron running old code.
-if [ ! -d "$HERMES_SCRIPTS" ]; then
-  say_missing "$HERMES_SCRIPTS" "los scripts que corren los crons viven ahi (ver README.md, tabla de crons)"
-else
+# EL RUNTIME DEL AGENTE (2026-11-21): el loop corre sus agentes con opencode
+# (`opencode run`, bin/dispatch-slot.sh) y sus crons con el CRONTAB del
+# usuario (bin/install-crontab.sh). Antes era hermes: el binario de hermes y
+# las copias de sus scripts en ~/.hermes/scripts. Si hermes esta instalado, el
+# chequeo viejo sigue valiendo (esa maquina corre los crons de hermes); si no,
+# lo que vale es el binario del agente y el crontab.
+if [ -d "$HERMES_SCRIPTS" ]; then
+  # The hermes scripts: the cron runs a COPY from there, not the repo. So a
+  # fix in this repo does NOT reach the cron until the copy is updated. The
+  # copy of ping-ready.sh has to be byte-identical to the canonical one; the
+  # rest only have to EXIST, but a copy that is older than the repo is a
+  # cron running old code.
   CRONS_FILE="$(cd "$(dirname "$0")" && pwd)/crons.txt"
   if [ -f "$CRONS_FILE" ]; then
     while IFS='|' read -r job schedule script node rest; do
@@ -108,6 +112,31 @@ else
     say_missing "$HERMES_SCRIPTS/ping-ready.sh" "el cron solidcraft-ping-ready corre esa copia; tiene que ser identica a bin/ping-ready.sh"
   elif ! diff -q "$HERMES_SCRIPTS/ping-ready.sh" "$(dirname "$0")/ping-ready.sh" >/dev/null 2>&1; then
     say_missing "$HERMES_SCRIPTS/ping-ready.sh" "la copia del cron NO es identica a bin/ping-ready.sh: el cron corre codigo viejo"
+  fi
+else
+  # SIN HERMES: el runtime es opencode + el crontab del usuario.
+  AGENT_ENV="$(cd "$(dirname "$0")" && pwd)/agent-env.sh"
+  if [ ! -f "$AGENT_ENV" ]; then
+    say_missing "$AGENT_ENV" "el runtime del agente: sin el, bin/dispatch-slot.sh no arranca a nadie"
+  else
+    AGENT_ENV_OUT="$(bash "$AGENT_ENV" 2>/dev/null)"
+    AGENT_ENV_RC=$?
+    if [ "$AGENT_ENV_RC" -ne 0 ]; then
+      say_missing "${AGENT_BIN:-opencode}" "el binario del agente (bin/agent-env.sh): sin el, la wave no despacha ningun agente"
+    else
+      eval "$AGENT_ENV_OUT"
+    fi
+  fi
+  if ! command -v crontab >/dev/null 2>&1; then
+    say_missing "crontab" "el planificador del loop: sin el, nada corre solo (bash bin/install-crontab.sh)"
+  elif ! crontab -l 2>/dev/null | grep -q 'solidcraft-orch'; then
+    say_missing "crontab del usuario" "los crons del loop no estan instalados (bash bin/install-crontab.sh)"
+  else
+    CRONTAB_JOBS="$(crontab -l 2>/dev/null | grep -c 'cd .*solidcraft-orch' || true)"
+    REGISTER_JOBS="$(grep -cE '^[[:space:]]*[^#[:space:]][^|]*\|' "$(cd "$(dirname "$0")" && pwd)/crons.txt" 2>/dev/null || echo 0)"
+    if [ "${CRONTAB_JOBS:-0}" -lt "${REGISTER_JOBS:-0}" ]; then
+      say_warn "crontab del usuario" "hay $CRONTAB_JOBS job(s) del loop y el registro (bin/crons.txt) tiene $REGISTER_JOBS: un job del registro que no esta en el crontab es un trabajo que nadie hace"
+    fi
   fi
 fi
 

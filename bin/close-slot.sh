@@ -97,9 +97,27 @@ gate_running() {
   return 1
 }
 
-# EL CERRADO: el target, el worktree y el lock. SOLO si no hay un gate
-# corriendo: si lo hay, el slot sigue vivo (el PR ya quedo anotado) y la wave
+# EL CERRADO: el target, el worktree, el brief y el lock. SOLO si no hay un
+# gate corriendo: si lo hay, el slot sigue vivo (el PR ya quedo anotado) y la wave
 # lo cierra en un turno posterior, cuando el gate haya escrito su veredicto.
+#
+# POR QUE LA LIMPIEZA ESTA ACA Y NO EN EL AGENTE (2026-11-21): el brief le
+# pedia al agente borrar su worktree y su target antes de reportar. El gate del
+# slot compila EN el worktree y EN el target del slot, y el pipeline encola ese
+# gate DESPUES de que el agente abre el PR: si el agente borra el worktree, el
+# gate arranca sobre un arbol que ya no esta, se muere con "Could not locate
+# working directory" y escribe un veredicto ROJO de un PR sano (le paso al PR
+# #20017 el 20-11-2026). Ademas el agente que borra su worktree se borra la
+# evidencia con el (el gate necesita el arbol para escribir el veredicto).
+#
+# LO QUE SE BORRA (lo que ya no se usa porque el PR ya esta en GitHub):
+#   - el target dir del slot (5,6 GB): es una cache, cargo la reconstruye;
+#   - el worktree del slot (700 MB): el trabajo esta en la rama del fork;
+#   - el brief del slot: nadie lo lee mas (se vuelve a renderizar con la
+#     plantilla si el slot vuelve a abrirse);
+#   - el lock del slot: se suelta para que la caja lo pueda tomar.
+# LO QUE NO SE BORRA (la evidencia): logs/<issue>-verify.log, el veredicto del
+# gate (gates/<issue>/ dentro del LOOP_DIR) y la rama.
 cleanup_slot() {
   if gate_running; then
     echo "close-slot: el slot $ISSUE tiene un gate corriendo: NO se borran el target ni el worktree" >&2
@@ -107,6 +125,7 @@ cleanup_slot() {
   fi
   [ -n "$TD" ] && rm -rf "$TD"
   remove_worktree "$WT"
+  rm -f "$ORCH_DIR/prompts/agent-$ISSUE.md"
   bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
   return 0
 }
@@ -155,6 +174,9 @@ fi
 
 # 2. EL PR ES NUESTRO: se verifica, se anota y el slot se cierra.
 if [ -n "$OUR_PR" ]; then
+  # El directorio de los logs puede no existir (una maquina nueva): sin el, la
+  # redireccion falla, el `|| true` lo tapa y la evidencia se pierde.
+  mkdir -p "$ORCH_DIR/logs"
   bash "$ORCH_BIN/verify-pr.sh" "$OUR_PR" >>"$ORCH_DIR/logs/$ISSUE-verify.log" 2>&1 || true
   python3 "$ORCH_BIN/state-set.py" open_prs "$OUR_PR" "$(python3 - "$OUR_PR" "$ISSUE" "$BRANCH" <<'PY'
 import json, sys

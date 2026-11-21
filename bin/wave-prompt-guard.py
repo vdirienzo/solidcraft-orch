@@ -60,6 +60,12 @@ def sha(text: str) -> str:
 
 def find_job() -> tuple[str | None, str | None]:
     """The wave job, by NAME, and its prompt (None when it runs as a script)."""
+    if not os.path.isfile(JOBS_JSON):
+        # SIN HERMES (2026-11-21): los crons del loop son un CRONTAB del
+        # usuario (bin/install-crontab.sh) y la wave corre como script: no hay
+        # prompt que una copia vieja pueda romper. No hay nada que guardar.
+        print("wave-prompt-guard: no hay jobs de hermes: la wave corre como script (crontab): nothing to guard")
+        return "no-hermes", None
     try:
         with open(JOBS_JSON, encoding="utf-8-sig") as fh:
             data = json.load(fh)
@@ -80,11 +86,6 @@ def find_job() -> tuple[str | None, str | None]:
 
 
 def main() -> int:
-    if not os.path.isfile(CANONICAL):
-        print(f"wave-prompt-guard: canonical file missing: {CANONICAL}")
-        return 1
-    with open(CANONICAL, encoding="utf-8") as fh:
-        canonical = fh.read()
     job_id, current = find_job()
     if job_id is None:
         return 1
@@ -93,6 +94,11 @@ def main() -> int:
         # is nothing that a stale copy could break.
         print("wave-prompt-guard: the wave runs as a script cron (no prompt): nothing to guard")
         return 0
+    if not os.path.isfile(CANONICAL):
+        print(f"wave-prompt-guard: canonical file missing: {CANONICAL}")
+        return 1
+    with open(CANONICAL, encoding="utf-8") as fh:
+        canonical = fh.read()
 
     missing = [m for m in REQUIRED_MARKERS if m not in current]
     if sha(current) == sha(canonical) and not missing:

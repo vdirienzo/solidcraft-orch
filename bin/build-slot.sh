@@ -51,9 +51,22 @@ mkdir -p "$LOCK_DIR" 2>/dev/null || true
 
 # A token of a run that died: its directory is older than the limit.
 reap_stale() {
-  local d age
+  local d age pid
   for d in "$LOCK_DIR"/slot-*; do
     [ -d "$d" ] || continue
+    # EL DUENO PRIMERO (2026-11-20): el token guarda el pid que lo tomo.
+    # Un gate muerto a mitad de compilacion (o un shell que murio) dejaba su
+    # token BUILD_STALE_MIN minutos (3 h por defecto): la caja decia "no free
+    # build slot" y NADIE podia volver a correr un gate. Si el dueno esta
+    # muerto, el token se va AHORA; si esta vivo, el token es suyo, por viejo
+    # que sea (un gate de esta caja puede tardar 30 min).
+    pid="$(cat "$d/pid" 2>/dev/null | tr -dc '0-9')"
+    if [ -n "$pid" ]; then
+      if ! kill -0 "$pid" 2>/dev/null; then
+        rm -rf "$d" 2>/dev/null || true
+      fi
+      continue
+    fi
     age=$(( $(date +%s) - $(stat -c %Y "$d" 2>/dev/null || echo 0) ))
     if [ "$age" -gt "$(( STALE_MIN * 60 ))" ]; then
       rm -rf "$d" 2>/dev/null || true
@@ -68,6 +81,8 @@ take() {
     local i
     for i in $(seq 1 "$SLOTS"); do
       if mkdir "$LOCK_DIR/slot-$i" 2>/dev/null; then
+        # The owner of the token: the process that asked for it (the gate).
+        printf '%s\n' "$PPID" > "$LOCK_DIR/slot-$i/pid" 2>/dev/null || true
         printf '%s\n' "$LOCK_DIR/slot-$i"
         return 0
       fi

@@ -42,7 +42,19 @@ if [ "$1" = "api" ] && [ "$2" = "user" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-  cat "${GH_FAKE_LIST:-/dev/null}" 2>/dev/null
+  # Aplica el filtro --jq como el gh de verdad: sin el, claim-verify.sh recibe
+  # el JSON crudo, junta todos sus digitos en un numero ("12345900190019001")
+  # y el PR propio "pierde" el claim contra si mismo (2026-11-21).
+  jq_filter="" prev=""
+  for a in "$@"; do
+    [ "$prev" = "--jq" ] && jq_filter="$a"
+    prev="$a"
+  done
+  if [ -n "$jq_filter" ]; then
+    jq -r "$jq_filter" < "${GH_FAKE_LIST:-/dev/null}" 2>/dev/null
+  else
+    cat "${GH_FAKE_LIST:-/dev/null}" 2>/dev/null
+  fi
   exit 0
 fi
 echo "[]"
@@ -129,9 +141,11 @@ else
 fi
 
 # --- 3. un claim que no esta libre ------------------------------------------
-# Otro autor tiene un PR abierto que menciona el issue.
+# Otro autor tiene PRs abiertos que mencionan los issues (#9001 para el
+# arbitro, #9002 para prepare-slot: cada caso mira SU issue).
 cat > "$TMP/otros.json" <<'JSON'
-[{"number":4242,"title":"otro (#9001)","body":"Fixes #9001","author":{"login":"otro"},"headRefName":"fix-9001","isDraft":true}]
+[{"number":4242,"title":"otro (#9001)","body":"Fixes #9001","author":{"login":"otro"},"headRefName":"fix-9001","isDraft":true},
+ {"number":4243,"title":"otro (#9002)","body":"Fixes #9002","author":{"login":"otro"},"headRefName":"fix-9002","isDraft":true}]
 JSON
 export GH_FAKE_LIST="$TMP/otros.json"
 CLAIM="$(cd "$REPO_ROOT" && bash bin/claim-verify.sh 9001 2>&1)"
@@ -180,6 +194,24 @@ then
   ok "el slot desaparece del estado"
 else
   no "el slot desaparece del estado"
+fi
+# LA LIMPIEZA COMPLETA (2026-11-21): cuando el PR ya esta en GitHub, lo que
+# ya no se usa se va: el target (5,6 GB), el worktree (700 MB) y el brief del
+# slot. La evidencia se queda (logs y veredicto del gate).
+if [ ! -d "$ORCH/targets/slot-9001" ]; then
+  ok "close-slot borra el target dir del slot"
+else
+  no "close-slot borra el target dir del slot" "$ORCH/targets/slot-9001 sigue"
+fi
+if [ ! -f "$ORCH/prompts/agent-9001.md" ]; then
+  ok "close-slot borra el brief del slot"
+else
+  no "close-slot borra el brief del slot" "$ORCH/prompts/agent-9001.md sigue"
+fi
+if [ -f "$ORCH/logs/9001-verify.log" ]; then
+  ok "close-slot deja la evidencia (el log de la verificacion)"
+else
+  no "close-slot deja la evidencia (el log de la verificacion)" "$ORCH/logs/9001-verify.log no esta"
 fi
 
 # --- 5. slot-busy.sh: un slot vivo no se toca -------------------------------

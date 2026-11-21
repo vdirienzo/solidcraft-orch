@@ -66,6 +66,14 @@ if [ ! -f "$TEMPLATE" ]; then
   exit 5
 fi
 git -C "$REPO" fetch origin >/dev/null 2>&1
+# EL FORK TAMBIEN (2026-11-20): la rama de un slot puede estar SOLO en el
+# fork (el agente la pusheo y esta maquina la borro). El worktree tiene que
+# nacer en el head del fork, no en origin/main ni en una rama local vieja: el
+# agente de repair del PR #20017 trabajo sobre b292d76a9 (la base que no era)
+# en vez de 471445c5e (el head del PR), y no podia ver los fallos que tenia
+# que arreglar.
+git -C "$REPO" fetch fork "$BRANCH:refs/remotes/fork/$BRANCH" >/dev/null 2>&1 || true
+FORK_SHA="$(git -C "$REPO" rev-parse -q --verify "refs/remotes/fork/$BRANCH" 2>/dev/null || true)"
 if [ ! -d "$WT" ]; then
   # THE BRANCH THAT IS ALREADY THERE (the rescue of a slot whose work was
   # saved): `git worktree add -b` FAILS when the branch exists, and the work of
@@ -73,6 +81,14 @@ if [ ! -d "$WT" ]; then
   # that nobody checks out. The worktree is attached to the branch as it is.
   if git -C "$REPO" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
     git -C "$REPO" worktree add -q "$WT" "$BRANCH" >/dev/null 2>&1 || {
+      echo "prepare-slot: no se pudo crear el worktree sobre la rama $BRANCH: $WT" >&2
+      bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
+      exit 5
+    }
+  elif [ -n "$FORK_SHA" ]; then
+    # The branch is only in the fork: the worktree starts from THERE (the head
+    # of the PR), not from origin/main.
+    git -C "$REPO" worktree add -q -b "$BRANCH" "$WT" "$FORK_SHA" >/dev/null 2>&1 || {
       echo "prepare-slot: no se pudo crear el worktree sobre la rama $BRANCH: $WT" >&2
       bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
       exit 5
@@ -91,11 +107,20 @@ TD="$(bash "$ORCH_BIN/slot-target-dir.sh" --slot "$ISSUE" 2>/dev/null)"
 [ -n "$TD" ] && mkdir -p "$TD"
 
 # 5. EL BRIEF, con lo único que cambia por issue.
+#
+# UN BRIEF ESCRITO A MANO NO SE PISA (2026-11-20): el brief de un slot es lo
+# que el agente lee, y un brief escrito a mano (un repair de un PR que ya esta
+# abierto, con los tests que fallan y el log del gate) es informacion que la
+# plantilla no tiene. Si el brief ya existe, se rellenan sus marcadores y se
+# deja su texto como estaba.
 TITLE="$(gh issue view "$ISSUE" -R "$UPSTREAM_REPO" --json title --jq .title 2>/dev/null)"
 python3 - "$TEMPLATE" "$BRIEF" "$ISSUE" "$TITLE" "$REPO" "$WT" "$BRANCH" "$TD" <<'PY'
-import sys
+import os, sys
 template, out, issue, title, repo, wt, branch, target = sys.argv[1:9]
-text = open(template, encoding="utf-8").read()
+# The brief that is already there wins over the template: a hand written brief
+# (the repair of a pull request that is already open) is the information the
+# agent needs, and the template does not have it.
+text = open(out, encoding="utf-8").read() if os.path.exists(out) else open(template, encoding="utf-8").read()
 for key, value in {
     "{{ISSUE}}": issue,
     "{{TITLE}}": title,

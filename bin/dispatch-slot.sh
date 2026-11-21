@@ -13,6 +13,20 @@
 # hours. If the session that prepared it dies, the next one finds the slot in
 # the state and dispatches it without preparing anything again.
 #
+# EL AGENTE ES UN opencode (2026-11-21): antes era `hermes --in <wt> -z
+# "<brief>"`, y hermes no esta instalado en esta maquina: el script fallaba y
+# la wave no despachaba NINGUN agente (los slots se acumulaban: 53 GB de
+# worktrees y targets, tres slots "corriendo" sin agente). Ahora el agente es
+# `opencode run` en el worktree del slot, con el brief como mensaje.
+#
+# `--standalone` (servidor privado del agente) y no el servicio compartido: el
+# 20-11-2026 el gateway compartido se murio y se llevo por delante los turnos
+# de los agentes (loop/bin/agent-issue.sh:416 usa lo mismo).
+#
+# EL AGENTE NO ES TIRA LA BASURA (2026-11-21): el brief ya NO le pide borrar
+# el worktree ni el target (eso mataba el gate del propio slot). La limpieza
+# la hace el orquestador, en bin/close-slot.sh, cuando el PR ya esta arriba.
+#
 # USAGE:
 #   bash bin/dispatch-slot.sh <issue>
 #
@@ -44,13 +58,24 @@ mkdir -p "$ORCH_DIR/logs"
 
 # El agente hereda las reglas de la caja: un target por slot, poca prioridad,
 # sin incremental, y el token pesado para las compilaciones grandes.
+#
+# EL AGENTE: `opencode run` con el brief como mensaje, en el worktree del
+# slot (el repo de SolidCraft: ahi esta su AGENTS.md, que es la ley). El
+# binario, el modelo y el nombre del agente salen de bin/agent-env.sh (la
+# politica de la maquina, no el codigo).
+eval "$(bash "$ORCH_BIN/agent-env.sh")" || {
+  echo "dispatch-slot: no hay runtime de agente (bin/agent-env.sh)" >&2
+  exit 4
+}
+MSG="$(cat "$BRIEF")"
 setsid nohup env \
   CARGO_TARGET_DIR="$TD" \
   CARGO_BUILD_JOBS=4 \
   CARGO_INCREMENTAL=0 \
   SCCACHE_MAX_CACHE_SIZE=60G \
   MAX_HEAVY_TOKENS=1 \
-  bash -c "cd '$WT' && hermes --in '$WT' -z \"\$(cat '$BRIEF')\"" \
+  bash -c 'cd "$1" && exec "$2" run --standalone --auto -m "$3" --agent "$4" "$5"' \
+  _ "$WT" "$AGENT_BIN" "$AGENT_MODEL" "$AGENT_NAME" "$MSG" \
   > "$LOG" 2>&1 < /dev/null &
 
 # El estado: el slot deja de estar "preparado" y pasa a "corriendo". Una

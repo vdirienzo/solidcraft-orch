@@ -163,6 +163,11 @@ BUILD_TOKEN="$(bash "$ORCH_DIR/bin/build-slot.sh" --take --wait "${GATE_BUILD_SL
 }
 # The token comes back with the gate, whatever happens.
 trap 'bash "$ORCH_DIR/bin/build-slot.sh" --release "$BUILD_TOKEN" >/dev/null 2>&1 || true' EXIT
+# A gate killed with a signal ALSO gives the token back (the EXIT trap alone
+# does not run when bash dies of a SIGTERM): without this the box answered
+# "no free build slot" until the token aged out, and no gate could run.
+trap 'bash "$ORCH_DIR/bin/build-slot.sh" --release "$BUILD_TOKEN" >/dev/null 2>&1 || true; exit 143' TERM
+trap 'bash "$ORCH_DIR/bin/build-slot.sh" --release "$BUILD_TOKEN" >/dev/null 2>&1 || true; exit 130' INT
 
 # The worktree of the slot was resolved (and CHECKED) above: the gate runs in
 # the worktree of the slot, never in the main checkout.

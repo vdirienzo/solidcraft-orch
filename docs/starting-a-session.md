@@ -20,18 +20,17 @@ orchestrator's repo:
     own (the cron solidcraft-wave, every 10 minutes); your job is to supervise
     it and to do what it cannot.
 
-    Read, in this order: AGENTS.md, docs/starting-a-session.md,
-    prompts/wave-prompt.md, and /home/user/.local/share/solidcraft-orch/state.json
+    Read, in this order: AGENTS.md, docs/starting-a-session.md, and
+    /home/user/.local/share/solidcraft-orch/state.json
 
     Then run:
       bash bin/loop-status.py
       bash bin/wave.sh --dry-run
-      hermes cron list
-      hermes cron runs
+      crontab -l
 
     Then:
-      1. If the cron solidcraft-wave is not there, install it:
-         bash bin/install-wave-cron.sh
+      1. If the cron solidcraft-wave is not in the crontab, install it:
+         bash bin/install-crontab.sh
       2. Verify the pull requests the wave opened (bash bin/verify-pr.sh <pr>)
          and ask the maintainer for the label ONLY when the gate is green.
       3. Rescue the claims that were lost: the work is in logs/claims-lost/
@@ -54,9 +53,9 @@ What that prompt does, and why each piece is there:
   is how a session finds out that the pool is empty (the free issues of the
   upstream run out: its own agents take them) before it spends an hour proving
   it.
-- **`hermes cron list` / `runs`**: whether the wave is really running, and what
-  it did the last times. A wave that is not installed is a loop that stopped
-  when the last session closed.
+- **`crontab -l`**: whether the wave is really running, and what it did the
+  last times. A wave that is not installed is a loop that stopped when the last
+  session closed.
 
 ## THE TWO WAYS A SESSION WORKS
 

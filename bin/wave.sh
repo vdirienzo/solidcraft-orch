@@ -55,6 +55,24 @@ if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/wave.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
+# --- 0. LA HIGIENE DE LA CAJA ------------------------------------------------
+# Un agente que abre un navegador deja el Chrome vivo cuando su turno se
+# corta: el proceso del MCP de chrome-devtools se va y el navegador queda
+# huerfano, con 40 procesos y 3,7 GB de RAM en una caja de 15 GB. Dos veces
+# se comio la memoria de la caja y el bucle dejo de despachar. El navegador de
+# un MCP VIVO no se toca (el reaper solo mata los que quedaron sin dueno).
+# El reaper solo mira los navegadores con el perfil del MCP
+# (~/.cache/chrome-devtools-mcp/...) y solo mata el pid del navegador: nunca
+# su padre (el 2026-11-21 una version rota mataba el `systemd --user` que lo
+# adopto y GNOME cerraba la sesion; ver bin/kill-orphan-browsers.sh).
+if [ -f "$ORCH_BIN/kill-orphan-browsers.sh" ]; then
+  if [ -n "$DRY" ]; then
+    echo "wave: los navegadores huerfanos se matan en el turno de verdad"
+  else
+    bash "$ORCH_BIN/kill-orphan-browsers.sh" 2>/dev/null | sed 's/^/wave: /'
+  fi
+fi
+
 # --- 1. LOS SLOTS EN VUELO: el estado y los locks ---------------------------
 bash "$ORCH_BIN/slot-lock.sh" --list > "$TMP/locks.tsv" 2>/dev/null
 python3 - "$ORCH_DIR/state.json" "$TMP/locks.tsv" "$TMP/slots.json" "$WORKTREES_DIR" <<'PY'

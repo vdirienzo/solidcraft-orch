@@ -149,13 +149,14 @@ else
   bad "portability: the default of ORCH_DIR is not the path of this machine"
 fi
 
-# The scripts that the crons run live in HERMES_SCRIPTS: the variable has to
-# be documented with its default, because that is where the crons of the
-# other PC look for them.
-if grep -qF "HERMES_SCRIPTS=\"\${HERMES_SCRIPTS:-$HOMEBASE/.hermes/scripts}\"" "$ORCH_DIR/README.md" 2>/dev/null; then
-  ok "portability: the README documents HERMES_SCRIPTS with its default"
+# The crons run the scripts OF THE REPO (2026-11-21: the loop left hermes and
+# its copies in ~/.hermes/scripts). The scheduler is the crontab of the user,
+# installed from the register by bin/install-crontab.sh: the README has to say
+# how the other PC installs it, or its crons never exist.
+if grep -qF "bash bin/install-crontab.sh" "$ORCH_DIR/README.md" 2>/dev/null; then
+  ok "portability: the README documents how the crontab of the loop is installed"
 else
-  bad "portability: the README does not document HERMES_SCRIPTS with its default"
+  bad "portability: the README does not document how the crontab is installed (bash bin/install-crontab.sh)"
 fi
 
 # --- 4. the knowledge travels with the code ---------------------------------

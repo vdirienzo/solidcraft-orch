@@ -227,8 +227,13 @@ Para comprobar qué falta en una máquina:
 bash bin/preflight.sh
 ```
 
-Los scripts que los crons ejecutan tienen que existir **antes** de que se cree el job
-(ver "Los scripts que los crons ejecutan", más abajo).
+El runtime del loop, en esta maquina, es **opencode** (el agente de los slots) y el
+**crontab del usuario** (el planificador): no hace falta hermes ni sus copias de los
+scripts. El crontab se instala una vez, con el registro como fuente:
+
+```bash
+bash bin/install-crontab.sh
+```
 
 Variables de entorno (el valor va en el entorno o en un .env que git ignora; **nunca en un archivo
 versionado**):
@@ -241,7 +246,7 @@ SOLIDCRAFT_CONTROL_TOKEN=<token del control del daemon de SolidCraft>
 Los scripts toman las rutas de variables con default, asi que en otra PC alcanza con:
 
 ```
-ORCH_DIR=...  LOOP_DIR=...  SOLIDCRAFT_REPO=...  WORKTREES_DIR=...  HERMES_SCRIPTS=...
+ORCH_DIR=...  LOOP_DIR=...  SOLIDCRAFT_REPO=...  WORKTREES_DIR=...
 ```
 
 El default de cada uno (el de esta maquina, que la otra PC exporta):
@@ -251,10 +256,9 @@ ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
-HERMES_SCRIPTS="${HERMES_SCRIPTS:-/home/user/.hermes/scripts}"
 ```
 
-Los crons (todos con `--no-agent`: no gastan tokens de LLM):
+Los crons (todos sin LLM: no gastan tokens):
 
 | cron | cada | script | para que |
 |---|---|---|---|
@@ -265,19 +269,14 @@ Los crons (todos con `--no-agent`: no gastan tokens de LLM):
 | solidcraft-ping-ready | 30 min (25,55) | ping-ready.sh | pide el `approved-for-ci` en los PRs listos |
 | solidcraft-reporte-diario | 16 y 46 | daily-report.py | el reporte, sin LLM |
 | solidcraft-gc-disk | 30 min (14,44) | gc-disk.sh | limpia el disco: artefactos y targets muertos |
-| solidcraft-loop-status | 30 min (6,36) | loop-status.py | el estado del loop en el chat, sin LLM |
-| solidcraft-wave-prompt-guard | 15 min (9,24,39,54) | wave-prompt-guard.py | el prompt del cron de la wave tiene que ser el canonico |
+| solidcraft-loop-status | 30 min (6,36) | loop-status.py | el estado del loop, sin LLM |
+| solidcraft-wave-prompt-guard | 15 min (9,24,39,54) | wave-prompt-guard.py | la wave corre como script: no hay prompt que se pueda romper |
 | solidcraft-wave | 10 min (0,10,20…) | wave.sh | la wave: cierra los slots terminados y arranca los agentes libres |
 
-**Ningún par de crons cae en el mismo minuto** (2026-11-20): cada corrida de un cron
-escribe en el `state.db` de hermes, y diez escritores a la vez sobre un SQLite de 256 MB
-dejan el mutex de escritura tomado segundos. Con el mutex tomado el bucle de eventos
-del gateway deja de responder, su watchdog lo mata (`exiting with code 75`) y el
-supervisor lo reinicia: se van los crons, las sesiones de los agentes y sus turnos
-(`session turn lease lost`). Los horarios están escalonados para que eso no pase, y los
-crons que no necesitan ir rápido van más lento. El orden dentro del ciclo también
-importa: la wave despacha a los `:00`, el pipeline encola los gates a los `:02` y la cola
-los saca a los `:03`.
+**Ningún par de crons cae en el mismo minuto** (2026-11-20): el orden dentro del
+ciclo importa — la wave despacha a los `:00`, el pipeline encola los gates a los `:02` y
+la cola los saca a los `:03` — y en la maquina de hermes el amontonado tumbaba el
+gateway (el watchdog lo mataba y se iban los crons y los turnos de los agentes).
 
 **`bin/crons.txt` es la fuente de esta tabla.** El grafo dice a qué nodo pertenece cada
 cron y `bin/workflow-validate.py` comprueba que los dos digan lo mismo: un cron que
@@ -286,57 +285,52 @@ tabla es un error del suite (`bin/test-workflow.sh`, casos 11a-11f). Antes habí
 grafos — el que `workflow.yaml` declaraba (2 crons) y el que el loop ejecutaba (5) — y
 nadie lo comprobaba.
 
+### El runtime: opencode y el crontab (2026-11-21)
+
+**El loop ya no usa hermes.** hermes no está instalado en esta máquina: `~/.hermes/`
+no existe, así que no había ningún cron (la wave no corría, el pipeline solo vivía
+mientras una sesión estaba abierta, la cola de gates no drenaba nunca) y
+`bin/dispatch-slot.sh` no arrancaba ni un agente. Los slots se acumularon: tres
+"corriendo" sin agente, 53 GB de worktrees y targets, un PR en draft sin veredicto
+del gate.
+
+| pieza | antes | ahora |
+|---|---|---|
+| el agente del slot | `hermes --in <worktree> -z "<brief>"` | `opencode run --standalone --auto -m <modelo> "<brief>"` |
+| el modelo | el de hermes | el de `bin/agent-env.sh` (la política de la máquina: `$LOOP_DIR/config.env`) |
+| el planificador | los jobs de hermes (`hermes cron create`) | **el crontab del usuario** (`bin/install-crontab.sh`) |
+| lo que corre el cron | una COPIA de `bin/*.sh` en `~/.hermes/scripts/` | **el script del repo** (un cambio llega al cron al instante) |
+
 ```bash
-hermes cron create --name solidcraft-gate-queue --schedule '3,8,13,18,23,28,33,38,43,48,53,58 * * * *' \
-  --script gate-queue.sh --no-agent --deliver local
-hermes cron create --name solidcraft-pipeline --schedule '2,7,12,17,22,27,32,37,42,47,52,57 * * * *' \
-  --script pipeline.py --no-agent --deliver local
+bash bin/install-crontab.sh            # instala los diez jobs (idempotente)
+bash bin/install-crontab.sh --dry-run  # dice lo que haria
+bash bin/install-crontab.sh --remove   # saca los jobs
+bash bin/preflight.sh                  # dice que falta (el binario, el crontab, la mitad LOOP)
 ```
 
-O, mejor, **los diez de una vez**, desde el registro, con sus copias al día:
+El cron corre **el script del repo**, no una copia: el fallo que se llevaba por
+delante la wave del 20-11-2026 (una copia vieja de `wave.sh`, la que no pusheaba la
+rama de un slot muerto al fork) no puede volver a pasar. Cada job escribe su log en
+`logs/cron-<job>.log`: un cron que falla en silencio es un cron que no existe.
 
-```bash
-bash bin/install-crons.sh          # copia cada script de bin/ a ~/.hermes/scripts/ y
-                                   # deja cada job con su horario (--dry-run dice qué haría)
-```
-
-Los crons de hermes corren **copias** de los scripts de `bin/`, en `~/.hermes/scripts/`
-(hermes no acepta una ruta que salga de ahí). Nada las sincronizaba: un cambio en
-`bin/` llegaba a los crons solo si alguien se acordaba de copiar el fichero, y un cron
-que corre código viejo hace lo contrario de lo que dice el repo, **en silencio**. El
-20-11-2026 la wave llevaba horas corriendo la copia vieja de `wave.sh` (la que no
-pushea la rama de un slot muerto al fork) y el único aviso era el de
-`bin/preflight.sh`, impreso debajo de un "todo lo necesario está" que se lee como un
-ok. Por eso `install-crons.sh` es el camino normal, y `preflight.sh` dice en voz alta
-si hay avisos.
+El agente del slot es un **opencode**: `bin/agent-env.sh` dice el binario, el modelo y
+el nombre del agente (la política de la máquina, no el código) y `bin/dispatch-slot.sh`
+lo arranca **en el worktree del slot**, con el brief como mensaje y con las variables
+de la caja (`CARGO_TARGET_DIR` del slot, `CARGO_INCREMENTAL=0`, poca prioridad). Va con
+`--standalone` (servidor privado) y no contra el servicio compartido: el 20-11 el
+gateway compartido se murió y se llevó por delante los turnos de los agentes
+(`loop/bin/agent-issue.sh:416` usa lo mismo).
 
 ### La wave: el loop que corre sin nadie
 
 El cron `solidcraft-wave` es la parte del loop que **no necesita a una
 persona**: cada 10 minutos cierra los slots cuyo trabajo ya es un pull request
-y arranca un agente en el siguiente issue libre. Se instala con un script
-(que copia el script del cron a `~/.hermes/scripts/`, igual que los demas, y
-registra el job):
-
-```bash
-bash bin/install-wave-cron.sh            # instala la copia y el cron
-bash bin/install-wave-cron.sh --dry-run  # dice lo que haria
-bash bin/install-wave-cron.sh --remove   # saca el cron
-```
-
-La copia del cron es byte-identica a `bin/wave.sh` (el preflight avisa si no
-lo es: un cron que corre codigo viejo hace lo que puede, en silencio). Los
-**otros** scripts de la wave no se copian: `wave.sh` los busca en el bin del
-orquestador (`ORCH_BIN`), asi que el cron siempre corre el codigo que esta
-en el repo.
+y arranca un agente en el siguiente issue libre.
 
 Lo que la wave NO toca: un slot cuyo agente esta trabajando. "El PR existe"
 no es "el trabajo esta terminado": un agente que abrio el PR sigue
 trabajando en el (el gate, la evidencia). La vivencia se comprueba con
 `bin/slot-busy.sh`: un proceso dentro del worktree del slot o de su target.
-
-Los scripts que los crons ejecutan viven en `HERMES_SCRIPTS` (`~/.hermes/scripts/`): el cron
-los busca ahi, y el script tiene que existir ANTES de que el job se cree.
 
 ### Pedirle al maintainer el `approved-for-ci`
 
@@ -375,14 +369,12 @@ verde, 1 si rojo, 2 si pendiente, 3 si el uso esta mal. El veredicto lo dice
 `pipeline.evaluar_check_runs` (la MISMA regla que usan `ping-ready.sh` y `gate.sh`): el
 helper no tiene una copia de la regla, la usa.
 
-El ping CORRE SOLO: el cron `solidcraft-ping-ready` (cada 30 min, `--no-agent`, entrega
-`local`) ejecuta la COPIA de `bin/ping-ready.sh` que vive en `~/.hermes/scripts/`. La copia
-tiene que ser IDENTICA al canonico (`diff -q`), porque el cron no usa el repo: usa esa. El
-script resuelve el orquestador por la REGLA DEL CI (el directorio que tiene `bin/pipeline.py`),
-no por su propia ubicacion, asi que funciona igual desde el repo y desde la copia.
+El ping CORRE SOLO: el cron `solidcraft-ping-ready` (cada 30 min, en el crontab del usuario
+que instala `bin/install-crontab.sh`) ejecuta `bin/ping-ready.sh` del repo: un cambio llega al
+cron al instante, sin copias. El script resuelve el orquestador por la REGLA DEL CI (el
+directorio que tiene `bin/pipeline.py`), no por su propia ubicacion.
 
-El cron entrega a `local` a proposito: el ping es una ACCION HACIA GITHUB, no un aviso. Al
-usuario no le llega nada por Telegram. El script es idempotente por head sha, asi que correr de
+El ping es una ACCION HACIA GITHUB, no un aviso: al usuario no le llega nada. El script es idempotente por head sha, asi que correr de
 mas no genera ruido: el comentario se deja UNA vez por PR y por sha.
 
 LA TANDA de los pedidos `approved-for-ci`: el maintainer mergea EN GRUPOS POR AREA, asi que nunca
@@ -487,7 +479,7 @@ regla vieja produce pull requests que el CI de upstream rechaza.
 ```
 bin/        los scripts (el grafo, la cola, el pipeline, los gates, los tests)
 briefs/     los briefs literales que se le dan a los agentes
-prompts/    el prompt que recibe el agente (wave-prompt.md)
+prompts/    el brief que recibe el agente (agent-brief.md) y el brief de cada slot
 docs/       las reglas, los traps y las lecciones (copia de los references de la skill)
 reports/    las mediciones (paralelismo, tokens, imagenes, metricas de agentes)
 baseline/   el catalogo de fallos preexistentes medidos
