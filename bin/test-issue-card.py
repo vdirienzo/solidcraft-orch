@@ -294,6 +294,14 @@ def run_tests(tmp):
     else:
         no("parse_events: sin objeto no inventa uno", repr(obj))
 
+    # Un error que nombra a solidcore es causa del kernel aunque el grep no lo
+    # encuentre (2026-11-21: #19690, armado con format!()).
+    if mod.kernel_cause([], ["planar regions: solidcore failed (status 1001)"]) is True \
+            and mod.kernel_cause([], ["the sketch solver failed"]) is False:
+        ok("kernel_cause: un error que nombra a solidcore es causa del kernel")
+    else:
+        no("kernel_cause: un error que nombra a solidcore es causa del kernel")
+
     # El veto del maintainer exige su cita (2026-11-21): #17196 salia
     # "decidido" sin ningun comentario de un maintainer.
     decided_issue = {"comments": [

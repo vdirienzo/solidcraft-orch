@@ -242,6 +242,7 @@ PY
 cat > "$WB/prepare-slot.sh" <<SH
 #!/usr/bin/env bash
 echo "\$1" >> "$W/prepare-calls.txt"
+[ "\$1" = 201 ] && { echo "prepare-slot: la ficha del issue #201 dice que la causa esta en el kernel" >&2; exit 6; }
 echo "prepare-slot: MOTIVO-DE-PRUEBA del \$1" >&2
 exit 3
 SH
@@ -304,6 +305,30 @@ if [ "$(wc -l < "$W/prepare-calls.txt")" -eq 3 ] && printf '%s\n' "$OUT" | grep 
   ok "despues de 3 fallos seguidos el slot guardado no se reintenta"
 else
   no "despues de 3 fallos seguidos el slot guardado no se reintenta" "llamadas: $(tr '\n' ' ' < "$W/prepare-calls.txt") / $OUT"
+fi
+
+# 6. Un slot guardado cuya causa esta en el kernel (prepare-slot rc=6, la
+# ficha) se aparca: no cuenta como fallo y no se vuelve a preparar.
+: > "$W/prepare-calls.txt"
+ORCH_DIR="$W/orch" python3 "$WB/state-set.py" slots 200 '{"issue": 200, "status": "parked-test"}' >/dev/null 2>&1
+ORCH_DIR="$W/orch" python3 "$WB/state-set.py" slots 201 '{"issue": 201, "status": "saved"}' >/dev/null 2>&1
+OUT="$(run_wave 1)"
+STATUS="$(python3 - "$W/orch/state.json" <<'PY'
+import json, sys
+slot = (json.load(open(sys.argv[1], encoding="utf-8")).get("slots") or {}).get("201") or {}
+print(slot.get("status"), slot.get("resume_failures"))
+PY
+)"
+if [ "$STATUS" = "parked-kernel None" ] && printf '%s\n' "$OUT" | grep -q "se aparca"; then
+  ok "un slot con la causa en el kernel se aparca, sin contar un fallo"
+else
+  no "un slot con la causa en el kernel se aparca, sin contar un fallo" "$STATUS / $OUT"
+fi
+run_wave 1 >/dev/null
+if [ "$(grep -c '^201$' "$W/prepare-calls.txt")" -eq 1 ]; then
+  ok "un slot aparcado por el kernel no se vuelve a preparar"
+else
+  no "un slot aparcado por el kernel no se vuelve a preparar" "$(tr '\n' ' ' < "$W/prepare-calls.txt")"
 fi
 
 printf '\n%s pasaron, %s fallaron\n' "$PASS" "$FAIL"

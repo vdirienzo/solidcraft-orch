@@ -197,7 +197,17 @@ def grep(strings, checkout=CHECKOUT, ref="origin/main"):
     return hits
 
 
-def kernel_cause(hits):
+# The error NAMES the kernel (2026-11-21): "planar regions: solidcore failed
+# (status 1001)" (#19690) is built with format!(), so the quoted string is in
+# no file and the grep finds nothing; the agent then spent 51 minutes in
+# solidcore on this box, which does not build it. A quoted error that says
+# solidcore is a kernel cause by itself.
+KERNEL_WORDS_RE = re.compile(r"\bsolidcore\b", re.I)
+
+
+def kernel_cause(hits, strings=()):
+    if any(KERNEL_WORDS_RE.search(s or "") for s in strings):
+        return True
     code = [h for h in hits if not h["test"]]
     return bool(code) and all(h["path"].startswith(KERNEL_PREFIXES) for h in code)
 
@@ -446,7 +456,7 @@ def script_half(issue, prs, me, checkout=CHECKOUT):
         "error_strings": strings,
         "hits": hits[:60],
         "crates": crates,
-        "kernel_cause": kernel_cause(hits),
+        "kernel_cause": kernel_cause(hits, strings),
         "llm": None,
     }
 

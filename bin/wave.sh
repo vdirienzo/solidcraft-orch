@@ -394,6 +394,15 @@ if [ "${FREE:-0}" -gt 0 ]; then
     fi
     BRIEF="$(bash "$ORCH_BIN/prepare-slot.sh" "$SAVED" "wave-$$" </dev/null 2>"$TMP/prepare-$SAVED.err")"
     RC=$?
+    if [ "$RC" -eq 6 ]; then
+      # La causa esta en el kernel (la ficha): no es un fallo que se reintente,
+      # el slot se aparca (la rama y el PR quedan; un humano lo retoma).
+      echo "wave: el slot $SAVED se aparca: la causa esta en el kernel y esta caja no lo compila"
+      log_failure_output "$TMP/prepare-$SAVED.err"
+      python3 "$ORCH_BIN/state-set.py" --merge slots "$SAVED" \
+        '{"status": "parked-kernel", "phase": "la ficha dice que la causa esta en el kernel; la rama y el PR quedan"}' >/dev/null 2>&1
+      continue
+    fi
     if [ "$RC" -ne 0 ] || [ -z "$BRIEF" ]; then
       FAILS=$((FAILS + 1))
       echo "wave: el slot $SAVED no se pudo preparar (prepare-slot rc=$RC, fallo $FAILS de $MAX_RESUME_FAILS): se sigue con los issues nuevos"

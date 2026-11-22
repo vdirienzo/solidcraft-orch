@@ -24,6 +24,7 @@
 #   3  the claim is not free (somebody else's PR is lower)
 #   4  the lock of the slot is taken
 #   5  the worktree could not be created
+#   6  the card says the cause is in the kernel (this box does not build it)
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -83,6 +84,23 @@ CLAIM_RC=$?
 if [ "$CLAIM_RC" -ne 0 ]; then
   echo "prepare-slot: el issue #$ISSUE no está libre (claim-verify rc=$CLAIM_RC${OUR_PR:+, nuestro PR #$OUR_PR}): $(printf '%s' "$CLAIM_OUT" | tail -3 | tr '\n' ' ')" >&2
   exit 3
+fi
+
+# 1b. LA CAUSA EN EL KERNEL (2026-11-21): el slot 19690 (un slot retomado, que
+# no pasa por next-issue ni por su ficha) gasto 51 minutos de agente en
+# "planar regions: solidcore failed", y esta caja no compila solidcore. La
+# mitad script de la ficha (sin modelo, ~2 s) lo dice antes de tomar el lock.
+# PREPARE_ALLOW_KERNEL=1 lo saltea.
+if [ "${PREPARE_ALLOW_KERNEL:-0}" != "1" ]; then
+  CARD_KERNEL="$(python3 "$ORCH_BIN/issue-card.py" "$ISSUE" --no-llm --snapshot "$SNAPSHOT" 2>/dev/null \
+    | python3 -c 'import json,sys
+try: c=json.load(sys.stdin)
+except Exception: sys.exit(0)
+if c.get("kernel_cause"): print(", ".join(c.get("crates") or []) or "solidcore")' 2>/dev/null)"
+  if [ -n "$CARD_KERNEL" ]; then
+    echo "prepare-slot: la ficha del issue #$ISSUE dice que la causa esta en el kernel ($CARD_KERNEL): no se prepara (PREPARE_ALLOW_KERNEL=1 lo fuerza)" >&2
+    exit 6
+  fi
 fi
 
 # 2. EL LOCK DEL SLOT.
