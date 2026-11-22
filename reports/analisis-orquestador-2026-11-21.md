@@ -247,17 +247,30 @@ Primera corrida real del flujo nuevo: la wave de las 20:10 retomó el slot 19690
 con el brief nuevo. A los 11 minutos llevaba 17 pasos, 0,019 USD, 508k tokens leídos de la
 caché y el test RED confirmado.
 
-Política de esta máquina (`~/.local/share/solidcraft-loop/config.env`, con respaldo
-`.bak-2026-11-21`): `IMPLEMENT_SLOTS=1`, `GATE_MODE=local`, `LOCAL_GATE=fast` y
-`AGENT_TIMEOUT_MIN=180`.
+Política de esta máquina (`~/.local/share/solidcraft-loop/config.env`, con respaldos
+`.bak-2026-11-21` y `.bak-2026-11-21b`): `IMPLEMENT_SLOTS=1`, `GATE_MODE=fork-ci`,
+`LOCAL_GATE=fast` y `AGENT_TIMEOUT_MIN=180`.
 
-Queda para una acción humana o para después:
-1. **Habilitar Actions en el fork** desde la web (github.com/vdirienzo/solidcraft → Actions).
-   La API dice que está activo, pero el despacho responde "Actions has been disabled for this
-   repository". Después, poner `GATE_MODE=fork-ci` en `config.env`.
-2. **Subir a `IMPLEMENT_SLOTS=2`** cuando el primer PR del brief nuevo se vea bien, y medirlo
+## El CI del fork (2026-11-21, 22:40)
+
+- El usuario habilitó Actions en la web. Por la API no alcanzaba: el despacho respondía
+  "Actions has been disabled for this repository" aunque la API decía que estaba activo.
+- **Solo queda activo `ci.yml`.** Al habilitar Actions se habían activado los 17 workflows
+  copiados de upstream. En octubre, `release.yml` creó en el fork la pre-release
+  `v0.20.0-nightly.20261023.1.1`, y `triage.yml` y `claim.yml` actuaron sobre sus 57 issues.
+  Los otros 16 se apagaron con `gh workflow disable`; se reactivan con `gh workflow enable`.
+- **Primera corrida:** el run 44971938451, despachado por `bin/fork-ci.sh fix-19690`, arrancó
+  en runners `ubuntu-24.04` de GitHub. Las 3 corridas de octubre habían terminado canceladas.
+  `fork-ci.sh --status` lo lee (`FORKCI=PENDIENTE`, rc=2) y un segundo despacho del mismo sha
+  no lo duplica.
+- **Se deja como está:** el CI por horario (06:17 UTC sobre el `main` viejo del fork). Cuesta
+  0 USD en un repo público, y apagarlo exige editar `ci.yml` en el fork.
+
+## Queda para después
+
+1. **Subir a `IMPLEMENT_SLOTS=2`** cuando el primer PR del brief nuevo se vea bien, y medirlo
    con `daily-report.py` (costo por merge) y `loop-status.py` (alertas).
-3. **Carril de kernel:** no se abre. Esta máquina no compila solidcore, y los PRs de kernel
+2. **Carril de kernel:** no se abre. Esta máquina no compila solidcore, y los PRs de kernel
    tienen la peor tasa: 2 mergeados y 4 cerrados.
-4. **Borrar `loop/`:** no se hizo. `gate.sh` (`LOCAL_GATE=quick`), `publish-pr.sh`
+3. **Borrar `loop/`:** no se hizo. `gate.sh` (`LOCAL_GATE=quick`), `publish-pr.sh`
    (`pr-defaults-line.sh`) y `run-issue-scope.sh` todavía lo usan.

@@ -15,6 +15,22 @@ Actualizado: 2026-11-21
     cola de gates usa `flock` y la wave corta a los tres fallos. El claim va primero (commit
     vacío, draft y `claim-verify`) y el brief sigue `solidcraft-full-stop`. El agente corre con
     techo de tiempo y `--format json`. No hay ping de `approved-for-ci` ni comentarios de estado.
+- **Los commits que siguieron** (todos en `origin/main`): `6e93cfa` (la foto de GitHub, una
+  sola regla del claim y la ficha de cada issue), `4b32fbb` (el gate es el CI del fork o
+  `cargo xtask fast`), `7efd0a8` (métricas y alertas), `6c9ca14` (fuera hermes, reglas que
+  siguen a upstream, tests herméticos), `617b919` (la wave usa la ficha y el veto del
+  maintainer exige su cita) y `e092a56` (el agente que termina sin veredicto recibe un
+  empujón, y un slot con la causa en el kernel se aparca).
+- **El gate es el CI del fork** (`GATE_MODE=fork-ci` en `$LOOP_DIR/config.env`). En el fork
+  `vdirienzo/solidcraft`: Actions habilitado a mano en la web, las variables `CI_RUNNER` y
+  `CI_RUNNER_WINDOWS` creadas, y **solo `ci.yml` activo**. Los otros 16 workflows de upstream
+  están apagados con `gh workflow disable`; en octubre crearon una pre-release nightly en el
+  fork y etiquetaron sus issues. La primera corrida, el run 44971938451 sobre `fix-19690`,
+  arrancó en runners `ubuntu-24.04`. Para volver a compilar en esta máquina:
+  `GATE_MODE=local`.
+- **Un solo slot** (`IMPLEMENT_SLOTS=1`) hasta revisar el primer PR del brief nuevo.
+- **Antes de cualquier cambio**, en el fork, en upstream, en este repo, en el crontab o en
+  `config.env`, se consulta al usuario.
 - **Las reglas** viven en upstream (`AGENTS.md`, `CONTRIBUTING.md`, `.agents/skills/`).
   `RULES.md` solo apunta ahí y lista las seis reglas propias del orquestador.
 - El estado vivo (slots, PRs, gates) **no** está en este archivo: sale de `bin/orch-state.sh`.
