@@ -52,6 +52,15 @@ export NEXT_ISSUE_TRIAGE="${NEXT_ISSUE_TRIAGE:-1}"
 DRY=""
 [ "${1:-}" = "--dry-run" ] && DRY="--dry-run"
 
+# LA PAUSA DEL USUARIO (2026-11-21): bin/loop-pause.sh pause escribe esta marca
+# cuando el usuario necesita la PC. Ademas de sacar los crons, la wave no hace
+# nada mientras exista: ni una corrida a mano ni un crontab reinstalado por
+# otro camino despachan un agente. `bin/loop-pause.sh resume` la borra.
+if [ -f "$ORCH_DIR/locks/loop-paused" ]; then
+  echo "wave: el loop esta en pausa ($(cat "$ORCH_DIR/locks/loop-paused" 2>/dev/null)): no se hace nada (bin/loop-pause.sh resume)"
+  exit 0
+fi
+
 # The siblings live next to this script: the crontab runs the scripts of the
 # repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
 # that runs outside bin/ without them.

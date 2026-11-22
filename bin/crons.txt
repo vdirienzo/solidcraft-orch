@@ -52,7 +52,7 @@
 # ---------------------------------------------------------------------------
 
 solidcraft-gate-queue       | 3,8,13,18,23,28,33,38,43,48,53,58 * * * * | bin/gate-queue.sh       | gate-queue    | drena la cola de gates (2 a la vez)
-solidcraft-pipeline         | 2,7,12,17,22,27,32,37,42,47,52,57 * * * * | bin/pipeline.py         | pipeline      | corrige bodies, encola gates, pasa a ready
+solidcraft-pipeline         | 2,7,12,17,22,27,32,37,42,47,52,57 * * * * | bin/pipeline.py         | pipeline      | despacha el CI del fork (o encola el gate local) y pasa a ready, sin editar bodies
 solidcraft-comment-watch    | 4,19,34,49 * * * *   | bin/comment_watch.py    | comment-watch | lee los comentarios del maintainer y arma la cola de tareas
 solidcraft-nice-compilations| 1,11,21,31,41,51 * * * * | bin/nice-compilations.sh| -             | baja la prioridad de las compilaciones nuevas
 solidcraft-reporte-diario   | 16,46 * * * *       | bin/daily-report.py     | -             | el reporte diario, sin LLM
