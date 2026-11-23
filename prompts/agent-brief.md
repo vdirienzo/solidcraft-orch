@@ -12,12 +12,16 @@ missing, the branch is old: rebase it onto `origin/main` first.
 
 ## What is different here
 1. **Claim first, before any code**, unless OUR PR above is a number:
-   `git commit --allow-empty -m "claim: #{{ISSUE}}"`, `git push fork {{BRANCH}}`, then open
+   `git commit --allow-empty -m "claim: #{{ISSUE}}"`, `git push fork HEAD:{{BRANCH}}`, then open
    a DRAFT titled `<summary> (#{{ISSUE}})` whose body has `Fixes #{{ISSUE}}` and
    `Changes a default: no`. Then run
    `bash ~/.local/share/solidcraft-orch/bin/claim-verify.sh {{ISSUE}} --our-pr <PR>`.
    Exit 1 means you lost the claim: close your draft and stop with verdict `blocked`.
    Exit 2 means it could not be checked: stop with verdict `blocked`.
+   (`HEAD:{{BRANCH}}` and `{{BRANCH}}` son lo mismo cuando la rama esta checkouteada;
+   la forma con HEAD tambien funciona cuando el worktree del slot nace pegado a un
+   commit, que es lo que pasa cuando la rama del PR ya esta checkouteada en otro
+   worktree.)
 2. **Remotes:** push only to `fork` (vdirienzo/solidcraft). Never push to `origin`.
 3. **This box is small** (12 cores, 15 GB). Use `--profile ci`, `nice -n 19` and
    `CARGO_TARGET_DIR={{TARGET_DIR}}`. Take the heavy-build token around `cargo xtask fast`

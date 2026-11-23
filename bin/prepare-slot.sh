@@ -41,7 +41,12 @@ ISSUE="${1:-}"
 OWNER="${2:-wave-$$}"
 
 [ -n "$ISSUE" ] || { echo "prepare-slot: falta el issue" >&2; exit 2; }
-BRANCH="fix-$ISSUE"
+BRANCH="${SLOT_BRANCH:-fix-$ISSUE}"
+# SLOT_BRANCH (2026-11-22): el nombre de la rama del slot. Por defecto es
+# fix-<issue>, pero un PR que ya esta abierto puede vivir en otra rama (el
+# #19168 vive en chore/19158-run-cargo-xtask-shared-in-the-ci): para reparar un
+# PR abierto hay que trabajar EN SU RAMA, o el trabajo no llega al PR. Sin el
+# override, el repair se haria en una rama nueva que nadie mira.
 
 # 0. NUESTRO PROPIO PR, ANTES DEL CLAIM (2026-11-21).
 #
@@ -138,7 +143,30 @@ if [ ! -d "$WT" ]; then
   # saved): `git worktree add -b` FAILS when the branch exists, and the work of
   # the rescued slot (the RED test, the fix a medias) would stay in a branch
   # that nobody checks out. The worktree is attached to the branch as it is.
+  #
+  # LA RAMA QUE YA ESTA EN OTRO WORKTREE (2026-11-22): el PR #19168 vive en
+  # chore/19158-run-cargo-xtask-shared-in-the-ci, y esa rama esta CHECKED OUT
+  # en el checkout principal: `git worktree add` se niega ("already checked
+  # out"). La rama del checkout principal no se cambia (regla 19), asi que el
+  # worktree del slot nace DESPEGADO (detached) en el head del fork, que es el
+  # head del PR. El agente pushea `git push fork HEAD:<rama>`, que funciona
+  # igual con la rama checkouteada que con el HEAD pegado.
+  BRANCH_CHECKED_OUT_ELSEWHERE=0
   if git -C "$REPO" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
+    if git -C "$REPO" worktree list --porcelain | grep -A2 "^worktree " | grep -qx "branch refs/heads/$BRANCH"; then
+      BRANCH_CHECKED_OUT_ELSEWHERE=1
+    fi
+  fi
+  if [ "$BRANCH_CHECKED_OUT_ELSEWHERE" = "1" ]; then
+    BASE="${FORK_SHA:-$(git -C "$REPO" rev-parse -q --verify "refs/remotes/fork/$BRANCH" 2>/dev/null || true)}"
+    BASE="${BASE:-origin/main}"
+    git -C "$REPO" worktree add -q --detach "$WT" "$BASE" >/dev/null 2>&1 || {
+      echo "prepare-slot: no se pudo crear el worktree en $WT sobre $BASE" >&2
+      bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
+      exit 5
+    }
+    echo "prepare-slot: la rama $BRANCH esta checkouteada en otro worktree: el slot nace pegado (detached) en $BASE; el push es 'git push fork HEAD:$BRANCH'" >&2
+  elif git -C "$REPO" rev-parse --verify -q "refs/heads/$BRANCH" >/dev/null; then
     git -C "$REPO" worktree add -q "$WT" "$BRANCH" >/dev/null 2>&1 || {
       echo "prepare-slot: no se pudo crear el worktree sobre la rama $BRANCH: $WT" >&2
       bash "$ORCH_BIN/slot-lock.sh" --slot "$ISSUE" --release >/dev/null 2>&1
