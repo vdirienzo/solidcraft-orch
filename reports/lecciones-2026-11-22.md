@@ -225,14 +225,103 @@ tiene que vivir.
 - Regla: **no se pide `approved-for-ci`**: se lee (`bash bin/ping-ready.sh --report`,
   `bash bin/ci-status.sh <pr>`).
 
+### 2.4 Lo que aprendio la sesion del 23-11 (con subagentes en paralelo)
+
+**L16. Un slot no se cierra mientras su agente trabaja.**
+
+- Que paso: el orquestador borro los worktrees `rebase-18344` y `rebase-19671` de un agente que
+  estaba en mitad de un `cargo test`, dos veces. El agente los recreo (el trabajo estaba pusheado) pero
+  perdio la corrida del test. La causa: el cierre por PR se dispara cuando la PR existe y nadie
+  "trabaja" en el slot, y un agente entre pasos (leyendo, pensando) no tiene proceso dentro del
+  worktree: `bin/slot-busy.sh` lo da por libre.
+- Por que la regla anterior no lo impedia: la regla de cierre (L8) dice "el slot se cierra cuando el
+  PR esta arriba", y no decia "y su agente ya reporto".
+- Regla: **un slot se cierra cuando su agente ha reportado, o cuando el worktree esta limpio Y no
+  hay proceso dentro**; si el worktree tiene cambios sin commitear, no se toca: se preservan (commit
+  + push) y se sigue.
+
+**L17. `gh pr create --body @fichero` no expande el fichero.**
+
+- Que paso: los cuerpos de #21442 y #21596 quedaron siendo la cadena literal
+  `@/tmp/opencode/12889-body.md` y `@pr-10711.md`. En GitHub se ve ESO y nada mas, y el check
+  "Defaults line check" falla ("The description has no \"Changes a default:\" line"). Paso dos veces
+  (el agente que abria el PR y el que lo arreglaba).
+- Por que la regla anterior no lo impedia: `gh pr edit --body @fichero` y `gh pr create --body
+  @fichero` NO expanden el fichero (eso es de `gh` CLI >= 2.x con `--body-file`, no de `--body`), y
+  el error del check ("no hay linea de defaults") no dice "el cuerpo es una referencia a un fichero".
+- Regla: **el cuerpo se pega con `gh api -X PATCH repos/tangency-labs/solidcraft/pulls/<n> -F
+  body=@<fichero>`, o con `gh pr create --body-file <fichero>`** (con guion, no arroba). Y el cuerpo
+  se relee despues de pegarlo (`gh pr view <n> --json body --jq .body | head -3`).
+
+**L18. `gh issue view <n> --comments` no funciona en este repo: la API REST si.**
+
+- Que paso: todos los agentes que tenian que leer los comentarios de los issues y PRs se
+  encontraban con `GraphQL: Projects (classic) is being deprecated`. Lo que funciona:
+  `gh api repos/tangency-labs/solidcraft/issues/<n>/comments`, `.../pulls/<n>/reviews`,
+  `.../issues/<n>/timeline`, y GraphQL a mano para los hilos de CodeRabbit
+  (`addPullRequestReviewThreadResolution`).
+- Regla: **leer con la API REST**; `gh issue view --comments` no es una opcion en este repo.
+
+**L19. La caja es el cuello de botella, y el token pesado no alcanza.**
+
+- Que paso: con 8-10 compilaciones a la vez, el binario de tests de `solidcraft-engine` (5 GB para
+  enlazar) y el de `solidcraft-ui-egui` fueron matados por el OOM killer ("signal 9") una decena de
+  veces; el token de la fase pesada lo tuvieron agentes horas seguidas, y los que no lo tuvieron
+  compilaron igual (eso es lo que lo deja tomado). Con la caja descargada, el mismo build entra en
+  minutos.
+- Por que la regla anterior no lo impedia: la regla de "una compilacion pesada a la vez" (L7 y el
+  `MAX_HEAVY_TOKENS=1`) governs el token, no el numero de compilaciones LIGERAS que cada agente
+  lanza por su cuenta.
+- Regla: **el token pesado se toma ANTES de compilar, y si no se puede tomar, se espera**: no se
+  compila "a ver si entra". Y un `signal 9` no es un error del cambio: se reintenta cuando la caja
+  este descargada.
+
+**L20. La condicion del maintainer es la specification del PR, no un comentario.**
+
+- Que paso: bherbruck condiciono el #20898 ("designs saved before this change must open exactly as
+  they were. Please keep the old placement for mates already saved in a design (a pending format
+  step that marks them, for example) and add a test that a saved design with a Mate opens with its
+  parts where they were"). Eso no es un detalle: es un paso de formato pendiente MAS un test de
+  diseño guardado. Sin las dos cosas, el PR no entra en la cola, por mas verde que este el CI.
+  Lo mismo con la tangente del #21219 ("join the line's end to the circle only when that end is
+  already close to it; otherwise keep tangency. Existing sketches must replay unchanged, so only
+  newly added Tangent constraints behave this way").
+- Regla: **una condicion del maintainer es trabajo, no una nota**: se cumple entera (el paso de
+  formato, el test, la evidencia) antes de seguir con lo que sea.
+
+**L21. "Las apps no calculan geometria": el catalogo `xtask/app-geometry.txt` es donde se decide.**
+
+- Que paso: dos PRs nuestros (#21169, #21205) y el #21090 fallaron el check nuevo de upstream
+  (`cargo xtask app-geometry`): "NEW: crates/ui-egui/src/canvas.rs:angle_plane_turn computes geometry
+  (cross, dot, normalized): call the kernel (solidcore ops) for it instead; apps hold state and compute
+  no geometry". El catalogo lista los sitios que YA calculan geometria (1515) y el check juzga lo que el
+  cambio AGREGA. El arreglo de fondo (mover la geometria al kernel) es de solidcore, que esta PAUSADO
+  para esta maquina; con el kernel pausado, el sitio se lista y el PR lo explica.
+- Regla: **una geometria nueva en la capa de app se lista en `xtask/app-geometry.txt` (con
+  `cargo xtask app-geometry --print` sobre el arbol MERGEADO con main) y el PR dice que el arreglo de
+  fondo es del kernel**; el catalogo solo deberia encogerse, asi que la lista es una decision del
+  maintainer que hay que pedir explicita.
+
+**L22. El gate del fork depende de un clic en la web que nadie hace.**
+
+- Que paso: el CI del fork dejo de despacharse: `gh workflow run ci.yml` responde `422 Actions has
+  been disabled for this repository`, aunque `GET /actions/permissions` dice `enabled: true` y el
+  workflow figura "active". Con eso, las cinco corridas del fork de la tarde-seven (fix-18629,
+  fix-19690, fix-17196, fix-18344, fix-14939) terminaron en "failure" con "The runner has received
+  a shutdown signal": NO eran fallos de codigo. El API no lo arregla (el PUT devuelve 204 y el
+  despacho sigue fallando): es el ajuste de Actions del fork, que se hace en la web.
+- Regla: **cuando el gate del fork no despacha, el primer diagnostico es el 422, no el codigo**: un
+  "failure" del fork con "runner shutdown" no es un veredicto.
+
 ## 3. Lo que quedo SIN resolver
 
-> **Actualizado 2026-11-22 22:00 (orquestador).** Los puntos 1 y 2 ya se resolvieron:
-> el huerfano se mato, el PR #20605 (issue #20011) fue MERGED por el maintainer a las
-> 07:03Z, el slot se cerro con `bin/close-slot.sh 20011 20605` y el target (79 GB) y el
-> worktree (1,1 GB) se fueron. El disco paso de 124 GB libres a 203 GB. Queda la
-> CAUSA (que un resto del turno keeps vivo un slot) sin arreglar en el codigo: eso es
-> el punto 1, que sigue abierto como regla, no como proceso.
+> **Actualizado 2026-11-23 23:00 (orquestador).** Los puntos 1, 2, 3 y 6 se resolvieron
+> en la sesion del 23-11 (el huerfano se mato y el slot 20011 se cerro; el target del
+> slot 20011 se borro; los cuerpos con placeholders se pegaron y sus PRs pasaron a ready;
+> y el CI del fork se volvio a despachar). Quedan el punto 4 (el ping que ya no existe) y
+> el punto 5 (el kernel pausado), que son decisiones de la maquina, no del codigo.
+> Lo que se ABRIO en la sesion: el gate del fork vuelve a necesitar el clic de la web
+> (L22) y las condiciones del maintainer son trabajo (L20).
 
 1. **El huerfano que mantiene vivo un slot: RESUELTO, la regla NO.** El `python3 -m
    http.server 8781` (pid 1983725) y su shell (pid 1983723), con el cwd en el worktree
@@ -243,7 +332,9 @@ tiene que vivir.
    slot con `bin/close-slot.sh`, que borro el target y el worktree). **La regla que
    falta**: que es un resto, y a quien le corresponde matarlo. Hoy el reaper de
    navegadores sabe que es un resto (el MCP se fue) pero no sabe nada de los procesos
-   que un agente deja tirados (un servidor http, un Xvfb, un `cargo` zombi).
+   que un agente deja tirados (un servidor http, un Xvfb, un `cargo` zombi). La sesion
+   del 23-11 lo vio de nuevo: un agente dejo un servidor http vivo y su slot estuvo
+   "ocupado" hasta que lo mato el orquestador.
 2. **El target del slot 20011 (79 GB): RESUELTO.** El gc lo conservaba porque "tiene un
    lock vivo", y el lock vivia porque el estado decia "running" con un agente muerto.
    Con el huerfano muerto y el PR mergeado, `bin/close-slot.sh` borro el target, el
@@ -251,10 +342,10 @@ tiene que vivir.
    falta**: la edad del target. El gc tiene tope (`DISK_ORCH_TARGET_MAX_GB`) pero no
    edad, y un target de un slot que murio con su agente se conserva mientras el lock
    exista.
-3. **Los 6 drafts con el cuerpo a medio hacer.** El #20933 esta en verde y con
-   `approved-for-ci`, y sigue en draft porque le falta la linea `Changes a default:`. El agente
-   que lo escribio ya termino y el pipeline no la inventa. Falta decidir quien la escribe: un
-   humano, un agente de reparación, o aceptar el PR sin ella.
+3. **Los drafts con el cuerpo a medio hacer: RESUELTO.** Los cuerpos se pegan con el
+   PATCH de la API (L17), los placeholders se rellenaron y los PRs pasaron a ready. Lo
+   que quedo es la regla nueva: el cuerpo se relee despues de pegarlo, porque el
+   `@fichero` se cuela dos veces.
 4. **El ping de `approved-for-ci` que ya no existe.** El cron salio del registro, pero
    `bin/ping-ready.sh` (45 KB) y `bin/test-ping-ready.sh` siguen en el repo, y el log viejo
    (`logs/cron-solidcraft-ping-ready.log`) queda con el error del PATH. Falta decidir si se borran
@@ -262,11 +353,15 @@ tiene que vivir.
 5. **El kernel sigue pausado y no es una decision del repo.** La maquina no compila
    `solidcore/`: `bin/issue-card.py` marca `kernel_cause` y `bin/prepare-slot.sh` sale con 6. Upstream
    si acepta trabajo de kernel; el veto es nuestro, por la caja (15 GB de RAM). Si la maquina
-   cambia, el veto se levanta: el veto no es una regla de upstream.
+   cambia, el veto se levanta: el veto no es una regla de upstream. En la sesion del 23-11
+   esto costo dos PRs que esperan al kernel (solidcore#3352 y solidcore#3371) y dos
+   catalogos de geometria listados a mano (L21).
 6. **El CI del fork es el gate y depende de una configuracion a mano.** En `vdirienzo/solidcraft`
    hay que habilitar Actions en la web, crear `CI_RUNNER` y `CI_RUNNER_WINDOWS` y dejar solo
    `ci.yml` activo (los otros 16 workflows estan apagados con `gh workflow disable`). Sin eso no
-   hay gate: `GATE_MODE=local` compila aca.
+   hay gate: `GATE_MODE=local` compila aca. **Volvio a pasar el 23-11**: el despacho
+   responde `422 Actions has been disabled for this repository` y las corridas del fork
+   mueren con "runner shutdown" (L22). El API no lo arregla: es un clic en la web.
 
 ## 4. El mapa de las piezas del loop (antes -> ahora)
 
@@ -279,6 +374,8 @@ tiene que vivir.
 | Politica | scripts de hermes y `~/.hermes/scripts` | un solo archivo de politica en la maquina: binario, modelo, nombre del agente, techo, modo del gate, slots y cinturones | `$LOOP_DIR/config.env`, leida por `bin/agent-env.sh` y `bin/slots.sh` |
 | Plantilla del brief | un brief por slot, escrito a mano y reusado (los viejos mandaban borrar el worktree) | una sola plantilla, renderizada siempre | `prompts/agent-brief.md`, `bin/prepare-slot.sh` |
 | Seleccion | el titulo y las labels | la ficha del issue (`state/cards/<N>.json`): causa, crates y veto de kernel antes de gastar un agente | `bin/issue-card.py`, `bin/next-issue.py` |
+| Rama del slot | siempre `fix-<issue>` | `SLOT_BRANCH`: un PR abierto puede vivir en otra rama (el #19168 vive en `chore/19158-...`); si esa rama esta checkouteada en otro worktree, el slot nace pegado (detached) y el push va con la referencia explicita | `bin/prepare-slot.sh`, `bin/agent-brief.md` |
+| Cuerpo del PR | pegado a mano, a veces con `@fichero` sin expandir | el PATCH de la API, y se relee despues | `bin/verify-pr.sh`, el check "Defaults line check" |
 
 ## 5. Como volver a medir esto
 

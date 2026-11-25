@@ -71,15 +71,26 @@ the cron is not installed, or to go faster than its ten minutes:
 3. `bash bin/dispatch-slot.sh <issue>` starts the agent with that brief, in
    that worktree, with that slot's target directory.
 4. When the agent reports, `bash bin/close-slot.sh <issue> <pr>` verifies the
-   pull request, records it, deletes the target directory and the worktree, and
-   releases the lock. If the claim was lost, it closes our pull request, saves
-   the work in `logs/claims-lost/` and offers it on the pull request that won.
+   pull request, records it, deletes the target directory, the worktree and the
+   brief, and releases the lock. If the claim was lost, it closes our pull
+   request, saves the work in `logs/claims-lost/` and offers it on the pull
+   request that won.
 5. And again from 1: the next issue, another agent.
+
+**The cleanup is step 4, and it is not the agent's.** The brief does not ask the
+agent to delete its worktree or its target: the gate of the slot compiles
+inside them, and the pipeline queues that gate after the agent opens the pull
+request. An agent that deletes its own worktree makes the gate fail with "Could
+not locate working directory" and writes a red verdict about a healthy pull
+request. The orchestrator closes the slot when the agent has reported; before
+that, the slot stays alive even if no process is working in it (see
+`docs/slot-rules.md`).
 
 **As one agent of the wave (the subagent).** A session can also be ONE agent:
 take one issue, work it, open the pull request. The brief
 (`prompts/agent-brief.md`) has everything: the rules, the claim, the cycle, the
-gate for this box, the shape of the pull request, the cleanup and the report.
+gate for this box, the shape of the pull request, and the report. It does NOT
+have the cleanup: that is the orchestrator's.
 
 ## WHAT SURVIVES THE END OF A SESSION
 

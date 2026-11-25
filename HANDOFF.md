@@ -1,39 +1,35 @@
 # SolidCraft — handoff para la próxima sesión
 
-Actualizado: 2026-11-21
+Actualizado: 2026-11-23
 
 ## Dónde estamos
 
 - **El análisis del 2026-11-21** está en `reports/analisis-orquestador-2026-11-21.md`: los
   resultados reales (117 PRs, 88 mergeados), lo que estaba caído, las causas de fondo, los tokens
   y la deuda. Lo que quedó pendiente está en sus §2 a §4.
-- **Dos commits lo aplicaron:**
-  - `08a4ee5`: el agente de los slots es **opencode** (`bin/dispatch-slot.sh`, con el runtime
-    de `bin/agent-env.sh`) y los crons son el **crontab del usuario** (`bin/install-crontab.sh`
-    los instala desde `bin/crons.txt`). Hermes se fue para siempre: `~/.hermes` no existe.
-  - `517857d`: la wave vuelve a despachar, con el flujo de upstream. El crontab tiene PATH, la
-    cola de gates usa `flock` y la wave corta a los tres fallos. El claim va primero (commit
-    vacío, draft y `claim-verify`) y el brief sigue `solidcraft-full-stop`. El agente corre con
-    techo de tiempo y `--format json`. No hay ping de `approved-for-ci` ni comentarios de estado.
-- **Los commits que siguieron** (todos en `origin/main`): `6e93cfa` (la foto de GitHub, una
-  sola regla del claim y la ficha de cada issue), `4b32fbb` (el gate es el CI del fork o
-  `cargo xtask fast`), `7efd0a8` (métricas y alertas), `6c9ca14` (fuera hermes, reglas que
-  siguen a upstream, tests herméticos), `617b919` (la wave usa la ficha y el veto del
-  maintainer exige su cita) y `e092a56` (el agente que termina sin veredicto recibe un
-  empujón, y un slot con la causa en el kernel se aparca).
+- **Las lecciones del 2026-11-22/23** están en `reports/lecciones-2026-11-22.md` (22 lecciones
+  con las mediciones) y **lo que hizo la sesion del 23-11** en
+  `reports/sesion-2026-11-23.md` (23 PRs mergeados en 48 h, el disco de 124 GB a 174 GB libres).
+- **El runtime ya no es hermes**: el agente de un slot es **opencode**
+  (`bin/dispatch-slot.sh` con el runtime de `bin/agent-env.sh`) y los crons son el **crontab del
+  usuario** (`bin/install-crontab.sh` los instala desde `bin/crons.txt`). `~/.hermes` no existe.
+  El README esta reescrito en ingles con el mapa de las piezas.
+- **La limpieza es del orquestador** (`bin/close-slot.sh`: target, worktree, brief y lock), no
+  del agente: el brief ya no le pide borrar su worktree (eso mataba el gate del propio slot).
 - **El gate es el CI del fork** (`GATE_MODE=fork-ci` en `$LOOP_DIR/config.env`). En el fork
-  `vdirienzo/solidcraft`: Actions habilitado a mano en la web, las variables `CI_RUNNER` y
-  `CI_RUNNER_WINDOWS` creadas, y **solo `ci.yml` activo**. Los otros 16 workflows de upstream
-  están apagados con `gh workflow disable`; en octubre crearon una pre-release nightly en el
-  fork y etiquetaron sus issues. La primera corrida, el run 44971938451 sobre `fix-19690`,
-  arrancó en runners `ubuntu-24.04`. Para volver a compilar en esta máquina:
-  `GATE_MODE=local`.
-- **Un solo slot** (`IMPLEMENT_SLOTS=1`) hasta revisar el primer PR del brief nuevo.
-- **Antes de cualquier cambio**, en el fork, en upstream, en este repo, en el crontab o en
-  `config.env`, se consulta al usuario.
+  `vdirienzo/solidcraft`: solo `ci.yml` activo (los otros 16 workflows de upstream estan
+  apagados con `gh workflow disable`). **Ojo: los Actions del fork hay que habilitarlos en la
+  web** (si estan apagados, el despacho responde `422 Actions has been disabled for this
+  repository` y las corridas mueren con "runner shutdown": no son fallos de codigo). Para
+  volver a compilar en esta maquina: `GATE_MODE=local`.
+- **El loop esta PAUSADO** (`bash bin/loop-pause.sh pause`): el bloque del crontab salio y
+  quedo la marca `locks/loop-paused`. Para volver: `bash bin/loop-pause.sh resume`.
+- **El kernel sigue pausado** (15 GB de RAM, un solo build pesado a la vez): `bin/issue-card.py`
+  marca `kernel_cause` y `bin/prepare-slot.sh` sale con 6. Los dos issues que esperan al
+  kernel son el #18629 (solidcore#3352) y el #19690 (solidcore#3371).
 - **Las reglas** viven en upstream (`AGENTS.md`, `CONTRIBUTING.md`, `.agents/skills/`).
-  `RULES.md` solo apunta ahí y lista las seis reglas propias del orquestador.
-- El estado vivo (slots, PRs, gates) **no** está en este archivo: sale de `bin/orch-state.sh`.
+  `RULES.md` solo apunta ahi y lista las reglas propias del orquestador.
+- El estado vivo (slots, PRs, gates) **no** esta en este archivo: sale de `bin/orch-state.sh`.
 
 ## Cómo arrancar
 
@@ -42,6 +38,7 @@ cd ~/.local/share/solidcraft-orch   # es este repo (un symlink)
 bash bin/preflight.sh               # qué le falta a la máquina (opencode, gh, el PATH del crontab)
 bash bin/rules-sync.sh              # exit 1 + lista = upstream movió reglas: leerlas antes de despachar
 bash bin/test-all.sh --fast         # 0 fallos antes de tocar nada
+bash bin/loop-pause.sh status       # ¿pausado o corriendo?
 crontab -l | grep -c solidcraft     # los crons del loop; si faltan: bash bin/install-crontab.sh
 bash bin/orch-state.sh              # slots, PRs y gates (NUNCA state.json entero)
 bash bin/slots.sh report            # cores, RAM y slots libres
@@ -101,3 +98,22 @@ en cada turno. Llamadas independientes en un mismo turno, filtrar en el origen (
 más de ~10 KB es un comando que no filtró) y leer el estado por partes. Al agente no se le manda
 lo que puede leer en disco (`AGENTS.md`, las skills): se le manda el issue, el diagnóstico, los
 números medidos y las decisiones. Más en `docs/costo-de-tokens.md`.
+
+## Lo que la sesión del 23-11 dejó aprendido (las cinco que más costaron)
+
+1. **El cuerpo de un PR se pega con el PATCH de la API**, nunca con `--body @fichero`
+   (eso deja la cadena literal como cuerpo y el check "Defaults line check" cae):
+   `gh api -X PATCH repos/tangency-labs/solidcraft/pulls/<n> -F body=@<fichero>`, y
+   después se relee (`gh pr view <n> --json body --jq .body | head -3`).
+2. **No se cierra un slot mientras su agente trabaja**: el orquestador le borró el worktree a
+   un agente dos veces y le abortó el `cargo test`. Se cierra cuando el agente ha reportado.
+3. **Un `signal 9` no es un error del cambio**: es la caja (15 GB, un build pesado a la vez).
+   Se reintenta cuando la caja está descargada, y el token pesado se toma ANTES de compilar.
+4. **`gh issue view --comments` no funciona en este repo** (GraphQL "Projects (classic)"): se
+   lee con la API REST (`gh api repos/.../issues/<n>/comments`, `/pulls/<n>/reviews`,
+   `/issues/<n>/timeline`).
+5. **Una condición del maintainer es trabajo, no una nota**: el #20898 exigía un paso de
+   formato pendiente más un test de diseño guardado, y el #21219 un paso de formato para las
+   tangencias viejas. Sin las dos cosas, el PR no entra en la cola por más verde que esté.
+
+El detalle con las mediciones está en `reports/lecciones-2026-11-22.md` (§2.4: L16 a L22).
