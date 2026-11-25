@@ -18,6 +18,7 @@ did and what it produced is in
 | piece | what it is | where it lives |
 |---|---|---|
 | the agent of a slot | an **opencode** session: `opencode run --standalone --auto --format json --title issue-N -m <model>` | `bin/dispatch-slot.sh` |
+| the turn of the agent | the same session, plus a nudge when the run ends without a verdict | `bin/agent-turn.sh` |
 | the model, the binary, the agent name | the **policy of this machine**, not code | `bin/agent-env.sh` reads `$LOOP_DIR/config.env` |
 | the scheduler | the **user crontab** (cron, not hermes) | `bin/install-crontab.sh` installs the jobs of `bin/crons.txt` |
 | the claim arbiter | one implementation, asked once | `bin/claim-verify.sh` (exit code IS the verdict) |
@@ -72,6 +73,38 @@ done": an agent that opened the PR keeps working on it (the gate, the evidence).
 liveness is checked by `bin/slot-busy.sh`: a process whose working directory is inside
 the worktree or the target dir.
 
+### The declared graph
+
+The process of an issue is **declared**, not remembered:
+[`workflow.yaml`](workflow.yaml) is 15 nodes with their edges, their preconditions,
+what to do when they fail, and the vocabulary of signals that the runner evaluates
+against the disk. It exists because the process used to live in the head of whoever
+ran the orchestrator: 49 scripts and no map, so nobody could answer "what is next"
+without rebuilding the state by hand.
+
+```yaml
+nodos:
+  - id: buscar-issue    # an agent does it: script: null
+  - id: claim-verify    # bin/claim-verify.sh
+  - id: gate            # bin/gate.sh
+senales:                # the conditions, evaluated against the state on disk
+  - pr_draft_sin_veredicto
+```
+
+Two scripts read it:
+
+| script | what it does |
+|---|---|
+| `bin/workflow-validate.py` | the graph has to be a graph: the edges point to nodes that exist, every script named exists, every signal used is declared, and `bin/crons.txt` and the graph agree |
+| `bin/workflow-runner.sh --list` | the nodes that are eligible **now**, and why |
+| `bin/workflow-runner.sh --dry-run` | the exact command of the node it would run, without running it |
+| `bin/workflow-runner.sh` | runs exactly **one** eligible node, and only after validating the graph |
+
+The runner never compiles Rust: a node marked `compilacion_pesada: si` is *proposed*,
+and the cron that owns it runs it. It never calls the network either: GitHub is the
+final truth, but the runner reads the state on disk, so if `state.json` is old the
+proposals are old.
+
 ### Pausing it
 
 `bin/loop-pause.sh` stops the loop without losing anything, in three levels:
@@ -96,18 +129,23 @@ suite.
 
 | cron | every | script | what it does |
 |---|---|---|---|
-| solidcraft-wave | 10 min | `wave.sh` | closes the finished slots, starts the free ones |
-| solidcraft-pipeline | 5 min | `pipeline.py` | fixes the bodies, queues the gates, passes the PRs to ready |
-| solidcraft-gate-queue | 5 min | `gate-queue.sh` | drains the gate queue (two at a time) |
-| solidcraft-comment-watch | 15 min | `comment_watch.py` | reads the maintainer's comments into a task queue |
-| solidcraft-nice-compilations | 10 min | `nice-compilations.sh` | lowers the priority of the new builds |
-| solidcraft-reporte-diario | 16 and 46 | `daily-report.py` | the daily report, no LLM |
-| solidcraft-gc-disk | 30 min | `gc-disk.sh` | the disk: artifacts and dead targets |
-| solidcraft-loop-status | 30 min | `loop-status.py` | the state of the loop, no LLM |
+| solidcraft-wave | 10 min (`*/10`) | `wave.sh` | closes the finished slots, starts the free ones |
+| solidcraft-pipeline | 5 min (`:02,:07,…`) | `pipeline.py` | dispatches the CI of the fork (or queues the local gate), passes the PRs to ready. It does **not** edit bodies any more |
+| solidcraft-gate-queue | 5 min (`:03,:08,…`) | `gate-queue.sh` | drains the gate queue (two at a time) |
+| solidcraft-comment-watch | 15 min (`:04,:19,…`) | `comment_watch.py` | reads the maintainer's comments into a task queue |
+| solidcraft-nice-compilations | 10 min (`:01,:11,…`) | `nice-compilations.sh` | lowers the priority of the new builds |
+| solidcraft-reporte-diario | `:16` and `:46` | `daily-report.py` | the daily report, no LLM |
+| solidcraft-gc-disk | 30 min (`:14,:44`) | `gc-disk.sh` | the disk: artifacts and dead targets |
+| solidcraft-loop-status | 30 min (`:06,:36`) | `loop-status.py` | the state of the loop, no LLM |
 
 No two of them fall in the same minute, and the order inside the cycle matters: the
-wave dispatches at `:00`, the pipeline queues the gates at `:02`, the queue takes them
-at `:03`.
+wave dispatches at `:00`, the pipeline queues the gates at `:02` and the queue takes
+them at `:03`.
+
+**Two jobs were taken out of the register on 2026-11-21**:
+`solidcraft-ping-ready` (upstream's guide says not to ask for `approved-for-ci` over and
+over; `bin/ping-ready.sh` stays for a manual `--report`) and
+`solidcraft-wave-prompt-guard` (it watched a hermes cron, and hermes is gone).
 
 ```bash
 bash bin/install-crontab.sh            # install the jobs (idempotent)
@@ -228,36 +266,124 @@ Every line is a lesson that cost hours. The numbers are in
     things without confusing them: **AT RISK** (the commit is in no ref of the fork),
     **SAVED** (it is on GitHub under another name) and **merged**.
 
+### On the process
+
+28. **A cron that is not in `bin/crons.txt` does not run.** There were two graphs (the
+    declared one in `workflow.yaml` and the installed one in the crontab) and nothing
+    checked them: a cron could exist, run every day and be in neither list.
+    `bin/workflow-validate.py` is the check.
+29. **`gh issue list --limit` truncates the pool.** The upstream has ~6,800 issues open;
+    `--limit 150` showed the selector 2% of them, and the rest looked like "no issue
+    left". `bin/gh_snapshot.py` takes **one** snapshot of the open issues and PRs and
+    everything reads that.
+30. **One arbiter per concept.** The rule of "who owns the claim of issue N" lived in a
+    `jq` inside `bin/claim-verify.sh` *and* in two scripts of `loop/`, and they did not
+    read the body the same way. It is now one file: `bin/claim_rule.py`.
+31. **`opencode run` ends when the model writes text without calling a tool.** A turn
+    can finish with "let me instrument all the doc-level boolean calls" and no verdict,
+    no commit, no push: the wave then closes the slot. `bin/agent-turn.sh` is the
+    wrapper that nudges the same (still warm) session when the run has no verdict.
+
 ---
 
 ## 4. The scripts
 
+About fifty scripts, grouped by what they are for. The name of the group is the
+question you have when you look for one.
+
+**The loop** — one turn of it, the pause, the schedule
+
 | script | what it does |
 |---|---|
 | `bin/wave.sh` | one turn of the loop (close, reap, resume, start) |
-| `bin/dispatch-slot.sh` | starts the opencode agent of a slot with the brief |
-| `bin/agent-env.sh` | the agent runtime of this machine (binary, model, name) |
-| `bin/prepare-slot.sh` | the slot: lock, worktree, branch, target dir, brief |
-| `bin/close-slot.sh` | the close-out: verify the PR, free the disk, release the lock |
-| `bin/next-issue.py` | the next issue worth an agent, and why |
-| `bin/issue-card.py` | the card of an issue (cause, kernel or not, the value) |
-| `bin/claim-verify.sh` | the arbiter of the claim (the exit code IS the verdict) |
-| `bin/gate.sh`, `bin/fork-ci.sh` | the gate (local, or the CI of the fork) |
-| `bin/pipeline.py` | fixes the bodies, queues the gates, passes the PRs to ready |
-| `bin/verify-pr.sh` | everything about a PR in one call (0 ok, 1 failed, 6 unknown) |
-| `bin/install-crontab.sh` | installs the crons of `bin/crons.txt` |
+| `bin/wave-chain.sh` | the sequencer of the wave of 14-11 (the resume path still points at it) |
 | `bin/loop-pause.sh` | pause / resume the loop in three levels |
-| `bin/preflight.sh` | what this machine is missing |
-| `bin/gc-disk.sh` | the disk: artifacts, dead targets, dead branches |
-| `bin/orch-state.sh` | the state, by part (`slots`, `prs`, `gates`, `issue N`) |
-| `bin/state-set.py` | writes one key of the state and rebuilds the artifact |
-| `bin/merge-state.sh` | the state split by concept, and its artifact (`--bootstrap`, `--check`) |
+| `bin/crons.txt` | the register of the crons: **the source of truth** |
+| `bin/install-crontab.sh` | installs the jobs of the register in the crontab of the user |
+| `bin/loop-status.py` | the state of the loop, no LLM |
+| `bin/daily-report.py` | the daily report, no LLM |
+
+**The declared graph** — the process, written down
+
+| script | what it does |
+|---|---|
+| `workflow.yaml` | the declaration of the process of an issue (15 nodes, edges, preconditions, signals) |
+| `bin/workflow-validate.py` | the graph is a graph, and the register agrees with it |
+| `bin/workflow-runner.sh` | runs **one** eligible node, after validating the graph |
+
+**The slot** — the agent and its box
+
+| script | what it does |
+|---|---|
+| `bin/prepare-slot.sh` | the slot: lock, worktree, branch, target dir, brief |
+| `bin/dispatch-slot.sh` | starts the opencode agent of a slot with the brief |
+| `bin/agent-turn.sh` | one turn of the agent, with the nudge when the run has no verdict |
+| `bin/agent-env.sh` | the agent runtime of this machine (binary, model, name) |
+| `bin/close-slot.sh` | the close-out: verify the PR, free the disk, release the lock |
 | `bin/slot-lock.sh` | the locks of the slots and the heavy-build token |
 | `bin/slot-busy.sh` | is somebody working in this slot right now |
-| `bin/branch-risk.sh` | the work that only exists on this machine |
+| `bin/slot-stale.sh` | which slots are stuck (old lock, branch that does not move) |
+| `bin/slot-prs.py` | our pull requests, matched to the slots in flight |
+| `bin/slot-target-dir.sh` | the target dir of a slot, one per slot |
+| `bin/lock-heartbeat.sh` | refreshes the liveness of a lock |
+| `bin/slots.sh` | how many slots may run at once (free cores and free RAM) |
+| `bin/run-issue-scope.sh` | an issue runner with a memory ceiling |
+
+**Choosing the work** — which issue, and whose claim it is
+
+| script | what it does |
+|---|---|
+| `bin/next-issue.py` | the next issue worth an agent, and why |
+| `bin/issue-card.py` | the card of an issue (cause, kernel or not, the value) |
+| `bin/gh_snapshot.py` | one snapshot of the open issues and PRs of the upstream |
+| `bin/dup-scan.sh` | one of our PRs duplicating another author's |
+| `bin/claim_rule.py` | the one rule of "who owns the claim of issue N" |
+| `bin/claim-verify.sh` | the arbiter of the claim (the exit code IS the verdict) |
+
+**The gate and the pull request**
+
+| script | what it does |
+|---|---|
+| `bin/gate.sh` | the local gate (`cargo xtask fast --base`) |
+| `bin/fork-ci.sh` | the CI of the fork used as the gate |
+| `bin/gate-queue.sh` | the queue of gates waiting for a build slot |
+| `bin/gate-runner.sh` | the gates, one at a time |
+| `bin/gate-baseline.sh` | the effective verdict: the raw one minus what was already broken |
+| `bin/baseline-refresh.sh` | refreshes the failures measured on `origin/main` |
+| `bin/pipeline.py` | dispatches the CI of the fork (or queues the local gate), passes the PRs to ready |
+| `bin/publish-pr.sh` | the only way to open one of our pull requests |
+| `bin/verify-pr.sh` | everything about a PR in one call (0 ok, 1 failed, 6 unknown) |
+| `bin/ping-ready.sh` | the review package of the PRs that are ready (manual now, not a cron) |
+| `bin/ping-ready-report.sh` | the same summary, without commenting on GitHub |
 | `bin/ci-status.sh` | the CI of a head in one line |
-| `bin/rules-sync.sh` | did upstream move the rules this repo quotes |
+| `bin/comment_watch.py` | the maintainer's comments become a task queue |
+
+**The machine** — the box, the disk, the builds
+
+| script | what it does |
+|---|---|
+| `bin/build-slot.sh` | the token of a build slot |
+| `bin/cargo-jobs.sh` | how many parallel jobs a cargo invocation should use |
+| `bin/nice-compilations.sh` | lowers the priority of the new builds |
+| `bin/gc-disk.sh` | the disk: artifacts, dead targets, dead branches |
+| `bin/sccache-health.sh` | is the compile cache earning the disk it holds? |
+| `bin/branch-risk.sh` | the work that only exists on this machine |
+| `bin/kill-orphan-browsers.sh` | the browsers of the MCP that were left without an owner |
+
+**The state, the reports and the launchers**
+
+| script | what it does |
+|---|---|
+| `bin/merge-state.sh` | the state split by concept, and its artifact (`--bootstrap`, `--check`) |
+| `bin/state-set.py` | writes one key of the state and rebuilds the artifact |
+| `bin/orch-state.sh` | the state, by part (`slots`, `prs`, `gates`, `issue N`) |
+| `bin/rules-sync.sh`, `bin/rules-snapshot.sh` | did upstream move the rules this repo quotes |
+| `bin/preflight.sh` | what this machine is missing |
 | `bin/test-all.sh` | every suite of the orchestrator, and its verdict |
+| `bin/launch-app.sh` | the app with its control channel open, for the evidence |
+| `bin/launch-wave.sh`, `bin/launch-resume.sh`, `bin/launch-slot-service.sh` | a wave, a resume, and an agent as a transient systemd unit |
+| `bin/sc_control.py` | the client of the control channel of the app |
+| `bin/measure-17881-before-after.sh`, `bin/capture-17881-evidence.py`, `bin/experimento-paralelismo.sh` | the measurement of one issue, its evidence, and the experiment of the parallelism |
 
 The half of the orchestrator that lives in `$LOOP_DIR` (the publisher, the claim
 arbitration of the loop, the scoped gate, the disk collector) is **versioned here**, in
@@ -289,6 +415,15 @@ bash bin/orch-state.sh slots        # only the slots
 bash bin/orch-state.sh issue 16829  # everything known about one issue
 bash bin/orch-state.sh history 10   # the last ten actions
 ```
+
+**Three exit codes decide things, and they do not mean the same thing.** A script
+that could not read the world returns "unknown", and "unknown" is never "no":
+
+| script | 0 | 1 | other |
+|---|---|---|---|
+| `bin/verify-pr.sh` | the PR is fine | the PR is broken | 6 = it could not be read |
+| `bin/claim-verify.sh` | the claim is ours | we LOST the claim | 2 = it could not be told |
+| `bin/prepare-slot.sh` | the slot is ready | the slot could not be prepared | 6 = the cause is in the kernel, which this box does not build |
 
 **The state has to be true, not complete.** An entry that is old (a merged PR that
 still says "open") costs more than a missing one. GitHub is the truth; the disk is
@@ -337,19 +472,23 @@ The secrets (never in a versioned file) are `GH_TOKEN` and
 ## 7. The tests
 
 ```bash
-bash bin/test-all.sh          # every suite
-bash bin/test-all.sh --fast   # only the ones that run anywhere
+bash bin/test-all.sh             # every suite
+bash bin/test-all.sh --fast      # only the ones that run anywhere
+bash bin/test-all.sh gate        # only the suites whose name matches
 ```
 
-A suite that cannot run is reported as a **failure**, never as a skip: a suite that
-cannot run is not a green. The two that live in the loop (`test-gate-quick.sh` and
-`test-rules.py`) need the machine.
+41 suites live in `bin/test-*.sh` and `bin/test-*.py`. A suite that cannot run is
+reported as a **failure**, never as a skip: a suite that cannot run is not a green.
+The two that live in the loop (`test-gate-quick.sh` and `test-rules.py`) need the
+machine, and five are heavy (`test-slot-parallelism.sh`, `test-deploy-drift.sh`,
+`test-publish-pr.sh`, `test-state-split.sh`, `test-briefs.sh`).
 
 Two checks that do not compile and are worth running before any heavy work:
 
 ```bash
-bash bin/gate-structural.sh   # the static checks of upstream (layers, mesh-decisions, ...)
-bash bin/rules-sync.sh        # upstream moved a rule that this repo quotes
+cargo xtask fast --base origin/main   # upstream's own pre-push check: fmt, layers,
+                                      # clippy, check, nextest (what the local gate runs)
+bash bin/rules-sync.sh                # upstream moved a rule that this repo quotes
 ```
 
 ---
@@ -363,5 +502,6 @@ bash bin/rules-sync.sh        # upstream moved a rule that this repo quotes
 | the analysis of the loop, with the costs | [`reports/analisis-orquestador-2026-11-21.md`](reports/analisis-orquestador-2026-11-21.md) |
 | the state at the start of a session | [`HANDOFF.md`](HANDOFF.md) |
 | the rules of the orchestrator | [`RULES.md`](RULES.md) |
-| the documents of the loop | [`docs/`](docs/) — start with [`docs/starting-a-session.md`](docs/starting-a-session.md) and [`docs/known-traps.md`](docs/known-traps.md) |
+| the declared process of an issue | [`workflow.yaml`](workflow.yaml) |
+| the documents of the loop | [`docs/`](docs/) — the index is [`docs/README.md`](docs/README.md); start with [`docs/starting-a-session.md`](docs/starting-a-session.md) and [`docs/known-traps.md`](docs/known-traps.md) |
 | the rules of upstream (the truth) | `AGENTS.md`, `CONTRIBUTING.md` and `skills/` in the SolidCraft repository |
