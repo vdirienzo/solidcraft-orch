@@ -258,3 +258,45 @@ es `cargo xtask fast --base origin/main` + `cargo xtask app-geometry` (nuevo, `f
 
 **Lección.** Cuando la regla de upstream no se puede seguir en esta máquina, se escribe la verdad
 en RULES.md con el motivo, en vez de repetir la regla y que cada agente descubra el conflicto.
+
+## 22. "Estamos al día" se puede comprobar, no solo creer
+
+El aviso de reglas decía lo que se había movido, pero no decía si **nuestras** citas seguían
+existiendo. Escribí el veredicto para que lo compruebe: cada ruta de upstream que nombran
+nuestros documentos (las skills, los scripts, los ficheros del kernel) tiene que existir en el
+commit del snapshot; cada brief tiene que citar rutas que sigan ahí.
+
+A la primera corrida encontró dos citas rotas que nadie había visto en semanas:
+
+| cita nuestra | la verdad en upstream |
+|---|---|
+| `skills/solidcraft-contributing/SKILL.md` | `.agents/skills/solidcraft-contributing/SKILL.md` (las de `skills/` son del MCP) |
+| `crates/ui-egui/src/feature_highlight_tests.rs` | no existe: los tests de esa área viven dentro de `crates/ui-egui/src/viewport.rs` |
+
+**Lección.** La deriva que duele no es la de las reglas escritas en prosa (esa la lee una
+persona), es la de las **anclas**: un fichero o una skill que upstream movió y que nuestro brief
+sigue mandando leer. Esa deriva es comprobable con `git cat-file -e <commit>:<ruta>`, y un job
+recurrente que la comprueba cada seis horas cuesta un script.
+
+## 23. Una reimplementación de una regla del repo deriva (y esta vez nos costó un PR)
+
+`bin/pipeline.py` traía su propia copia del parser de `Changes a default:`. Era **más estricta**
+que la de upstream: marcaba mal formado un body que upstream acepta (`no` con nota detrás, el
+heading `## Changes a default`, el valor entre comillas invertidas), y `publish-pr.sh` moría con
+exit 3 dejando el PR en draft. Ahora llama al parser de upstream con node y la copia en python
+queda como respaldo marcado como tal.
+
+**Lección.** Cuando la regla es de otro repo, el otro repo es la autoridad: llama a su parser,
+no lo reescribas. Y si guardas una copia de respaldo, márcala como respaldo: el día que se
+vuelven aparecer las dos, nadie sabe cuál manda.
+
+## 24. El estado de la máquina también es código que se pierde
+
+El agente que alineó el tooling descubrió que el estado (`state.json`, `state/manifest.json`,
+el reparto por grupos) **no existía** en esta caja: lo había borrado una limpieza del 27-11. Los
+scripts de estado no medían nada, y `merge-state.sh --check` moría. Lo reconstruyó con el layout
+del bootstrap, conservó los slots vivos (9223, 21119) y los PRs abiertos.
+
+**Lección.** Un check que no puede correr es peor que no tenerlo (lección 17): se aplica igual a
+las herramientas de estado. Y ojo con las limpiezas: antes de borrar `state/`, hay que mirar qué
+lo lee.
