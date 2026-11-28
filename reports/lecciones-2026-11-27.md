@@ -312,3 +312,30 @@ lo lee.
 y lo que se deja ahí caduca. Cuando un build falla con "No space left" **mira `df` de cada punto de
 montaje**, no solo el del home: el tmpfs se llena antes. Y lo que otro día se descargó en `/tmp` no
 es de nadie a los dos días: se limpia.
+
+## 26. Un subagente que muere en silencio deja el trabajo en el worktree (si el worktree es suyo)
+
+El agente del hallazgo de CodeRabbit en #23672 **murió sin responder**: ni mensaje JSON, ni fichero
+de hallazgos, ni commit. Solo dejó el test RED escrito y sin commitear en el worktree.
+
+**Lección.** El worktree es el único sitio donde el trabajo de un subagente sobrevive a su muerte,
+así que:
+- el backup del diff del worktree (`git diff > /tmp/...patch`) es la red: permitió reanudar el
+  trabajo con un brief nuevo en vez de repetir la investigación;
+- el brief de reanudar debe decir **qué queda hecho** (el test RED está en el worktree, sin
+  commitear), no repetir el encargo entero: un brief nuevo con el análisis ya acotado y el test
+  RED de partida tarda la mitad y vuelve a hacer lo que el muerto no llegó a hacer;
+- y el orden del trabajo debe ser **commit y push temprano**: el commit del test RED, aunque sea
+  rojo, ya es trabajo que no se pierde.
+
+## 27. El CI de upstream falla por cosas que no son tuyas, y una de ellas era nuestra
+
+El CI de #23672 falló con "Format and repository checks": rustfmt quería la cadena
+`session.restore_editor(&source, original).unwrap_or_else(...)` en una línea (`max_width = 150`,
+`use_small_heuristics = "Max"`). Nuestro gate local (`cargo xtask fmt --check`) no lo había
+detectado.
+
+**Lección.** `cargo fmt --all -- --check` (el check del CI, no el del crate) tiene que estar en el
+gate antes de cada push, y no basta con formatear el crate que has tocado: el CI formatea todo el
+workspace. Y cuando el CI falla, **lee el log del paso que falló** antes de asumir que es un
+problema de fondo: aquí era una línea.
