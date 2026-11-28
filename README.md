@@ -227,8 +227,36 @@ Every line is a lesson that cost hours. The numbers are in
 17. **A regression test goes in the area's existing test file**, never in a file named
     after the bug (`AGENTS.md`, issue #3226).
 18. **`Changes a default: no` is the exact form** the upstream parser reads. Not
-    "Changes to default: no". The position does not matter; a code fence, an HTML
-    comment or backticks break it.
+    "Changes to default: no". The position does not matter; a code fence or an HTML
+    comment break it. The parser also accepts `no` with a note behind it, the heading
+    form `## Changes a default` with the value under it, and a backticked value.
+
+**Upstream moved its rules on 2026-11-25 and 2026-11-28** (`AGENTS.md` was rewritten and the
+skills moved to `.agents/skills/`). These are the rule now, not the old form:
+
+- **The claim DRAFT carries the issue number** in its title (the claim bot reads it there);
+  the **ready pull request does not**: `Area: what the user now gets`, present tense, no
+  `feat:`/`fix:`, about 100 characters. The merge adds the `(#N)`. A follow-up says it in
+  the title: `(follow-up to #23431)`.
+- **`Test change: <why the old expectation was wrong>`** only when the diff touches kernel
+  source (`solidcore/`, `crates/smlib/`) AND changes or deletes a line of an existing test
+  or golden expectation. New tests need no line.
+- **A fixed test leaves `tests/KNOWN_FAILING_TESTS`.** If the fix makes a listed test pass,
+  its line is removed in the same PR: the CI fails on a listed test that now passes.
+- **Media only in two cases**: a change visible in the UI, or a change in how the model
+  looks. A kernel or geometry fix proven by tests needs none. When it is needed, the
+  pictures go in the description as links, never in the diff, and without private details
+  (home paths, user names, tokens).
+- **The gate here is narrow on purpose.** Upstream says "Before pushing: `cargo xtask ci`",
+  but that `ci` always runs the whole-workspace clippy, the whole test suite (78 binaries,
+  56-90 min on this box), the wasm build of every crate and the doc tests; only four checks
+  are picked by changed paths. The local gate is `cargo xtask fast --base origin/main` plus
+  `cargo xtask app-geometry` (new, `fast` does not run it) and the path gates the change
+  touches; the complete `ci` belongs in the CI.
+- **Merging `main` in is the cheap way to be up to date** (the CI carries a passing run when
+  the merge leaves the change as it was); a rebase re-runs the whole suite. Rebasing is fine
+  too, with `--force-with-lease` and only on your own branch.
+- **The PR is opened ready for review** when the change is done: the draft is only the claim.
 
 ### On git and the repo
 
@@ -486,10 +514,21 @@ machine, and five are heavy (`test-slot-parallelism.sh`, `test-deploy-drift.sh`,
 Two checks that do not compile and are worth running before any heavy work:
 
 ```bash
-cargo xtask fast --base origin/main   # upstream's own pre-push check: fmt, layers,
-                                      # clippy, check, nextest (what the local gate runs)
+cargo xtask fast --base origin/main   # the narrow local gate of this box: fmt, layers,
+                                      # clippy, check, nextest on the packages the change
+                                      # touches (upstream's prepush check is `cargo xtask ci`,
+                                      # which is the whole suite and does not fit here)
+cargo xtask app-geometry              # the new check `fast` does not run
 bash bin/rules-sync.sh                # upstream moved a rule that this repo quotes
+bash bin/rules-verdict.sh             # the same check as one verdict block (the watch job runs it)
 ```
+
+**The watch job**: the automation `solidcraft-rules-watch` runs `bin/rules-verdict.sh` every six
+hours and brings the verdict: `OK` (the snapshot matches `origin/main`), `CAMBIÓ` (the files that
+moved and the diff stat) or `NO SE PUDO COMPROBAR` (the check could not run, which is not "up to
+date"). It only reads: it changes nothing, it publishes nothing, it merges nothing. When it says
+something moved, a person orders the update and a subagent does it against `RULES.md` and
+`prompts/`.
 
 ---
 
@@ -504,4 +543,4 @@ bash bin/rules-sync.sh                # upstream moved a rule that this repo quo
 | the rules of the orchestrator | [`RULES.md`](RULES.md) |
 | the declared process of an issue | [`workflow.yaml`](workflow.yaml) |
 | the documents of the loop | [`docs/`](docs/) — the index is [`docs/README.md`](docs/README.md); start with [`docs/starting-a-session.md`](docs/starting-a-session.md) and [`docs/known-traps.md`](docs/known-traps.md) |
-| the rules of upstream (the truth) | `AGENTS.md`, `CONTRIBUTING.md` and `skills/` in the SolidCraft repository |
+| the rules of upstream (the truth) | `AGENTS.md`, `CONTRIBUTING.md` and `.agents/skills/` in the SolidCraft repository (`skills/` there are the MCP's, not the agents') |
