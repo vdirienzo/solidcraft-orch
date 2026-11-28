@@ -526,9 +526,12 @@ bash bin/rules-verdict.sh             # the same check as one verdict block (the
 **The watch job**: the automation `solidcraft-rules-watch` runs `bin/rules-verdict.sh` every six
 hours and brings the verdict: `OK` (the snapshot matches `origin/main`), `CAMBIÓ` (the files that
 moved and the diff stat) or `NO SE PUDO COMPROBAR` (the check could not run, which is not "up to
-date"). It only reads: it changes nothing, it publishes nothing, it merges nothing. When it says
-something moved, a person orders the update and a subagent does it against `RULES.md` and
-`prompts/`.
+date"). It only reads: it changes nothing, it publishes nothing, it merges nothing. It also
+checks two things that rot without noise: **the paths of upstream that our documents name exist**
+(the skills, the scripts, the kernel files) and **the briefs cite paths that are still there**. The
+verdict is also written to `~/.local/share/solidcraft-orch/state/rules-verdict.txt` with the date
+and the upstream commit it measured. When it says something moved, a person orders the update and
+a subagent does it against `RULES.md` and `prompts/`.
 
 ---
 

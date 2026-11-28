@@ -15,9 +15,13 @@ lista: la wave para, se lee `bash bin/rules-snapshot.sh --diff`, se revisan este
 
 **Un job vigila esto solo**: la automatización `solidcraft-rules-watch` (`aut_2228f2ea80017aGM26OozSO5bM`)
 corre `bash bin/rules-verdict.sh` cada 6 horas y trae el veredicto: OK, CAMBIÓ (con los ficheros y
-el diff stat) o NO SE PUDO COMPROBAR. **Solo lee**: no cambia nada, no publica, no fusiona. Cuando
-avisa que algo se movió, la actualización la ordena una persona y la hace un subagente con este
-archivo y `prompts/` como destino.
+el diff stat) o NO SE PUDO COMPROBAR. **Solo lee**: no cambia nada, no publica, no fusiona. Además
+comprueba dos cosas mecánicas que se estropean sin ruido: **las rutas de upstream que citan
+nuestros documentos existen** (skills, scripts, kernel) y **los briefs citan rutas que siguen
+ahí**. Cuando avisa que algo se movió, la actualización la ordena una persona y la hace un
+subagente con este archivo y `prompts/` como destino. El veredicto queda escrito en
+`~/.local/share/solidcraft-orch/state/rules-verdict.txt` (con la fecha y el commit de upstream que
+midió), para leerlo sin esperar a la entrega del job.
 
 ## Lo que upstream cambió (2026-11-25 y 2026-11-28) y lo que el orquestador hace ahora
 

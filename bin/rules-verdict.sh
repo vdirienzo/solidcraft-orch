@@ -54,6 +54,17 @@ FETCH=1
 
 cd "$ORCH" || { echo "rules-verdict: no se puede entrar al repo del orquestador ($ORCH)"; exit 0; }
 
+# The verdict is ALSO written down: a job that runs every six hours has to
+# leave a trace where a person can find it without waiting for the delivery
+# of the job (and the state of the machine survives the session).
+STATE_DIR="${ORCH_STATE_DIR:-$HOME/.local/share/solidcraft-orch/state}"
+VERDICT_FILE="$STATE_DIR/rules-verdict.txt"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Everything below writes to stdout; a tee keeps a copy in the state file
+# without changing what the job prints.
+exec > >(tee "$VERDICT_FILE.tmp" 2>/dev/null) 3>&1
+
 args=(--check)
 [ "$FETCH" = "0" ] && args+=(--no-fetch)
 out="$(bash "$HERE/rules-snapshot.sh" "${args[@]}" 2>&1)"
@@ -160,5 +171,13 @@ else
   echo "rules-verdict: OJO — no hay registro de revisión (rules-snapshot/REVIEWED):"
   echo "  no se puede decir que nuestros documentos se leyeran contra el cambio de upstream."
 fi
+
+# The trace: the verdict with the moment it was taken. The job prints it and
+# this file keeps it for whoever reads the state of the machine later.
+{
+  echo "# rules-verdict $(date -u +%Y-%m-%dT%H:%M:%SZ) (upstream ${snap_sha:-desconocido})"
+  cat "$VERDICT_FILE.tmp" 2>/dev/null
+} > "$VERDICT_FILE" 2>/dev/null
+rm -f "$VERDICT_FILE.tmp" 2>/dev/null
 
 exit 0
