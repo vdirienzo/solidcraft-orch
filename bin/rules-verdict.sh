@@ -150,7 +150,12 @@ fi
 # rules-snapshot/REVIEWED holds the hashes of our documents at the moment
 # the manifest was refreshed: the claim "these exact bytes were read against
 # the upstream diff". If a document changed after that, the claim is stale.
-if [ -f "$REVIEWED" ]; then
+#
+# IT ONLY WARNS WHEN UPSTREAM ACTUALLY MOVED (rc != 0 above): a document
+# edited for another reason (a typo, a new paragraph about the watch job) is
+# not a drift of the rules when there is no diff to read. Warning about it
+# would be noise, and noise is what makes a check get ignored.
+if [ "$rc" -ne 0 ] && [ -f "$REVIEWED" ]; then
   stale=""
   while IFS= read -r line; do
     case "$line" in \#*|"") continue ;; esac
@@ -168,8 +173,12 @@ if [ -f "$REVIEWED" ]; then
     echo "  Vuelve a leerlos contra 'bash bin/rules-snapshot.sh --diff' y refresca el snapshot."
   fi
 else
-  echo "rules-verdict: OJO — no hay registro de revisión (rules-snapshot/REVIEWED):"
-  echo "  no se puede decir que nuestros documentos se leyeran contra el cambio de upstream."
+  if [ "$rc" -eq 0 ]; then
+    echo "rules-verdict: OK — nuestros documentos estan revisados (no hay diff de upstream que releer)."
+  else
+    echo "rules-verdict: OJO — no hay registro de revisión (rules-snapshot/REVIEWED):"
+    echo "  no se puede decir que nuestros documentos se leyeran contra el cambio de upstream."
+  fi
 fi
 
 # The trace: the verdict with the moment it was taken. The job prints it and

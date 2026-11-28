@@ -1,6 +1,6 @@
-# upstream d94d83c2897df16607000e81e420b373bfa48ecc
+# upstream 0ae5a3f7430dbcbe328d57dedc68cb92e016786e
 # ref origin/main
-# taken 2026-11-28T14:44:16Z
+# taken 2026-11-28T15:20:10Z
 dbaa98cd4165f8476c1c0227f81557fbbaaed4c630b75b82d1728e6c5b479e18  .agents/skills/solidcraft-agent-tools/SKILL.md
 897fc2a74bd9fe84b54e30ff25b3f42b22dbd4f34d3a6eff17c39fb3818c22c2  .agents/skills/solidcraft-babysit-pr/SKILL.md
 947b0a8705febcf2a428bed603e6c1397f770a1104512385345091e61ffc8a78  .agents/skills/solidcraft-commands/SKILL.md
