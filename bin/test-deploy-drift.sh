@@ -83,8 +83,42 @@ for dir in "$LOOP_RT" "$LOOP_SRC"; do
   fi
 done
 
-# --- 2. el source lo tiene en la LISTA DE COPIA del RUNBOOK --------------
-if [ ! -f "$RUNBOOK" ]; then
+# --- 2. la lista de copia (solo si el runtime es una COPIA) ----------------
+# (2026-11-28) Hay dos layouts y el drift solo existe en uno:
+#   COPIA: el runtime tiene COPIAS de una lista fija de ficheros y nada las
+#          sincroniza; ahi la lista de copia del RUNBOOK es la que decide que
+#          sobrevive a un deploy.
+#   ENLACE: el runtime apunta con symlinks al source (que esta versionado en
+#          este repo). Ahi no hay deploy que pierda nada: el fichero del
+#          runtime ES el del source. La lista de copia no aplica.
+# Este test media el layout de la COPIA, que era el de la maquina antes del
+# 19-11: media un layout que ya no existe, y por eso fallaba sin que hubiera
+# ningun drift de verdad.
+LAYOUT="COPIA"
+if [ -L "$LOOP_RT/bin" ] || [ -L "$LOOP_RT/prompts" ]; then
+  LAYOUT="ENLACE"
+fi
+echo "layout: $LAYOUT"
+echo
+
+if [ "$LAYOUT" = "ENLACE" ]; then
+  # El runtime apunta al source: no hay nada que perder. Lo que se comprueba
+  # es que el source este VERSIONADO (si no, el runtime es lo unico que hay).
+  src_real="$(cd "$LOOP_SRC" 2>/dev/null && pwd -P || echo "")"
+  if [ -n "$src_real" ] && git -C "$src_real" rev-parse --git-dir >/dev/null 2>&1; then
+    ok "el source ($src_real) esta versionado: el runtime no puede perderlo"
+  else
+    fail "el source ($src_real) NO esta versionado: el runtime es lo unico que hay"
+  fi
+  # Y que lo que invocan los prompts este en el source, no solo en el runtime.
+  for f in bin/publish-pr.sh bin/pr-defaults-line.sh bin/prompts-inventory.py; do
+    if [ -e "$LOOP_SRC/$f" ] && [ -e "$LOOP_RT/$f" ]; then
+      ok "$f esta en el source y el runtime lo alcanza"
+    else
+      fail "$f NO esta en el source (o el runtime no lo alcanza)"
+    fi
+  done
+elif [ ! -f "$RUNBOOK" ]; then
   fail "no se encuentra el RUNBOOK de la lista de copia: $RUNBOOK"
 else
   if grep -q 'bin/publish-pr\.sh' "$RUNBOOK"; then
@@ -198,6 +232,32 @@ else
 fi
 
 # --- 5. la rama de deploy contiene los commits del camino unico ---------
+# Solo en el layout de la COPIA: ahi el source es un clon con su propia rama
+# de deploy. En el layout del ENLACE el source es este repo, y su rama es la
+# que se publica: lo que se comprueba es que el loop/ este versionado.
+if [ "$LAYOUT" = "ENLACE" ]; then
+  cd "$LOOP_SRC" 2>/dev/null || {
+    fail "no se puede entrar al source: $LOOP_SRC"
+    echo
+    echo "FALLOS: $FAILURES de $CHECKS"
+    exit 1
+  }
+  root="$(git -C "$LOOP_SRC" rev-parse --show-toplevel 2>/dev/null || echo "")"
+  tracked="$(git -C "$root" ls-files -- loop/ 2>/dev/null | wc -l)"
+  if [ "${tracked:-0}" -gt 0 ]; then
+    ok "el loop/ esta versionado en este repo ($tracked ficheros)"
+  else
+    fail "el loop/ NO esta versionado en este repo: un deploy lo pierde"
+  fi
+  echo
+  if [ "$FAILURES" -eq 0 ]; then
+    echo "OK: $CHECKS comprobaciones, sin drift de deploy."
+    exit 0
+  fi
+  echo "FALLOS: $FAILURES de $CHECKS comprobaciones."
+  exit 1
+fi
+
 cd "$LOOP_SRC" 2>/dev/null || {
   fail "no se puede entrar al repo del source: $LOOP_SRC"
   echo
