@@ -1,6 +1,6 @@
 # SolidCraft — handoff para la próxima sesión
 
-Actualizado: 2026-11-23
+Actualizado: 2026-11-28
 
 ## Dónde estamos
 
@@ -29,6 +29,14 @@ Actualizado: 2026-11-23
   kernel son el #18629 (solidcore#3352) y el #19690 (solidcore#3371).
 - **Las reglas** viven en upstream (`AGENTS.md`, `CONTRIBUTING.md`, `.agents/skills/`).
   `RULES.md` solo apunta ahi y lista las reglas propias del orquestador.
+- **Un job vigila las reglas**: la automatización `solidcraft-rules-watch`
+  (`aut_2228f2ea80017aGM26OozSO5bM`) corre `bash bin/rules-verdict.sh` cada 6 h y deja el
+  veredicto en `state/rules-verdict.txt`. Trae OK / CAMBIÓ (con los ficheros que se movieron) /
+  NO SE PUDO COMPROBAR, y además comprueba que las rutas de upstream que citamos sigan existiendo
+  y que los briefs no citen rutas muertas. Si dice CAMBIÓ: `bash bin/rules-snapshot.sh --diff`,
+  revisar `RULES.md` y `prompts/`, y solo entonces `bash bin/rules-snapshot.sh --update`.
+- **El checkout local de upstream va al día**: `git merge --ff-only origin/main` en
+  `/home/user/Projects/solidcraft-orch`. Los agentes leen código ahí.
 - El estado vivo (slots, PRs, gates) **no** esta en este archivo: sale de `bin/orch-state.sh`.
 
 ## Cómo arrancar
@@ -37,6 +45,7 @@ Actualizado: 2026-11-23
 cd ~/.local/share/solidcraft-orch   # es este repo (un symlink)
 bash bin/preflight.sh               # qué le falta a la máquina (opencode, gh, el PATH del crontab)
 bash bin/rules-sync.sh              # exit 1 + lista = upstream movió reglas: leerlas antes de despachar
+bash bin/rules-verdict.sh           # el mismo check como un veredicto (lo corre el job de las 6 h)
 bash bin/test-all.sh --fast         # 0 fallos antes de tocar nada
 bash bin/loop-pause.sh status       # ¿pausado o corriendo?
 crontab -l | grep -c solidcraft     # los crons del loop; si faltan: bash bin/install-crontab.sh
