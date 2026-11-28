@@ -26,6 +26,9 @@
 # ------------------------------------------------------------------
 set -uo pipefail
 
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 SLOT="${1:-}"
 [ -z "$SLOT" ] && { echo "usage: gate-baseline.sh <slot> [--show]" >&2; exit 2; }
 
@@ -33,6 +36,14 @@ SLOT="${1:-}"
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file. The literal was stale, so the
+# catalogue of KNOWN_FAILING_TESTS was looked for in a checkout that is not there.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-$HOME/solidcraft}"
 RAW="$LOOP_DIR/gates/$SLOT/scope.verdict"
 BASE="$ORCH_DIR/baseline/failures-origin-main.txt"
 EFF="$LOOP_DIR/gates/$SLOT/scope.effective.verdict"

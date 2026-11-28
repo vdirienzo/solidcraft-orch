@@ -8,7 +8,9 @@ catch what a summary will happily omit.
 
 - the head must equal the fork's head: `git ls-remote fork <branch>` (not the local head — the
   local head can be ahead of what was pushed);
-- the body must carry the issue reference and EXACTLY ONE `Changes a default:` line;
+- the body must carry the issue reference and EXACTLY ONE `Changes a default:` declaration (the
+  line, or the heading `## Changes a default` with the value under it — the upstream's parser
+  reads both);
 - the state must be what you expect: a PR the maintainer acted on can be MERGED already, and
   your disk state can still say "awaiting maintainer". Verify mergedAt against the merge commit
   in the upstream log.
@@ -20,7 +22,10 @@ Three states are not the same, and only one of them is green:
 - `pass` — ran and passed.
 - `skipping` — did not run. A run triggered while the PR was still a DRAFT has every heavy job
   skipped by payload; a PR whose checks are all skipping has no CI at all. Make it run by
-  rebasing onto the current upstream head and force-pushing to the fork with --force-with-lease.
+  bringing the branch up to date: MERGE the current `main` in (the cheap way — when the merge
+  leaves your change as it was, the CI carries the passing run) and push, or rebase onto the
+  current upstream head and force-push to the fork with --force-with-lease (a rebase always
+  re-runs the whole suite).
 - `fail` on an OLD run — usually a run CANCELLED by a newer one (a new run for the same commit
   cancels the previous). Read the job's log before reporting a failure: `gh run view <id>
   --log-failed`. The run that counts is the newest for the head.
@@ -53,30 +58,47 @@ its age, and it hides a real regression behind a green light.
 
     git rev-list --count <fork-head>..origin/main     # how far behind
 
-Rebase onto the current `origin/main` and force-push the branch to `fork` with
-`--force-with-lease` (never force-push `main`, never push upstream). After the rebase the
-change must be re-verified: the tests and the gate judge the NEW tree, and a rebase can
-bring a conflict resolution that changes the behaviour. Re-run the directed tests AND the
-gate on the rebased SHA, and only then read the verdict.
+**Bring the branch up to date — merging `main` in is the cheap way.** Upstream inverted the
+rule on 2026-11-27: when the PR already passed and the merge leaves your own change as it
+was, the CI carries the passing run and repeats only the repository checks
+(`scripts/ci/main_merge.py`). A rebase always re-runs the full suite and has to be pushed
+with `--force-with-lease`.
+
+    git fetch origin main
+    git merge origin/main                 # the cheap way: CI carries the passing run
+    git push --force-with-lease fork <branch>    # only if the merge needed a push
+
+A rebase is still allowed (never force-push `main`, never push upstream), it is just the
+expensive way: it re-runs the whole suite, so it is the one to use when the merge would
+change your change.
+
+After the base moves, the change must be re-verified: the tests and the gate judge the NEW
+tree, and a merge or a rebase can bring a conflict resolution that changes the behaviour.
+Re-run the directed tests AND the gate on the new SHA, and only then read the verdict.
 
 The rebase must be clean about what it preserves: compare the diff against the base before
 and after (`git diff --stat <base>...<sha>`) and confirm the same files and the same line
 count survive. A rebase that silently drops half the change reads exactly like a successful
 one.
 
-### The base moves WHILE the agent works, and the agent has to rebase again
+### The base moves WHILE the agent works, and the agent has to bring the branch up to date again
 An upstream that is busy moves `origin/main` during a long agent session, sometimes several
-times: the agent rebases, runs the directed test, and then the base moves again before it
-publishes. Two things follow, and both are the agent's job, not the orchestrator's:
+times: the agent brings the branch up to date, runs the directed test, and then the base moves
+again before it publishes. Two things follow, and both are the agent's job, not the
+orchestrator's:
 
-- **Prove the rebase preserved the change, byte for byte.** Comparing a `--stat` line count
+- **Prove the move preserved the change, byte for byte.** Comparing a `--stat` line count
   is not proof, because a conflict resolution can change the patch and keep the count. Write
   the patch to a file before and after (`git diff <base>...<sha> > /tmp/patch.before` and
-  `.after`) and diff the two files: an empty diff means the rebase moved the change and
-  touched nothing in it. That is the statement the PR body needs.
-- **Re-run the directed test after EVERY rebase**, not only after the last one. The test
-  judges the tree it runs on, so a test that passed on an earlier base says nothing about
+  `.after`) and diff the two files: an empty diff means the merge or the rebase moved the
+  change and touched nothing in it. That is the statement the PR body needs.
+- **Re-run the directed test after EVERY move of the base**, not only after the last one. The
+  test judges the tree it runs on, so a test that passed on an earlier base says nothing about
   the current one.
+
+The cheap way to bring the branch up to date is MERGING `main` in: the CI carries the passing
+run when the merge leaves the change as it was. A rebase is the expensive way (the whole
+suite runs again) and it is the one to use when the merge would change your change.
 
 And the orchestrator's part: after the agent reports, compare the head it pushed with the
 current `origin/main` before reading the gate verdict. A verdict names the SHA it judged, and

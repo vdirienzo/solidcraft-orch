@@ -69,6 +69,9 @@ import re
 import subprocess
 import sys
 import time
+import glob
+import tempfile
+import unicodedata
 
 # The paths come from the environment, with the default of THIS machine: the
 # other PC exports its own (see docs/portable-orchestrator.md).
@@ -1224,16 +1227,236 @@ def linea_defaults_presente(body):
     return bool(RE_LINEA_DEFAULTS.search(strip_noise(body, inline_code=False)))
 
 
-# El formato que upstream (scripts/pr-checks/pr-checks.js) acepta: "no" o la forma larga
-# "yes <—|–|->|→|-{1,2}|:> <que>, old behaviour kept behind (preference|pref|setting) <nombre>".
-RE_DEFAULTS_VALOR = re.compile(
+# --------------------------------------------------------------------------
+# EL PARSER DE LA LINEA DE LOS DEFAULTS (2026-11-28)
+#
+# La verdad sobre la linea 'Changes a default:' es scripts/pr-checks/pr-checks.js
+# del upstream, y el upstream la CAMBIO (2026-11-27): ahora acepta 'no' con una
+# nota detras ('no. Only a fix.'), la forma de heading '## Changes a default' con
+# el valor en la primera linea de abajo, un valor entre backticks ('`no`') y 'yes'
+# con cualquier puntuacion detras. Nuestra copia era MAS ESTRICTA que el upstream:
+# marcaba mal formado un body que el upstream acepta, y bin/publish-pr.sh moria con
+# exit 3 dejando el PR en draft.
+#
+# POR QUE SE LLAMA Y NO SE COPIA: una reimplementacion de una regla del repo es una
+# regla que deriva (lo dice loop/bin/pr-defaults-line.sh, que hace lo mismo). El
+# parser del upstream es una funcion pura sin dependencias y esta exportada: se
+# llama con node. Las reglas de mas abajo son la MISMA translated al python y solo
+# se usan cuando node o el checkout no estan: son el RESPALDO, no la verdad.
+# --------------------------------------------------------------------------
+
+# El script de node que llama al parser del upstream. El archivo de upstream es un
+# modulo de una GitHub Action: exporta las funciones puras, y requiring it NO corre
+# la action.
+_JS_PARSER = (
+    'const fs = require("fs");'
+    'const p = require(process.argv[1]);'
+    'const body = fs.readFileSync(process.argv[2], "utf8");'
+    'const r = p.parseDefaults(body);'
+    'process.stdout.write(r.status);'
+)
+
+# El cache de los veredictos: el pipeline pregunta dos veces por body (presente y
+# malformada) y el parser es un proceso: sin cache se correria dos veces.
+_ESTADO_CACHE = {}
+# El cache de las rutas: el checkout y el node se buscan una vez por corrida.
+_RUTAS_CACHE = {}
+_AVISO_RESPALDO = [False]
+
+
+def _checkout():
+    """El checkout de SolidCraft, segun bin/paths.sh (la politica de la maquina).
+
+    paths.sh es un fichero de shell: se sourcea en un subshell y se le pide el
+    valor. Es la MISMA politica que usan los scripts de shell, sin una segunda
+    copia de las reglas en python. None si el fichero no esta.
+    """
+    if "repo" not in _RUTAS_CACHE:
+        repo = ""
+        script = os.path.join(ORCH, "bin", "paths.sh")
+        if os.path.isfile(script):
+            try:
+                out = subprocess.run(
+                    ["bash", "-c", '. "$1" >/dev/null 2>&1; printf "%s" "${SOLIDCRAFT_REPO:-}"',
+                     "_", script],
+                    capture_output=True, text=True, timeout=30)
+                repo = (out.stdout or "").strip()
+            except Exception:
+                repo = ""
+        _RUTAS_CACHE["repo"] = repo
+    return _RUTAS_CACHE["repo"] or None
+
+
+def _node():
+    """El node de la maquina: en el PATH, o en el toolchain del usuario.
+
+    El node no esta en el PATH de un shell de login en esta caja: el toolchain
+    vive en ~/.hermes/tools/node-<version>/bin. El que lo llama tiene que
+    ENCONTRARLO, no suponer que el llamador lo exporto.
+    """
+    if "node" not in _RUTAS_CACHE:
+        found = shutil.which("node")
+        if not found:
+            patron = os.path.expanduser("~/.hermes/tools/node-*/bin/node")
+            for cand in sorted(glob.glob(patron)):
+                if os.access(cand, os.X_OK):
+                    found = cand
+                    break
+        _RUTAS_CACHE["node"] = found or ""
+    return _RUTAS_CACHE["node"] or None
+
+
+def _estado_upstream(body):
+    """El veredicto del parser DEL UPSTREAM, o None si no se pudo llamar."""
+    node = _node()
+    repo = _checkout()
+    if not node or not repo:
+        return None
+    js = os.path.join(repo, "scripts", "pr-checks", "pr-checks.js")
+    if not os.path.isfile(js):
+        return None
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                         encoding="utf-8") as fh:
+            fh.write(str(body or ""))
+            tmp = fh.name
+        out = subprocess.run([node, "-e", _JS_PARSER, js, tmp],
+                             capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    if out.returncode != 0:
+        return None
+    estado = (out.stdout or "").strip()
+    return estado if estado in ("no", "yes", "malformed", "missing") else None
+
+
+# --- LAS MISMAS REGLAS, EN PYTHON (el respaldo) ------------------------------
+#
+# El upstream usa \p{P} y \p{S}, que el re de python no tiene: la clase de
+# puntuacion y simbolo se arma con unicodedata (category[0] in 'PS'), que es la
+# MISMA clase que la del upstream.
+RE_DEFAULTS_LINEA = re.compile(
     r"^[ \t]*(?:[-*][ \t]+)?Changes a default:[ \t]*(.*?)[ \t]*$", re.I | re.M)
-RE_DEFAULTS_NO = re.compile(r"^no\.?$", re.I)
-RE_DEFAULTS_YES = re.compile(r"^yes\b[ \t]*(?:—|–|->|→|-{1,2}|:)[ \t]*(.+)$", re.I)
-RE_DEFAULTS_PREF = re.compile(
+RE_DEFAULTS_HEADING = re.compile(
+    r"^[ \t]*#{1,6}[ \t]*Changes a default[ \t]*:?[ \t]*#*[ \t]*\r?\n"
+    r"(?:[ \t]*\r?\n)*[ \t]*(?:[-*][ \t]+)?(.*?)[ \t]*$", re.I | re.M)
+RE_VALOR_NO = re.compile(r"^no\b[ \t]*", re.I)
+RE_VALOR_YES = re.compile(r"^yes\b[ \t]*", re.I)
+RE_PREF = re.compile(
     r"^(.*?)[ ,;]*\bold (?:behaviou?r|value) kept behind "
     r"(?:preference|pref|setting)[ \t]+`?([\w.:/-]+)`?\.?$", re.I)
+RE_OWNER = re.compile(r"^(.*?)[ ,;]*\bapproved by the owner\.?$", re.I)
 RE_PLACEHOLDER = re.compile(r"^<.*>$")
+
+
+def _es_ps(ch):
+    """La clase \\p{P}\\p{S} del upstream, en python."""
+    return unicodedata.category(ch)[0] in ("P", "S")
+
+
+def _valor_defaults(valor):
+    """'no' | 'yes' | 'malformed': las reglas del upstream sobre el VALOR."""
+    v = str(valor or "").replace("**", "").strip()
+    v = re.sub(r"^`([^`]*)`$", r"\1", v).strip()
+    m = RE_VALOR_NO.match(v)
+    if m:
+        resto = v[m.end():]
+        # 'no', 'no.', 'no..'
+        if re.fullmatch(r"[.!]*", resto):
+            return "no"
+        # 'no' + puntuacion + una nota ('no. Only a fix.', 'no (only a fix)')
+        i = 0
+        while i < len(resto) and _es_ps(resto[i]):
+            i += 1
+        if i > 0:
+            cola = resto[i:].lstrip(" \t")
+            if cola and not cola[0].isspace():
+                return "no"
+        return "malformed"
+    m = RE_VALOR_YES.match(v)
+    if m:
+        resto = v[m.end():]
+        i = 0
+        while i < len(resto) and _es_ps(resto[i]):
+            i += 1
+        if i == 0:
+            return "malformed"
+        que = resto[i:].lstrip(" \t")
+        if not que:
+            return "malformed"
+        pref = RE_PREF.match(que)
+        if pref and pref.group(1).strip() and not RE_PLACEHOLDER.match(pref.group(2)):
+            return "yes"
+        owner = RE_OWNER.match(que)
+        if owner and owner.group(1).strip():
+            return "yes"
+        return "malformed"
+    return "malformed"
+
+
+def _estado_defaults_local(body):
+    """El veredicto con las reglas locales (la MISMA que las del upstream)."""
+    texto = strip_noise(body, inline_code=False).replace("**", "")
+    m = RE_DEFAULTS_LINEA.search(texto) or RE_DEFAULTS_HEADING.search(texto)
+    if not m:
+        return "missing"
+    return _valor_defaults(m.group(1))
+
+
+def _aviso_al_log(msg):
+    """Un aviso que va SOLO al log en disco.
+
+    El stdout de este modulo lo lee bin/publish-pr.sh (que parsea tres numeros),
+    asi que ahi no puede haber prosa.
+    """
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a") as fh:
+            fh.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass
+
+
+def estado_defaults(body):
+    """El veredicto del parser de la linea de los defaults.
+
+    'no' | 'yes' | 'malformed' | 'missing'.
+
+    Se LLAMA al parser del upstream (scripts/pr-checks/pr-checks.js): el es la
+    verdad sobre esa linea. Si node o el checkout no estan, se usan las reglas
+    locales (la MISMA translated) y se avisa al log una sola vez.
+    """
+    clave = str(body or "")
+    if clave in _ESTADO_CACHE:
+        return _ESTADO_CACHE[clave]
+    estado = _estado_upstream(clave)
+    if estado is None:
+        estado = _estado_defaults_local(clave)
+        if not _AVISO_RESPALDO[0]:
+            _AVISO_RESPALDO[0] = True
+            _aviso_al_log("  (el parser del upstream no se pudo llamar: hablo el respaldo, "
+                          "que son las mismas reglas)")
+    if len(_ESTADO_CACHE) > 64:
+        _ESTADO_CACHE.clear()
+    _ESTADO_CACHE[clave] = estado
+    return estado
+
+
+def linea_defaults_presente(body):
+    """True si el body YA trae la linea 'Changes a default:' (la que sea).
+
+    Mismo criterio que upstream (parseDefaults): una linea que empiece con
+    'Changes a default:', o el heading '## Changes a default' con el valor en la
+    primera linea de abajo. Una linea existente nunca se reescribe.
+    """
+    return estado_defaults(body) != "missing"
 
 
 def linea_defaults_malformada(body):
@@ -1242,18 +1465,8 @@ def linea_defaults_malformada(body):
     Con la linea mal formada el check de upstream falla igual: avisarlo en el log es
     mejor que esperar a ver el PR en rojo.
     """
-    m = RE_DEFAULTS_VALOR.search(strip_noise(body, inline_code=False))
-    if not m:
-        return False
-    valor = m.group(1).replace("**", "").strip()
-    if RE_DEFAULTS_NO.match(valor):
-        return False
-    yes = RE_DEFAULTS_YES.match(valor)
-    if yes:
-        pref = RE_DEFAULTS_PREF.match(yes.group(1))
-        if pref and pref.group(1).strip() and not RE_PLACEHOLDER.match(pref.group(2)):
-            return False
-    return True
+    return estado_defaults(body) == "malformed"
+
 
 
 def habla_de_defaults(*textos):

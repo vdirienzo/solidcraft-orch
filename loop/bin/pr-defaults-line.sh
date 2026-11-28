@@ -33,6 +33,20 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
+# The directory of this script: the checker of the configuration
+# (bin/config-preflight.sh) lives next to it and it is called by path,
+# never by a guess.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# The paths of THIS machine (bin/paths.sh, 2026-11-24): the repo versions the
+# LOOP half, so the house's resolver is two levels up. It is sourced only when
+# the variable is unset, and the literal below stays as the fallback for a
+# machine without that file.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$SCRIPT_DIR/../../bin/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$SCRIPT_DIR/../../bin/paths.sh"
+fi
+
 # --- the parser of the upstream -------------------------------------------
 # WHY THIS IS NOT A GREP (28-10-2026, fixed 30-10-2026): the local script
 # only asked "is there a line that starts with 'Changes a default:'". The
@@ -55,6 +69,8 @@ PR_CHECKS_JS="${PR_CHECKS_JS:-}"
 if [ -z "$PR_CHECKS_JS" ]; then
   for _cand in \
     "${REPO_ROOT:-}/scripts/pr-checks/pr-checks.js" \
+    "${SOLIDCRAFT_REPO:-}/scripts/pr-checks/pr-checks.js" \
+    "${REPO_ROOT:-$HOME/Projects/solidcraft-orch}/scripts/pr-checks/pr-checks.js" \
     "${SOLIDCRAFT_REPO:-${REPO_ROOT:-/home/user/solidcraft}}/scripts/pr-checks/pr-checks.js"; do
     if [ -n "$_cand" ] && [ -f "$_cand" ]; then PR_CHECKS_JS="$_cand"; break; fi
   done
@@ -107,11 +123,18 @@ defaults_status() {
 
 # The explanation of a malformed line. It goes to STDERR: the stdout of this
 # script is a contract and a reader of it must not see prose.
+#
+# THE FORMS (2026-11-28): the upstream's parser accepts more than two, and the
+# help that names only the two old ones sends the author away from a body the
+# upstream accepts. The truth is scripts/pr-checks/pr-checks.js.
 explain_malformed() {
   printf 'pr-defaults-line: the "Changes a default:" line is malformed: %s\n' "${1:-}" >&2
   printf 'pr-defaults-line: it has to be one of:\n' >&2
   printf 'pr-defaults-line:   Changes a default: no\n' >&2
+  printf 'pr-defaults-line:   Changes a default: no. Only a fix.   (a note after it is fine)\n' >&2
   printf 'pr-defaults-line:   Changes a default: yes - <what>, old behaviour kept behind preference <name>\n' >&2
+  printf 'pr-defaults-line:   Changes a default: yes - <what>, approved by the owner  (needs the owner-approved label)\n' >&2
+  printf 'pr-defaults-line:   ## Changes a default   (the value on the first line under it)\n' >&2
 }
 
 # node is NOT in the PATH of a login shell on this box: the toolchain lives
@@ -167,11 +190,6 @@ if [ "${1:-}" = "--body" ]; then
 fi
 
 LOOP_DIR="${LOOP_DIR:-$HOME/.local/share/solidcraft-loop}"
-
-# The directory of this script: the checker of the configuration
-# (bin/config-preflight.sh) lives next to it and it is called by path,
-# never by a guess.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
 

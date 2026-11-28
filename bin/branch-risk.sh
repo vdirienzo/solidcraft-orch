@@ -35,7 +35,18 @@
 # ------------------------------------------------------------------
 set -uo pipefail
 
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # The checkout of SolidCraft: the one with the branches.
+#
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file. The literal was stale, and this
+# script answered "this is not a git checkout" about a checkout that was there all along.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 # The remote of the fork. The push goes there and ONLY there
 # (README rule 19).

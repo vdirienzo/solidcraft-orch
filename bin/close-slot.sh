@@ -51,6 +51,12 @@ PY
 # perderlo (una sesion que murio) y el LOCK sigue saidolo. En ese caso el
 # worktree y el target se sacan por la CONVENCION (el nombre del slot), que
 # es la que usa prepare-slot.sh.
+# The machine's own paths know where the worktrees are (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file.
+if [ -z "${WORKTREES_DIR:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 WORKTREES_DIR="${WORKTREES_DIR:-$HOME/solidcraft-wt}"
 if [ -z "$SLOT" ]; then
   SLOT="{\"issue\": $ISSUE, \"branch\": \"\", \"worktree\": \"$WORKTREES_DIR/issue-$ISSUE\", \"target_dir\": \"\"}"

@@ -440,7 +440,9 @@ same information.
 - Commit vacío de claim (`claim: #N`, en inglés).
 - Push al remoto **fork**.
 - PR **draft** con el título `<summary> (#N)` — el bot busca el `#N` **en el
-  título** — y `Fixes #N.` al inicio del cuerpo.
+  título** — y `Fixes #N.` al inicio del cuerpo. Ese número va en el **draft**:
+  el PR que se pasa a listo para revisión NO lo lleva (el merge lo agrega) y a
+  ese título lo cambia el orquestador al promoverlo.
 
 Si **ya hay** un PR abierto sobre ese issue (de cualquiera): **no abras un
 segundo**. Comentá en el existente si hace falta y soltá el issue (`skipped`).
@@ -465,7 +467,16 @@ vuelva a opinar, en el paso 8).
 
 ## 7. `sc-evidence`
 
-Capturas antes/después **si el cambio es observable**. Los PNG van a
+Capturas antes/después **sólo en dos casos**: (1) el cambio se ve en la UI (un
+diálogo, un panel, un menú, un control, una etiqueta o un layout), (2) el cambio
+cambia cómo se ve el modelo (una imagen del resultado). **Nada más necesita
+media**: un arreglo de kernel, de geometría o de backend que los tests prueban, un
+refactor, los tests, la documentación, el texto de un mensaje de error, un
+rebase o un merge de main, y los arreglos de review que no cambian nada visible.
+Si el cambio es de esos, **no captures nada**: en esta caja la captura cuesta
+minutos de compilación y no la va a pedir nadie.
+
+Los PNG van a
 `~/.local/share/solidcraft-loop/evidence/`; **nunca** commiteados en la rama del
 fix: el supervisor los publica en `evidence/<N>-<slug>` del fork y deja las URLs
 en `evidence/urls-<N>.txt`.
@@ -1086,8 +1097,9 @@ autor del issue, sin conflicto con otro PR abierto, y cuerpo con `Fixes #N.`.
    - Nunca mergees `main` dentro del PR, nunca force-pushes `main`, y nunca
      rebasees sólo por "ponerte al día" (AGENTS.md: cada push reinicia toda la
      CI; el PR se arregla hacia adelante).
-3. **¿Le falta evidencia?** Sólo si el cambio es observable en pantalla **y** el
-   PR todavía no la tiene → `sc-evidence` (los PNG van a
+3. **¿Le falta evidencia?** Sólo si el cambio **se ve en la UI o cambia cómo se ve
+   el modelo** (un arreglo de kernel o de geometría que los tests prueban NO
+   lleva media) **y** el PR todavía no la tiene → `sc-evidence` (los PNG van a
    `~/.local/share/solidcraft-loop/evidence/`; el supervisor los publica en
    `evidence/<N>-<slug>` del fork y las URLs van en el cuerpo del PR: desde un
    fork no se pueden adjuntar).

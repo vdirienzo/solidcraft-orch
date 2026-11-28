@@ -8,11 +8,19 @@
 #
 # Uso: launch-slot-service.sh <issue> [timeout_min] [log-sufijo]
 set -u
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ISSUE="${1:?falta el issue}"
 TIMEOUT="${2:-45}"
 SUFFIX="${3:-$(date -u +%Y%m%d-%H%M)}"
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+# The machine's own paths know where the checkout and the worktrees are (bin/paths.sh,
+# 2026-11-24): the defaults below are only the fallback for a machine without that file.
+if [ -f "$HERE/paths.sh" ] && { [ -z "${SOLIDCRAFT_REPO:-}" ] || [ -z "${WORKTREES_DIR:-}" ]; }; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 

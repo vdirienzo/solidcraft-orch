@@ -43,6 +43,12 @@ ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
 # repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
 # that runs outside bin/ without them.
 if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_BIN:-$ORCH_DIR/bin}"; fi
+# The machine's own paths know where the worktrees are (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file.
+if [ -z "${WORKTREES_DIR:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 ISSUE="${1:-}"
 [ -n "$ISSUE" ] || { echo "dispatch-slot: falta el issue" >&2; exit 2; }

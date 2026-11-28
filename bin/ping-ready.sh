@@ -152,7 +152,15 @@ GH_BIN="${GH_BIN:-gh}"
 # working tree. GIT_BIN and LOCAL_REPO can be pointed somewhere else (the
 # tests do it with a stub).
 GIT_BIN="${GIT_BIN:-git}"
-LOCAL_REPO="${LOCAL_REPO:-/home/user/solidcraft}"
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file. The literal was stale, so the
+# conflict with main was measured in a checkout that does not exist.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+LOCAL_REPO="${LOCAL_REPO:-$SOLIDCRAFT_REPO}"
 CI_LABEL="approved-for-ci"
 # The batch: how many 'approved-for-ci' requests can be in flight at once,
 # and how long the oldest one may wait before the batch gets one more slot.

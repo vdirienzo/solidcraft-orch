@@ -67,6 +67,19 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORCH_DIR="${ORCH_DIR:-$(dirname "$HERE")}"
 LOOP_DIR="${LOOP_DIR:-$HOME/.local/share/solidcraft-loop}"
 DEFAULTS_LINE="$LOOP_DIR/bin/pr-defaults-line.sh"
+# El checkout del upstream: de ahi sale el parser que valida el body (lo llama
+# LOOP/bin/pr-defaults-line.sh).
+#
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file. The literal was stale, so the
+# validator answered "the parser of the upstream is not there" (exit 6) and NO pull request was
+# ever published.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
+SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
+export SOLIDCRAFT_REPO
 # El verificador del reclamo: el de la casa por defecto, pero se puede
 # cambiar (un test pone uno de mentira).
 CLAIM_VERIFY="${CLAIM_VERIFY:-$ORCH_DIR/bin/claim-verify.sh}"

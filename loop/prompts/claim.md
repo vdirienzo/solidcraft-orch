@@ -68,7 +68,10 @@ git push fork HEAD:refs/heads/fix/issue-<N>-<slug>
    lo abre en draft. El titulo va **`<summary> (#<N>)`**: el bot busca el
    `#N` **en el titulo** (asi lo dice el AGENTS.md del repo), pero el titulo
    es un resumen del cambio, no el numero pelado. Ej.:
-   `Fillet: variable radius along a chain (#123)`. El cuerpo arranca con
+   `Fillet: variable radius along a chain (#123)`. **Ese numero va en el draft,
+   y solo en el draft**: el pull request que se pasa a listo para revision NO
+   lo lleva (la regla del repo: el merge lo agrega, `(#N)`), y a ese titulo lo
+   cambia el orquestador al promoverlo. El cuerpo arranca con
    `Fixes #<N>.` (lo que el bot lee para asignar el issue) y lleva la línea
    `Changes a default: no` (lo que el check del repo lee: sin esa línea
    el PR se frena). El valor de esa línea lo decide el **cambio**: si el

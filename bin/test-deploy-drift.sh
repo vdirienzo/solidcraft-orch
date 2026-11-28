@@ -29,7 +29,22 @@
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+# The SOURCE of the loop: the code that is deployed into the runtime.
+#
+# On this machine the loop half is VERSIONED in this repo (loop/) and the
+# runtime points at it with symlinks, so the source is that directory. The
+# literal below is the separate clone the machine had before, and it stays as
+# the fallback for a machine without bin/paths.sh (and for one whose loop half
+# is not versioned here).
+if [ -z "${LOOP_SRC:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+  if [ -d "$ORCH_DIR/loop" ]; then LOOP_SRC="$ORCH_DIR/loop"; fi
+fi
 LOOP_SRC="${LOOP_SRC:-/home/user/solidcraft-loop}"
 LOOP_RT="${LOOP_RT:-/home/user/.local/share/solidcraft-loop}"
 RUNBOOK="${RUNBOOK:-$LOOP_SRC/RUNBOOK/el-dir-del-loop-no-es-un-clon-del-repo.md}"

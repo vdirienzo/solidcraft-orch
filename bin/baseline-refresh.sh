@@ -31,6 +31,12 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 REPO="${SOLIDCRAFT_REPO:-$HOME/solidcraft}"
 BASE="${BASE:-$HERE/../baseline/failures-origin-main.txt}"
 

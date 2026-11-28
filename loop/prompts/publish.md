@@ -45,6 +45,12 @@ la **unica** forma de abrirlo:
 bash /home/user/.local/share/solidcraft-orch/bin/publish-pr.sh --repo tangency-labs/solidcraft --base main --head vdirienzo:<rama> --title "<summary> (#<N>)" --body-file /tmp/pr-<N>-body.md --issue <N>
 ```
 
+El título que se publica es el del **draft**: `<summary> (#<N>)`, con el número
+del issue, porque el bot del reclamo lee el `#N` **en el título**. El pull
+request que se pasa a **listo para revisión** NO lleva el número (la regla del
+repo: el merge lo agrega, `(#N)`), y a ese título lo cambia el orquestador al
+promoverlo: **no toques el título vos**.
+
 El script arma el body **antes** de que el pull request exista: le agrega la
 linea `Changes a default:` si falta, **valida** el body final con el parser del
 upstream (`bin/pr-defaults-line.sh`), verifica el reclamo del issue, y recien ahi
@@ -199,6 +205,10 @@ vos: es del supervisor.
 - The only bash script you can run is the one that opens a pull request:
   `bash /home/user/.local/share/solidcraft-orch/bin/publish-pr.sh --repo tangency-labs/solidcraft --base main --head vdirienzo:<branch> --title "<summary> (#<N>)" --body "<el cuerpo>" --issue <N>`.
   In `sc-publish` you cannot write files, so the body goes inline in `--body`.
+  The title you publish is the DRAFT's title: `<summary> (#<N>)`, because the
+  claim bot reads the issue number THERE. The pull request that goes ready for
+  review does NOT carry the number (the merge adds `(#N)`), and the orchestrator
+  renames it when it promotes it: do not touch the title yourself.
 - The body of a pull request that is **already open** is written with
   `gh pr edit` (GraphQL):
   `gh pr edit <n> -R tangency-labs/solidcraft --body-file /tmp/pr-<n>-body.md`.
@@ -332,19 +342,24 @@ Changes a default: no
 ## Evidence
 
 <las capturas, por URL de raw.githubusercontent.com de la rama
-`evidence/<N>-<slug>` del fork>
+`evidence/<N>-<slug>` del fork. **Media sólo cuando el cambio se ve en la UI o
+cambia cómo se ve el modelo**: un arreglo de kernel o de geometría que los tests
+prueban NO lleva media, y el PR tampoco la pide>
 
 ## Gate
 
 <la frase del gate que corrió: la de la tabla de abajo>
 ```
 
-> **El título del PR no se toca, nunca.** El PR se abre con el título del
-> issue y su número: `<summary> (#N)`. El bot del upstream busca el `#N` **en
-> el título**, y el guard de reclamos del loop lo busca en el título **y** en
-> el cuerpo: un título al que le sakó el `(#N)` es un PR que el bot no asocia
-> con su issue. `gh pr edit` escribe **sólo el cuerpo**: si te pidieran tocar
-> el título, no lo hagas y decilo en el `summary`.
+> **El título lleva el número del issue SOLO mientras es draft.** El PR se abre
+> en draft con el título del issue y su número: `<summary> (#N)`. El bot del
+> upstream busca el `#N` **en el título**, y el guard de reclamos del loop lo
+> busca en el título **y** en el cuerpo: un título al que le sakó el `(#N)` es un
+> PR que el bot no asocia con su issue. El PR que se pasa a **listo para
+> revisión** NO lleva el número —la regla del repo es que el merge lo agrega,
+> `(#N)`— y a ese título lo cambia el orquestador al promoverlo. `gh pr edit`
+> escribe **sólo el cuerpo**: si te pidieran tocar el título, no lo hagas y
+> decilo en el `summary`.
 >
 > **La línea `Changes a default:` va siempre, y es la segunda línea.** El
 > check del upstream (`pr-checks.yml`) falla el PR que no la tiene. Su valor
@@ -439,6 +454,16 @@ Changes a default: no
 > ![Before: ...](<url del before>)
 > ![After: ...](<url del after>)
 > ```
+>
+> **Media sólo en dos casos** (la regla del repo, `.agents/skills/
+> solidcraft-contributing/SKILL.md`): (1) un cambio visible de UI (un diálogo, un
+> panel, un menú, un control, una etiqueta o un layout) — antes y después; (2)
+> un cambio en cómo se ve el modelo — una imagen del resultado. **Nada más
+> necesita media**: un arreglo de kernel, de geometría o de backend que los
+> tests prueban, un refactor, los tests, la documentación, el texto de un
+> mensaje de error (se cita en el body) y los arreglos de review que no cambian
+> nada visible. Si tu cambio es de esos, **no captures nada**: el tiempo de la
+> captura en esta caja no lo va a pedir nadie.
 >
 > Un gist **no** sirve para esto: `gh gist create` rechaza los binarios y con el
 > PNG en base64 dentro de un README el gist borra el `data:` URI y la imagen

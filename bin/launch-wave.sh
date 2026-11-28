@@ -3,8 +3,16 @@
 # Each runner gets its own per-slot CARGO_TARGET_DIR so two cargo builds
 # never fight over the build directory lock.
 set -u
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+# The machine's own paths know where the worktrees are (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file.
+if [ -z "${WORKTREES_DIR:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 for i in "$@"; do
   TD="$(bash "$ORCH_DIR/bin/slot-target-dir.sh" --slot "$i")"

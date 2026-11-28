@@ -31,12 +31,22 @@ SLOT_ARG="${3:-}"
 # The `gh` to use. A test points it at a stub OUTSIDE the PATH (rule 4: a
 # fake `gh` in the PATH would answer "no-op" to `gh pr create` too).
 GH_BIN="${GH_BIN:-gh}"
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The paths come from the environment, with the default of THIS
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 # The loop's directory: the gate verdicts live under it (gates/<slot>/).
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 # The checkout of the product: the fork's head is read from it.
+#
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file. The literal was stale: it pointed
+# at a checkout that does not exist on this machine, so the fork's head was never read.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 FAIL=0
 UNKNOWN=0
@@ -180,16 +190,22 @@ else
   [ "$CLOSED_COUNT" -gt 1 ] && bad "el body cierra $CLOSED_COUNT issues: solo el que nombra el PR debe cerrarse"
 fi
 
-# 3. exactly one 'Changes a default:' line
+# 3. exactly one 'Changes a default:' declaration
 # THE UPSTREAM IS THE AUTHORITY (2026-11-03): the CI check (scripts/pr-checks/
-# pr-checks.js) matches /^[ \t]*(?:[-*][ \t]+)?Changes a default:/i and NOTHING
-# else. This gate used to accept 'Changes to default:' as well, so a body the
+# pr-checks.js) reads the declaration in TWO forms and this gate used to know
+# only one: the LINE 'Changes a default: <valor>' and the HEADING
+# '## Changes a default' with the value on the first line under it. A body with
+# the heading form was reported as 'bad' although the upstream accepts it (the
+# check below runs the real parser, so the value is judged there).
+# This gate used to accept 'Changes to default:' as well, so a body the
 # upstream rejects passed here: the gate was more permissive than the
 # authority, which is backwards. Three of our pull requests (#11388, #11359,
 # #11205) were published with 'Changes to default: no' and the CI killed them.
-DEF="$(printf '%s' "$BODY" | grep -ciE '^[[:space:]]*([-*][[:space:]]+)?Changes a default:' || true)"
-[ "$DEF" = "1" ] && ok "una linea 'Changes a default:'" \
-  || bad "lineas 'Changes a default:' (exactamente como las pide el upstream): $DEF (debe ser 1). 'Changes to default:' NO vale: el CI la rechaza."
+DEF_LINEA="$(printf '%s' "$BODY" | grep -ciE '^[[:space:]]*([-*][[:space:]]+)?Changes a default:' || true)"
+DEF_HEADING="$(printf '%s' "$BODY" | grep -ciE '^[[:space:]]*#{1,6}[[:space:]]*Changes a default[[:space:]]*:?[[:space:]]*$' || true)"
+DEF="$(( DEF_LINEA + DEF_HEADING ))"
+[ "$DEF" = "1" ] && ok "una declaracion 'Changes a default:' (la linea, o el heading '## Changes a default')" \
+  || bad "declaraciones 'Changes a default:' (exactamente como las pide el upstream): $DEF (debe ser 1). 'Changes to default:' NO vale: el CI la rechaza."
 
 # 4. the upstream parser on the body
 if [ -x "$LOOP_DIR/bin/pr-defaults-line.sh" ]; then

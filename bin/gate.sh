@@ -40,25 +40,47 @@
 # THE LOCAL GATE IS NOT THE DEFAULT GATE ANYMORE (2026-11-21): the pipeline
 # gates a pull request with upstream's CI run on the fork (bin/fork-ci.sh,
 # GATE_MODE=fork-ci) and only enqueues this script with GATE_MODE=local. And
-# what this script runs is upstream's own pre-push check, `cargo xtask fast
-# --base <base>` (CONTRIBUTING.md: "Run cargo xtask fast before pushing ... CI
-# runs the rest"), not our gate-quick.sh: gate-quick (nextest with
-# --ignore-default-filter, SOLIDCRAFT_REQUIRE_GPU=1 and a baseline 18 days
-# old) gave a FALSE red on PR #20017 while upstream's "Native Linux tests"
-# passed on the same head. LOCAL_GATE=quick keeps the old gate for
-# compatibility. The verdict of `fast` is written where the readers look for
-# it ($LOOP_DIR/gates/<slot>/scope.verdict, VERDICT=VERDE-SCOPE|ROJO-SCOPE,
+# what this script runs is `cargo xtask fast --base <base>`, not our
+# gate-quick.sh: gate-quick (nextest with --ignore-default-filter,
+# SOLIDCRAFT_REQUIRE_GPU=1 and a baseline 18 days old) gave a FALSE red on PR
+# #20017 while upstream's "Native Linux tests" passed on the same head.
+# LOCAL_GATE=quick keeps the old gate for compatibility. The verdict of `fast`
+# is written where the readers look for it
+# ($LOOP_DIR/gates/<slot>/scope.verdict, VERDICT=VERDE-SCOPE|ROJO-SCOPE,
 # MODE=xtask-fast).
 #
-# IT DOES NOT RUN THE FULL `cargo xtask ci`: the CI of the upstream runs the
-# full suite when a maintainer adds the label approved-for-ci, and the merge
-# queue runs it again on top of main. A fair local gate is:
-#   cargo fmt --all --check
-#   cargo check --workspace --all-targets --profile ci
-#   cargo clippy -D warnings on the packages the change touches
-#   nextest on the crates that scripts/ci/affected.py selects
+# WHAT UPSTREAM'S PRE-PUSH CHECK IS NOW (2026-11-28): it is NOT `fast`. The
+# router (AGENTS.md), CONTRIBUTING.md and the contributing skill say "Before
+# pushing: `cargo xtask ci`", and `ci` is the COMPLETE gate: the whole-
+# workspace clippy (`-D warnings`), the whole test suite of the workspace (78
+# test binaries, 56-90 minutes measured on this box), the wasm build of every
+# crate and the doc tests, plus the four checks that are picked by the changed
+# paths (`i18n --check`, `kernel-cases --coverage`, `plugin-examples`,
+# `scripts/test-format-pending.sh`). `--all` runs everything.
+#
+# THAT COMPLETE GATE DOES NOT FIT IN THIS BOX, so the local gate is `fast` PLUS
+# the checks that `fast` does not run and that the change touches:
+#   cargo xtask fast --base <base>   # fmt, the quick repo checks, the clippy
+#                                    # of the workspace and the tests of the
+#                                    # packages the change touches
+#   cargo xtask app-geometry         # NEW upstream (2026-11-27): a function of
+#                                    # the app crates that computes geometry
+#                                    # FAILS the CI of upstream, and `fast` does
+#                                    # NOT run it (only `ci` does). It is a
+#                                    # SCAN of the sources: it builds the xtask
+#                                    # (already built by the run of `fast`
+#                                    # above, same target dir) and reads the
+#                                    # Rust of the app crates with `syn`. It does
+#                                    # NOT build the kernel, so it fits here.
+# The rest of the path-gated checks (`i18n --check`, `kernel-cases --coverage`,
+# `plugin-examples`, `scripts/test-format-pending.sh`) need the CLI compiled and
+# are run by hand when the change touches their paths; the complete gate runs in
+# the CI of the fork (GATE_MODE=fork-ci).
 # ---------------------------------------------------------------------------
 set -uo pipefail
+
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The PATH of cargo (2026-11-06): this script is launched by gate-queue.sh
 # under `systemd-run --user --scope`, and a systemd unit does NOT read
@@ -71,6 +93,13 @@ export PATH="$HOME/.cargo/bin:$HOME/.rustup/toolchains/stable-x86_64-unknown-lin
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+# The machine's own paths know where the checkout and the worktrees are (bin/paths.sh,
+# 2026-11-24): the defaults below are only the fallback for a machine without that file.
+# The literals were stale: the checkout they named does not exist on this machine.
+if [ -f "$HERE/paths.sh" ] && { [ -z "${SOLIDCRAFT_REPO:-}" ] || [ -z "${WORKTREES_DIR:-}" ]; }; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 # The gh of the machine, or the one of a test (the stub lives OUTSIDE the
 # PATH: README rule 4). Without this the only way to test the script is a
@@ -370,6 +399,24 @@ if [ "$LOCAL_GATE" = "fast" ]; then
   GATE_RC=$?
   DURATION_S=$(( $(date +%s) - START_S ))
   FAILED_STEPS="$(sed -nE 's/^fast: (.+) failed: .*$/\1/p' "$FAST_LOG" | sort -u | paste -sd, -)"
+  # app-geometry (2026-11-28): the check that `fast` does NOT run and that the CI
+  # of upstream DOES: a function of the app crates that computes geometry fails
+  # the CI, and the ledger only shrinks. It is a scan of the sources (the xtask
+  # is already built by the run of `fast` above, in the same target dir) and it
+  # does NOT build the kernel, so it fits in this box.
+  #
+  # It runs only when `fast` was green: a red `fast` is already a red, and the
+  # step would only add noise to the count of failures.
+  if [ "$GATE_RC" -eq 0 ]; then
+    APPGEOM_LOG="$GDIR/app-geometry.log"
+    echo "gate.sh: corro cargo xtask app-geometry --base $BASE (log: $APPGEOM_LOG)" >&2
+    if ! nice -n 19 cargo xtask app-geometry --base "$BASE" > "$APPGEOM_LOG" 2>&1; then
+      echo "gate.sh: cargo xtask app-geometry FALLO (el CI de upstream lo corre):" >&2
+      tail -n 5 "$APPGEOM_LOG" 2>/dev/null | sed 's/^/gate.sh:   /' >&2
+      FAILED_STEPS="${FAILED_STEPS:+$FAILED_STEPS,}app-geometry"
+      GATE_RC=1
+    fi
+  fi
   CHANGED="$(git -C "$REPO" status --porcelain --untracked-files=normal 2>/dev/null)"
   CHECKS="fast:$([ "$GATE_RC" -eq 0 ] && echo ok || echo fail)"
   if [ -n "$CHANGED" ]; then

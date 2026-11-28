@@ -13,10 +13,18 @@
 #   sin argumentos: corre los gates PENDIENTES que salen del ESTADO
 #   (bin/orch-state.sh), no de una lista escrita en este archivo.
 set -u
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The paths come from the environment, with the default of THIS
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+# The machine's own paths know where the worktrees are (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file.
+if [ -z "${WORKTREES_DIR:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 # The accessor of the state reads $ORCH_DIR: it has to be the SAME directory
 # this script resolved, so it is exported.

@@ -23,6 +23,9 @@
 # ------------------------------------------------------------------
 set -uo pipefail
 
+# The directory of this script: it is where bin/paths.sh lives.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # The paths come from the environment, with the default of THIS
 # machine: the other PC exports its own (see docs/portable-orchestrator.md).
 ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
@@ -30,6 +33,12 @@ ORCH_DIR="${ORCH_DIR:-/home/user/.local/share/solidcraft-orch}"
 # worktree del publisher tambien. Antes este script no la nombraba, y con
 # "set -u" usarlo sin definirla mataba el script en la mitad.
 LOOP_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
+# The machine's own paths know where the checkout and the worktrees are (bin/paths.sh,
+# 2026-11-24): the defaults below are only the fallback for a machine without that file.
+if [ -f "$HERE/paths.sh" ] && { [ -z "${SOLIDCRAFT_REPO:-}" ] || [ -z "${WORKTREES_DIR:-}" ]; }; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 SOLIDCRAFT_REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 BIN="$ORCH_DIR/bin"

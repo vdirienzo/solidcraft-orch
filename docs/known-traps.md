@@ -62,6 +62,22 @@ parser instead of writing a local grep: a local check that accepts more than the
 worse than no check, because it hands out a false green, and the CI kills the pull request
 after it is already published.
 
+**What the parser accepts today (it changed on 2026-11-27; read the file, do not guess):**
+
+- the value `no`, alone or with a note after it: `no`, `no.`, `no. Only a fix.`, `no, only a
+  fix`, `no — a new button`, `no (only a fix)`;
+- the value `yes`, with ANY punctuation before what changes: `yes, …`, `yes. …`, `yes — …`;
+- the long `yes - <what>, old behaviour kept behind preference <name>`;
+- the long `yes - <what>, approved by the owner` (it needs the `owner-approved` label, and with
+  that label ANY `yes` passes);
+- a value between backticks: `` `no` `` is read as `no`;
+- the HEADING form: `## Changes a default` with the value on the first non-blank line under it
+  (the line form and the heading form are both declarations; a body carries one).
+
+A local copy of those rules is a rule that drifts: the copy here was stricter than the upstream
+and rejected bodies the upstream accepts. `bin/pipeline.py` and `loop/bin/pr-defaults-line.sh`
+CALL the upstream's parser; read the file before writing a check of your own.
+
 **Editing the body does NOT re-trigger the checks.** The checks that read the body run when
 the CI runs, and the CI runs on a push — so a body corrected after the fact leaves the pull
 request with a red check until the next push. Validate the body with the upstream's own
@@ -145,7 +161,7 @@ backlog: every one of them expires silently and the work dies with it. Three rul
 of the drafts that have no verdict yet, and promotes the ones that came back green.
 
 **The exact deadline is about PUSHES, not about the claim in the abstract.**
-`skills/solidcraft-contributing/SKILL.md`: *"A draft with no pushes for 72 hours may be taken
+`.agents/skills/solidcraft-contributing/SKILL.md`: *"A draft with no pushes for 72 hours may be taken
 over"* — comment first, then open your own claim (you may start from its branch). So the
 mechanism that protects the work is the push cadence, not the existence of the draft. If the
 work sits for more than a day, push (an empty push counts) or the draft can be taken.
@@ -154,7 +170,8 @@ work sits for more than a day, push (an empty push counts) or the draft can be t
 `AGENTS.md:24`: *"A regression test goes in the area's existing test file, never a per-bug file
 (#3226)"*. An agent wrote `viewport_hover_pan_tests.rs` for issue #2130 — a per-bug file, which
 is FORBIDDEN. The area's file for the highlight is
-`crates/ui-egui/src/feature_highlight_tests.rs` (or the inline `mod tests {` of `viewport.rs`).
+the inline `mod feature_highlight_tests` of `crates/ui-egui/src/viewport.rs` (there is no
+`feature_highlight_tests.rs` file: the area's tests live inside `viewport.rs`).
 
 No automated check catches it (not in `xtask/`, not in `pr-checks.yml`): the maintainer catches
 it in review, and there the PR dies. So when a brief says "write the RED test", it must say
@@ -165,11 +182,12 @@ IN WHICH FILE: find it first (`ls src/*_tests.rs` of the crate, `grep -n 'mod .*
 The user asked whether what had been told to them was validated against the code, and the
 honest answer was "half of it is verified, half of it is my own design". The rules to avoid
 repeating that:
-- before asserting a repo rule, grep the repo: `AGENTS.md`, `skills/solidcraft-*/SKILL.md`,
-  `.github/workflows/`, `xtask/src/`. The rules that matter are written there.
+- before asserting a repo rule, grep the repo: `AGENTS.md`, `.agents/skills/*/SKILL.md` (the
+  agents' rules; `skills/` is the app's MCP), `.github/workflows/`, `xtask/src/`. The rules
+  that matter are written there.
 - say explicitly which is which: what the REPO demands (verified) vs. what is this
   orchestrator's own design (do not defend it as if the repo asked for it).
-- the authority for claims is `skills/solidcraft-contributing/SKILL.md`; the authority for the
+- the authority for claims is `.agents/skills/solidcraft-contributing/SKILL.md`; the authority for the
   PR body format is `.github/pull_request_template.md` + `pr-checks.yml`, which demands
   `Changes a default: no` in that exact form.
 - the issue pool is measured with the paginated issues API: `gh issue list --limit N` TRUNCATES

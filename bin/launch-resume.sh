@@ -35,6 +35,14 @@ LOOP_BIN_DIR="${LOOP_DIR:-/home/user/.local/share/solidcraft-loop}"
 MAX_WAIT_MIN="${MAX_WAIT_MIN:-150}"
 MAX_LOAD="${MAX_LOAD:-8}"
 
+# The machine's own paths know where the worktrees are (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${WORKTREES_DIR:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
+
 log() { printf '%s launch-resume[%s]: %s\n' "$(date -u +%FT%TZ)" "$ISSUE" "$*"; }
 
 load_now() { awk '{print int($1)}' /proc/loadavg; }

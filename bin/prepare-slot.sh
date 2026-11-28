@@ -34,6 +34,12 @@ ORCH_DIR="${ORCH_DIR:-$HOME/.local/share/solidcraft-orch}"
 # repo (2026-11-21). ORCH_BIN is only the fallback for a copy of the script
 # that runs outside bin/ without them.
 if [ -f "$HERE/claim-verify.sh" ]; then ORCH_BIN="$HERE"; else ORCH_BIN="${ORCH_BIN:-$ORCH_DIR/bin}"; fi
+# The machine's own paths know where the checkout and the worktrees are (bin/paths.sh,
+# 2026-11-24): the defaults below are only the fallback for a machine without that file.
+if [ -f "$HERE/paths.sh" ] && { [ -z "${SOLIDCRAFT_REPO:-}" ] || [ -z "${WORKTREES_DIR:-}" ]; }; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 REPO="${SOLIDCRAFT_REPO:-/home/user/Projects/solidcraft-orch}"
 WORKTREES_DIR="${WORKTREES_DIR:-/home/user/solidcraft-wt}"
 UPSTREAM_REPO="${UPSTREAM_REPO:-tangency-labs/solidcraft}"

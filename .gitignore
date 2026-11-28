@@ -39,3 +39,6 @@ __pycache__/
 prompts/agent-[0-9]*.md
 prompts/repair-[0-9]*.md
 prompts/old/
+
+# copias de trabajo: 800 MB de codigo de upstream para inspeccion, no es codigo nuestro
+scratch/

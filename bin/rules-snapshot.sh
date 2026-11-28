@@ -49,6 +49,15 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# The machine's own paths know where the checkout is (bin/paths.sh, 2026-11-24): the default
+# below is only the fallback for a machine without that file. Without this, the rules check
+# answered "no hay un clon" on the machine that HAS the clone, and upstream could move its
+# rules (AGENTS.md, the skills, the PR template) without anybody noticing: the check exits
+# non-zero and is easy to miss in a wave.
+if [ -z "${SOLIDCRAFT_REPO:-}" ] && [ -f "$HERE/paths.sh" ]; then
+  # shellcheck disable=SC1090
+  . "$HERE/paths.sh"
+fi
 REPO="${SOLIDCRAFT_REPO:-/home/user/solidcraft}"
 REMOTE="${RULES_REMOTE:-origin}"
 REF="${RULES_REF:-$REMOTE/main}"
@@ -142,6 +151,25 @@ if [ "$MODE" = "--update" ]; then
   # writes. A half-written manifest would report false drift.
   mv "$out" "$SNAPSHOT"
   echo "$PFX: snapshot escrito con $(grep -vc '^#' "$SNAPSHOT") archivos de $REF ($upstream_sha)"
+
+  # 3. El registro de la revision (2026-11-28). El manifiesto dice QUE se midio;
+  # este dice que los documentos del orquestador se LEYERON contra ese cambio.
+  # Es la afirmacion que bin/rules-verdict.sh puede comprobar: si un documento
+  # cambio despues de esta marca, la afirmacion esta vieja y hay que releerlo.
+  # Se escribe al final del protocolo (despues de revisar), que es cuando la
+  # afirmacion es cierta.
+  ORCH_ROOT="$(cd "$HERE/.." && pwd)"
+  REVIEWED="$(dirname "$SNAPSHOT")/REVIEWED"
+  {
+    printf '# documentos revisados contra %s el %s\n' "$upstream_sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    for rel in RULES.md README.md prompts/agent-brief.md prompts/agent-*.md \
+               docs/*.md loop/prompts/*.md briefs/*.md; do
+      [ -f "$ORCH_ROOT/$rel" ] || continue
+      printf '%s  %s\n' "$(sha256sum "$ORCH_ROOT/$rel" | cut -d' ' -f1)" "$rel"
+    done
+  } > "$REVIEWED.tmp"
+  mv "$REVIEWED.tmp" "$REVIEWED"
+  echo "$PFX: revision registrada en $(basename "$(dirname "$REVIEWED")")/REVIEWED"
   exit 0
 fi
 
