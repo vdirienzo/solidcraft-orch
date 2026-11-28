@@ -300,3 +300,15 @@ del bootstrap, conservó los slots vivos (9223, 21119) y los PRs abiertos.
 **Lección.** Un check que no puede correr es peor que no tenerlo (lección 17): se aplica igual a
 las herramientas de estado. Y ojo con las limpiezas: antes de borrar `state/`, hay que mirar qué
 lo lee.
+
+## 25. El /tmp de esta caja es un tmpfs de 7,7 GB: se llena con la tarea de al lado
+
+`cargo xtask app-geometry` falló con `tar: cannot write: No space left on device` al extraer el
+árbol de la base. No era el disco: `df` mostró `/home` al 88% (51 GB libres) y **`/tmp` al 100%**
+(un tmpfs de 7,7 GB). Dentro había 2,8 GB de archivos de otra tarea (ROMs y zip de emulación del
+26-11) y 1,2 GB de un benchmark, más copias de worktrees viejos.
+
+**Lección.** En una caja con tmpfs, `/tmp` es un recurso compartido con todo lo que corra en ella,
+y lo que se deja ahí caduca. Cuando un build falla con "No space left" **mira `df` de cada punto de
+montaje**, no solo el del home: el tmpfs se llena antes. Y lo que otro día se descargó en `/tmp` no
+es de nadie a los dos días: se limpia.
