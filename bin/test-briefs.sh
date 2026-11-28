@@ -155,11 +155,13 @@ else
 fi
 
 # --- 4. las rutas absolutas y las skills que cita el brief existen ----------
-# (2026-11-28) Un brief que apuntaba a
-# /home/user/Projects/solidcraft-orch/skills/solidcraft-agent-tools/SKILL.md
-# apuntaba a un archivo que no existe: upstream movio esa skill a
-# .agents/skills/ y el brief seguia mandando al agente a un callejon sin
-# salida. Estas dos medidas cazan esa clase de ancla rota.
+# (2026-11-28) Un brief apuntaba a la skill de las herramientas del agente
+# DENTRO de la carpeta `skills/` del checkout, que es la del MCP: upstream movio
+# esa skill a `.agents/skills/` y el brief seguia mandando al agente a un
+# callejon sin salida. Estas dos medidas cazan esa clase de ancla rota.
+# (la ruta viva no se escribe aqui: el test de portabilidad falla un script de
+# bin/ que lleva un path de esta maquina fuera de un default, ni en un
+# comentario)
 rotas_abs=""
 rotas_skill=""
 for brief in "${BRIEF_LIST[@]}"; do
